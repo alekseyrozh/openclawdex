@@ -53,12 +53,12 @@ export function Sidebar({
       className="flex flex-col shrink-0 select-none"
       style={{
         width: `${width}px`,
-        background: "rgba(24, 24, 24, 0.5)",
+        background: "rgba(24, 24, 24, 0.30)",
       }}
     >
       {/* Traffic light spacer */}
       <div
-        className="h-[38px] shrink-0"
+        className="h-[52px] shrink-0"
         style={{
           // @ts-expect-error -- webkit
           WebkitAppRegion: "drag",
@@ -155,7 +155,7 @@ function ProjectGroup({
           style={{ color: "rgba(255, 255, 255, 0.6)" }}
         />
         <span
-          className="text-[13px] font-medium truncate"
+          className="text-[13px] font-semibold truncate"
           style={{ color: "rgba(255, 255, 255, 0.6)" }}
         >
           {project}

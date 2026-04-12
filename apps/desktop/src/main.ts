@@ -15,7 +15,7 @@ function createWindow() {
 
     // macOS native window chrome
     titleBarStyle: "hiddenInset",
-    trafficLightPosition: { x: 14, y: 14 },
+    trafficLightPosition: { x: 16, y: 18 },
     transparent: true,
     vibrancy: "sidebar",
     visualEffectState: "active",

@@ -199,7 +199,7 @@ export function ChatView({ thread }: ChatViewProps) {
     >
       {/* Title bar area */}
       <div
-        className="h-[38px] shrink-0 flex items-center justify-center"
+        className="h-[52px] shrink-0 flex items-center justify-center"
         style={{
           borderBottom: "1px solid var(--border-subtle)",
           // @ts-expect-error -- webkit
