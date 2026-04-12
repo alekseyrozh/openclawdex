@@ -330,6 +330,7 @@ export function ChatView({ thread, onSend, onInterrupt }: ChatViewProps) {
   const [selectedMode, setSelectedMode] = useState(MODES[0]); // default "Ask before edits"
   const [modeDropdownOpen, setModeDropdownOpen] = useState(false);
   const modeDropdownRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [showScrollBtn, setShowScrollBtn] = useState(false);
@@ -357,6 +358,13 @@ export function ChatView({ thread, onSend, onInterrupt }: ChatViewProps) {
       messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
     }
   }, [thread?.messages, showScrollBtn]);
+
+  // Autofocus composer when thread changes
+  useEffect(() => {
+    if (thread?.id) {
+      textareaRef.current?.focus();
+    }
+  }, [thread?.id]);
 
   const handleSubmit = () => {
     if (!thread || !input.trim() || thread.status === "running") return;
@@ -485,6 +493,7 @@ export function ChatView({ thread, onSend, onInterrupt }: ChatViewProps) {
             }}
           >
             <textarea
+              ref={textareaRef}
               value={input}
               onChange={(e) => setInput(e.target.value)}
               placeholder="Ask for follow-up changes"
@@ -494,11 +503,13 @@ export function ChatView({ thread, onSend, onInterrupt }: ChatViewProps) {
                 color: "var(--text-primary)",
                 minHeight: "36px",
                 maxHeight: "140px",
+                overflowY: "hidden",
               }}
               onInput={(e) => {
                 const el = e.currentTarget;
                 el.style.height = "auto";
                 el.style.height = el.scrollHeight + "px";
+                el.style.overflowY = el.scrollHeight > 140 ? "auto" : "hidden";
               }}
               onKeyDown={(e) => {
                 if (e.key === "Enter" && !e.shiftKey) {
