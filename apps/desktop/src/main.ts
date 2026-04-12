@@ -43,7 +43,10 @@ function createWindow() {
   }
 }
 
-app.whenReady().then(createWindow);
+app.whenReady().then(() => {
+  app.dock?.setIcon(path.join(__dirname, "../resources/icon.png"));
+  createWindow();
+});
 
 // macOS: re-create window when dock icon clicked
 app.on("activate", () => {
