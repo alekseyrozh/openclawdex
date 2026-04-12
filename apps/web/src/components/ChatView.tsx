@@ -87,10 +87,10 @@ function CollapsedIndicator({ count }: { count: number }) {
   return (
     <div className="flex items-center justify-center py-3">
       <button
-        className="flex items-center gap-1 text-[11px] font-medium px-3 py-[4px] rounded-full transition-colors"
+        className="flex items-center gap-1 text-[13px] font-medium px-3 py-[4px] rounded-full transition-colors"
         style={{
-          color: "var(--text-muted)",
-          border: "1px solid var(--border-subtle)",
+          color: "rgba(255, 255, 255, 0.60)",
+          border: "1px solid var(--border-default)",
         }}
         onMouseEnter={(e) => {
           e.currentTarget.style.background = "var(--surface-2)";
@@ -120,7 +120,7 @@ function MessageBlock({ message }: { message: Message }) {
   if (isUser) {
     return (
       <div
-        className="rounded-2xl px-5 py-3.5 my-3 text-[14px] leading-[1.6] font-medium"
+        className="rounded-2xl px-5 py-3.5 my-3 text-[14px] leading-[1.6] font-medium ml-auto w-fit max-w-[85%]"
         style={{
           background: "var(--surface-3)",
           color: "var(--text-primary)",
@@ -152,13 +152,24 @@ function formatContent(text: string) {
     if (part.startsWith("`") && part.endsWith("`")) {
       const inner = part.slice(1, -1);
       const isFileRef = inner.includes("/") || inner.includes("(line");
+      if (isFileRef) {
+        return (
+          <span
+            key={i}
+            className="font-mono text-[12.5px] font-semibold"
+            style={{ color: "#6DC6FF" }}
+          >
+            {inner}
+          </span>
+        );
+      }
       return (
         <span
           key={i}
           className="font-mono text-[12.5px] font-medium px-[5px] py-[2px] rounded-md"
           style={{
-            background: "rgba(255,255,255,0.10)",
-            color: isFileRef ? "var(--accent)" : "#d4a276",
+            background: "rgba(255,255,255,0.07)",
+            color: "var(--text-primary)",
           }}
         >
           {inner}
@@ -199,7 +210,7 @@ export function ChatView({ thread }: ChatViewProps) {
     >
       {/* Title bar area */}
       <div
-        className="h-[52px] shrink-0 flex items-center justify-center"
+        className="h-[38px] shrink-0 flex items-center justify-center"
         style={{
           borderBottom: "1px solid var(--border-subtle)",
           // @ts-expect-error -- webkit
