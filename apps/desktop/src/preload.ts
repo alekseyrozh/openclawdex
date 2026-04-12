@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
+import type { SessionInfo, HistoryMessage } from "@openclawdex/shared";
 
 contextBridge.exposeInMainWorld("openclawdex", {
   platform: process.platform,
@@ -8,12 +9,20 @@ contextBridge.exposeInMainWorld("openclawdex", {
     ipcRenderer.invoke("claude:check"),
 
   /** Send a user message to Claude for a given thread. */
-  send: (threadId: string, message: string): Promise<void> =>
-    ipcRenderer.invoke("claude:send", threadId, message),
+  send: (threadId: string, message: string, resumeSessionId?: string): Promise<void> =>
+    ipcRenderer.invoke("claude:send", threadId, message, resumeSessionId),
 
   /** Interrupt the current Claude turn for a thread. */
   interrupt: (threadId: string): Promise<void> =>
     ipcRenderer.invoke("claude:interrupt", threadId),
+
+  /** List all past Claude sessions across all projects. */
+  listSessions: (): Promise<SessionInfo[]> =>
+    ipcRenderer.invoke("claude:list-sessions"),
+
+  /** Load message history for a session by its session ID. */
+  loadHistory: (sessionId: string): Promise<HistoryMessage[]> =>
+    ipcRenderer.invoke("claude:load-history", sessionId),
 
   /**
    * Subscribe to events coming from the main process.

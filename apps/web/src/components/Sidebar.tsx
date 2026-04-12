@@ -7,6 +7,7 @@ import {
   FolderOpen,
 } from "@phosphor-icons/react";
 import type { Thread, Provider } from "../App";
+import { ScrollArea } from "./ScrollArea";
 
 const PROVIDER_DOT: Record<Provider, string> = {
   claude: "#d97706",
@@ -65,31 +66,32 @@ export function Sidebar({
         }}
       />
 
-      {/* Threads section */}
-      <div className="flex-1 overflow-y-auto px-3 pt-2 pb-2">
-        <div className="flex items-center justify-between px-2 pb-2">
-          <span
-            className="text-[13px] font-medium"
-            style={{ color: "rgba(255, 255, 255, 0.35)" }}
-          >
-            Threads
-          </span>
-          <button
-            className="p-[4px] rounded-lg transition-colors"
-            style={{ color: "var(--text-secondary)" }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.background = "rgba(255,255,255,0.06)";
-              e.currentTarget.style.color = "var(--text-primary)";
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = "transparent";
-              e.currentTarget.style.color = "var(--text-secondary)";
-            }}
-          >
-            <NotePencil size={17} weight="regular" />
-          </button>
-        </div>
+      {/* Threads header — fixed, does not scroll */}
+      <div className="shrink-0 flex items-center justify-between pl-5 pr-3 pb-2 pt-1">
+        <span
+          className="text-[13px] font-medium"
+          style={{ color: "rgba(255, 255, 255, 0.35)" }}
+        >
+          Threads
+        </span>
+        <button
+          className="p-[4px] rounded-lg transition-colors"
+          style={{ color: "var(--text-secondary)" }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.background = "rgba(255,255,255,0.06)";
+            e.currentTarget.style.color = "var(--text-primary)";
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.background = "transparent";
+            e.currentTarget.style.color = "var(--text-secondary)";
+          }}
+        >
+          <NotePencil size={17} weight="regular" />
+        </button>
+      </div>
 
+      <ScrollArea className="flex-1">
+        <div className="px-3 pb-2">
         {Object.entries(grouped).map(([project, projectThreads]) => (
           <ProjectGroup
             key={project}
@@ -99,7 +101,8 @@ export function Sidebar({
             onSelectThread={onSelectThread}
           />
         ))}
-      </div>
+        </div>
+      </ScrollArea>
 
       {/* Settings */}
       <div

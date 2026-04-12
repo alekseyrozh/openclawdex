@@ -1,4 +1,7 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
+import { ScrollArea, type ScrollAreaHandle } from "./ScrollArea";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import {
   ArrowUp,
   ArrowDown,
@@ -215,7 +218,7 @@ function StreamingText({ text, isStreaming }: { text: string; isStreaming: boole
     tokens.current = [];
     prevLength.current = 0;
     nextKey.current = 0;
-    return <>{formatContent(text)}</>;
+    return <MarkdownContent text={text} />;
   }
 
   return (
@@ -251,7 +254,7 @@ function MessageBlock({ message, isStreaming }: { message: Message; isStreaming:
   if (isUser) {
     return (
       <div
-        className="rounded-2xl px-5 py-3.5 my-3 text-[14px] leading-[1.6] font-medium ml-auto w-fit max-w-[85%]"
+        className="rounded-2xl px-5 py-3.5 my-3 text-[14px] leading-[1.6] font-medium ml-auto w-fit max-w-[85%] break-words min-w-0"
         style={{
           background: "var(--surface-3)",
           color: "var(--text-primary)",
@@ -265,7 +268,7 @@ function MessageBlock({ message, isStreaming }: { message: Message; isStreaming:
   return (
     <div className="py-4 px-1">
       <div
-        className="text-[14px] leading-[1.65] whitespace-pre-wrap font-medium"
+        className="text-[14px] leading-[1.65] font-medium break-words min-w-0"
         style={{ color: "var(--text-primary)" }}
       >
         <StreamingText text={message.content} isStreaming={isStreaming} />
@@ -277,38 +280,198 @@ function MessageBlock({ message, isStreaming }: { message: Message; isStreaming:
   );
 }
 
-function formatContent(text: string) {
-  const parts = text.split(/(`[^`]+`)/g);
-  return parts.map((part, i) => {
-    if (part.startsWith("`") && part.endsWith("`")) {
-      const inner = part.slice(1, -1);
-      const isFileRef = inner.includes("/") || inner.includes("(line");
-      if (isFileRef) {
-        return (
-          <span
-            key={i}
-            className="font-mono text-[12.5px] font-semibold"
-            style={{ color: "#6DC6FF" }}
+function MarkdownContent({ text }: { text: string }) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      components={{
+        p: ({ children }) => (
+          <p className="mb-3 last:mb-0">{children}</p>
+        ),
+        strong: ({ children }) => (
+          <strong className="font-semibold" style={{ color: "var(--text-primary)" }}>{children}</strong>
+        ),
+        em: ({ children }) => (
+          <em className="italic">{children}</em>
+        ),
+        h1: ({ children }) => (
+          <h1 className="text-[17px] font-semibold mt-4 mb-2 first:mt-0" style={{ color: "var(--text-primary)" }}>{children}</h1>
+        ),
+        h2: ({ children }) => (
+          <h2 className="text-[15px] font-semibold mt-4 mb-2 first:mt-0" style={{ color: "var(--text-primary)" }}>{children}</h2>
+        ),
+        h3: ({ children }) => (
+          <h3 className="text-[14px] font-semibold mt-3 mb-1.5 first:mt-0" style={{ color: "var(--text-primary)" }}>{children}</h3>
+        ),
+        ul: ({ children }) => (
+          <ul className="mb-3 last:mb-0 pl-5 space-y-1 list-disc">{children}</ul>
+        ),
+        ol: ({ children }) => (
+          <ol className="mb-3 last:mb-0 pl-5 space-y-1 list-decimal">{children}</ol>
+        ),
+        li: ({ children }) => (
+          <li className="leading-[1.65]">{children}</li>
+        ),
+        code: ({ children, className }) => {
+          const isBlock = className?.includes("language-");
+          if (isBlock) {
+            return (
+              <code
+                className="block font-mono text-[12px] font-medium px-3 py-2.5 rounded-xl overflow-x-auto"
+                style={{
+                  background: "rgba(255,255,255,0.06)",
+                  color: "var(--text-primary)",
+                  border: "1px solid var(--border-subtle)",
+                }}
+              >
+                {children}
+              </code>
+            );
+          }
+          const inner = String(children);
+          const isFileRef = inner.includes("/") || inner.includes("(line");
+          if (isFileRef) {
+            return (
+              <code className="font-mono text-[12.5px] font-semibold" style={{ color: "#6DC6FF" }}>
+                {inner}
+              </code>
+            );
+          }
+          return (
+            <code
+              className="font-mono text-[12.5px] font-medium px-[5px] py-[2px] rounded-md"
+              style={{
+                background: "rgba(255,255,255,0.07)",
+                color: "var(--text-primary)",
+              }}
+            >
+              {inner}
+            </code>
+          );
+        },
+        pre: ({ children }) => (
+          <pre className="mb-3 last:mb-0">{children}</pre>
+        ),
+        blockquote: ({ children }) => (
+          <blockquote
+            className="pl-3 my-2 italic"
+            style={{
+              borderLeft: "2px solid var(--border-emphasis)",
+              color: "var(--text-secondary)",
+            }}
           >
-            {inner}
-          </span>
-        );
-      }
-      return (
-        <span
-          key={i}
-          className="font-mono text-[12.5px] font-medium px-[5px] py-[2px] rounded-md"
+            {children}
+          </blockquote>
+        ),
+        hr: () => (
+          <hr className="my-3" style={{ borderColor: "var(--border-subtle)" }} />
+        ),
+      }}
+    >
+      {text}
+    </ReactMarkdown>
+  );
+}
+
+/* ── Textarea with custom scrollbar ─────────────────────────── */
+
+function TextareaWithScrollbar({
+  textareaRef,
+  value,
+  onChange,
+  onKeyDown,
+}: {
+  textareaRef: React.RefObject<HTMLTextAreaElement | null>;
+  value: string;
+  onChange: React.ChangeEventHandler<HTMLTextAreaElement>;
+  onKeyDown: React.KeyboardEventHandler<HTMLTextAreaElement>;
+}) {
+  const [thumb, setThumb] = useState<{ top: number; height: number } | null>(null);
+  const [scrolling, setScrolling] = useState(false);
+  const [hovered, setHovered] = useState(false);
+  const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const updateThumb = useCallback((el: HTMLTextAreaElement) => {
+    const maxH = 140;
+    if (el.scrollHeight <= maxH) { setThumb(null); return; }
+    const ratio = maxH / el.scrollHeight;
+    const height = Math.max(ratio * maxH, 24);
+    const top = (el.scrollTop / el.scrollHeight) * maxH;
+    setThumb({ height, top });
+  }, []);
+
+  const onScroll = useCallback((e: React.UIEvent<HTMLTextAreaElement>) => {
+    updateThumb(e.currentTarget);
+    setScrolling(true);
+    if (hideTimer.current) clearTimeout(hideTimer.current);
+    hideTimer.current = setTimeout(() => setScrolling(false), 1000);
+  }, [updateThumb]);
+
+  const onThumbMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    const el = textareaRef.current;
+    if (!el || !thumb) return;
+    const startY = e.clientY;
+    const startScrollTop = el.scrollTop;
+    const maxH = 140;
+    const thumbRange = maxH - thumb.height;
+    const scrollRange = el.scrollHeight - maxH;
+    const onMove = (ev: MouseEvent) => {
+      el.scrollTop = startScrollTop + ((ev.clientY - startY) / thumbRange) * scrollRange;
+      updateThumb(el);
+    };
+    const onUp = () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+    };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  }, [textareaRef, thumb, updateThumb]);
+
+  return (
+    <div className="relative">
+      <textarea
+        ref={textareaRef}
+        value={value}
+        onChange={onChange}
+        onScroll={onScroll}
+        onInput={(e) => {
+          const el = e.currentTarget;
+          el.style.height = "auto";
+          el.style.height = el.scrollHeight + "px";
+          el.style.overflowY = el.scrollHeight > 140 ? "auto" : "hidden";
+          updateThumb(el);
+        }}
+        onKeyDown={onKeyDown}
+        placeholder="Ask for follow-up changes"
+        rows={1}
+        className="w-full bg-transparent text-[14px] font-medium px-4 pt-3 pb-1 resize-none outline-none placeholder:text-[var(--text-faint)] hide-native-scrollbar"
+        style={{
+          color: "var(--text-primary)",
+          minHeight: "36px",
+          maxHeight: "140px",
+          overflowY: "hidden",
+          scrollbarWidth: "none",
+        } as React.CSSProperties}
+      />
+      {thumb && (
+        <div
+          className="absolute right-1 rounded-full cursor-pointer transition-opacity duration-300 pointer-events-auto"
           style={{
-            background: "rgba(255,255,255,0.07)",
-            color: "var(--text-primary)",
+            top: thumb.top + 4,
+            height: thumb.height - 8,
+            width: 8,
+            background: hovered ? "rgba(255,255,255,0.24)" : "rgba(255,255,255,0.14)",
+            borderRadius: 100,
+            opacity: scrolling || hovered ? 1 : 0,
           }}
-        >
-          {inner}
-        </span>
-      );
-    }
-    return part;
-  });
+          onMouseDown={onThumbMouseDown}
+          onMouseEnter={() => setHovered(true)}
+          onMouseLeave={() => setHovered(false)}
+        />
+      )}
+    </div>
+  );
 }
 
 /* ── Chat view ───────────────────────────────────────────────── */
@@ -332,32 +495,22 @@ export function ChatView({ thread, onSend, onInterrupt }: ChatViewProps) {
   const modeDropdownRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const scrollAreaRef = useRef<ScrollAreaHandle>(null);
   const [showScrollBtn, setShowScrollBtn] = useState(false);
-  const lastScrollTop = useRef(0);
+  const isAtBottomRef = useRef(true);
 
-  // Track scroll position and direction
-  useEffect(() => {
-    const el = scrollContainerRef.current;
-    if (!el) return;
-    const onScroll = () => {
-      const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
-      const scrollingDown = el.scrollTop > lastScrollTop.current;
-      lastScrollTop.current = el.scrollTop;
-
-      // Show only when not at bottom AND scrolling up (or stationary)
-      setShowScrollBtn(!atBottom && !scrollingDown);
-    };
-    el.addEventListener("scroll", onScroll, { passive: true });
-    return () => el.removeEventListener("scroll", onScroll);
+  const handleMessagesScroll = useCallback((el: HTMLDivElement) => {
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+    isAtBottomRef.current = atBottom;
+    setShowScrollBtn(!atBottom);
   }, []);
 
   // Auto-scroll to bottom when messages change (only if already at bottom)
   useEffect(() => {
-    if (!showScrollBtn) {
+    if (isAtBottomRef.current) {
       messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
     }
-  }, [thread?.messages, showScrollBtn]);
+  }, [thread?.messages]);
 
   // Autofocus composer when thread changes
   useEffect(() => {
@@ -417,7 +570,7 @@ export function ChatView({ thread, onSend, onInterrupt }: ChatViewProps) {
         }}
       >
         <span
-          className="text-[12px] font-medium"
+          className="text-[12px] font-medium truncate max-w-[55%]"
           style={{ color: "var(--text-secondary)" }}
         >
           {thread.name}
@@ -425,7 +578,7 @@ export function ChatView({ thread, onSend, onInterrupt }: ChatViewProps) {
       </div>
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto relative" ref={scrollContainerRef}>
+      <ScrollArea ref={scrollAreaRef} className="flex-1" onScroll={handleMessagesScroll}>
         {thread.messages.length === 0 ? (
           <div
             className="flex items-center justify-center h-full text-[13px]"
@@ -454,13 +607,13 @@ export function ChatView({ thread, onSend, onInterrupt }: ChatViewProps) {
             <div ref={messagesEndRef} />
           </div>
         )}
-      </div>
+      </ScrollArea>
 
       {/* Scroll to bottom */}
       {showScrollBtn && thread.messages.length > 0 && (
         <div className="relative shrink-0">
           <button
-            onClick={() => messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })}
+            onClick={() => scrollAreaRef.current?.scrollToBottom()}
             className="absolute left-1/2 -translate-x-1/2 -top-14 w-[36px] h-[36px] flex items-center justify-center rounded-full transition-colors"
             style={{
               background: "var(--surface-2)",
@@ -492,25 +645,10 @@ export function ChatView({ thread, onSend, onInterrupt }: ChatViewProps) {
               border: "1px solid var(--border-default)",
             }}
           >
-            <textarea
-              ref={textareaRef}
+            <TextareaWithScrollbar
+              textareaRef={textareaRef}
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              placeholder="Ask for follow-up changes"
-              rows={1}
-              className="w-full bg-transparent text-[14px] font-medium px-4 pt-3 pb-1 resize-none outline-none placeholder:text-[var(--text-faint)]"
-              style={{
-                color: "var(--text-primary)",
-                minHeight: "36px",
-                maxHeight: "140px",
-                overflowY: "hidden",
-              }}
-              onInput={(e) => {
-                const el = e.currentTarget;
-                el.style.height = "auto";
-                el.style.height = el.scrollHeight + "px";
-                el.style.overflowY = el.scrollHeight > 140 ? "auto" : "hidden";
-              }}
               onKeyDown={(e) => {
                 if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();
