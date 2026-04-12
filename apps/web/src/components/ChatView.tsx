@@ -12,6 +12,7 @@ import {
   FileText,
   Monitor,
   GitBranch,
+  Copy,
 } from "@phosphor-icons/react";
 import type { Thread, Message, FileChange } from "../App";
 
@@ -151,7 +152,7 @@ function CollapsedIndicator({ count }: { count: number }) {
         }}
         onMouseEnter={(e) => {
           e.currentTarget.style.background = "var(--surface-2)";
-          e.currentTarget.style.color = "var(--text-secondary)";
+          e.currentTarget.style.color = "rgba(255,255,255,0.60)";
         }}
         onMouseLeave={(e) => {
           e.currentTarget.style.background = "transparent";
@@ -171,7 +172,7 @@ function ThinkingIndicator() {
   return (
     <div
       className="thinking-shimmer flex items-center gap-2 text-[14px] font-medium"
-      style={{ color: "var(--text-secondary)" }}
+      style={{ color: "rgba(255,255,255,0.60)" }}
     >
       Thinking…
     </div>
@@ -244,7 +245,50 @@ function StreamingText({ text, isStreaming }: { text: string; isStreaming: boole
 
 /* ── Message block ───────────────────────────────────────────── */
 
+function MessageHoverBar({ message, reverse }: { message: Message; reverse?: boolean }) {
+  const [copied, setCopied] = useState(false);
+
+  const timeStr = message.timestamp.toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+
+  function handleCopy() {
+    navigator.clipboard.writeText(message.content).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  }
+
+  return (
+    <div
+      className={`flex items-center mt-3${reverse ? " flex-row-reverse gap-3" : " gap-2"}`}
+      style={{ color: "rgba(255,255,255,0.60)" }}
+    >
+      <button
+        onClick={handleCopy}
+        className="flex items-center rounded-lg p-1 -m-1 transition-colors"
+        style={{ color: "rgba(255,255,255,0.60)", lineHeight: 1 }}
+        onMouseEnter={(e) => {
+          e.currentTarget.style.color = "var(--text-primary)";
+          e.currentTarget.style.background = "var(--surface-3)";
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.color = "rgba(255,255,255,0.60)";
+          e.currentTarget.style.background = "transparent";
+        }}
+        title="Copy message"
+      >
+        {copied ? <Check size={15} weight="bold" /> : <Copy size={15} weight="regular" />}
+      </button>
+      <span className="text-[12px] font-medium" style={{ lineHeight: 1, color: "rgba(255,255,255,0.60)" }}>{timeStr}</span>
+    </div>
+  );
+}
+
 function MessageBlock({ message, isStreaming }: { message: Message; isStreaming: boolean }) {
+  const [hovered, setHovered] = useState(false);
+
   if (message.collapsed) {
     return <CollapsedIndicator count={message.collapsed} />;
   }
@@ -254,19 +298,35 @@ function MessageBlock({ message, isStreaming }: { message: Message; isStreaming:
   if (isUser) {
     return (
       <div
-        className="rounded-2xl px-5 py-3.5 my-3 text-[14px] leading-[1.6] font-medium ml-auto w-fit max-w-[85%] break-words min-w-0"
-        style={{
-          background: "var(--surface-3)",
-          color: "var(--text-primary)",
-        }}
+        className="my-3 ml-auto w-fit max-w-[85%] min-w-0"
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
       >
-        {message.content}
+        <div
+          className="rounded-2xl px-5 py-3.5 text-[14px] leading-[1.6] font-medium break-words"
+          style={{
+            background: "var(--surface-3)",
+            color: "var(--text-primary)",
+          }}
+        >
+          {message.content}
+        </div>
+        <div
+          className="flex justify-end px-2 transition-opacity duration-150"
+          style={{ opacity: hovered ? 1 : 0 }}
+        >
+          <MessageHoverBar message={message} reverse />
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="py-4 px-1">
+    <div
+      className="py-4 px-1"
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+    >
       <div
         className="text-[14px] leading-[1.65] font-medium break-words min-w-0"
         style={{ color: "var(--text-primary)" }}
@@ -276,6 +336,12 @@ function MessageBlock({ message, isStreaming }: { message: Message; isStreaming:
       {message.fileChanges && message.fileChanges.length > 0 && (
         <FileChangeCard changes={message.fileChanges} />
       )}
+      <div
+        className="px-2 transition-opacity duration-150"
+        style={{ opacity: hovered ? 1 : 0 }}
+      >
+        <MessageHoverBar message={message} />
+      </div>
     </div>
   );
 }
@@ -357,7 +423,7 @@ function MarkdownContent({ text }: { text: string }) {
             className="pl-3 my-2 italic"
             style={{
               borderLeft: "2px solid var(--border-emphasis)",
-              color: "var(--text-secondary)",
+              color: "rgba(255,255,255,0.60)",
             }}
           >
             {children}
@@ -571,7 +637,7 @@ export function ChatView({ thread, onSend, onInterrupt }: ChatViewProps) {
       >
         <span
           className="text-[12px] font-medium truncate max-w-[55%]"
-          style={{ color: "var(--text-secondary)" }}
+          style={{ color: "rgba(255,255,255,0.60)" }}
         >
           {thread.name}
         </span>
@@ -765,7 +831,7 @@ function StatusButton({ children }: { children: React.ReactNode }) {
       className="flex items-center gap-1.5 px-2 py-[3px] rounded-lg text-[12px] font-medium transition-colors"
       style={{ color: "var(--text-muted)" }}
       onMouseEnter={(e) => {
-        e.currentTarget.style.color = "var(--text-secondary)";
+        e.currentTarget.style.color = "rgba(255,255,255,0.60)";
       }}
       onMouseLeave={(e) => {
         e.currentTarget.style.color = "var(--text-muted)";
@@ -784,7 +850,7 @@ function ControlButton({ children, onClick }: { children: React.ReactNode; onCli
       style={{ color: "var(--text-muted)" }}
       onMouseEnter={(e) => {
         e.currentTarget.style.background = "var(--border-subtle)";
-        e.currentTarget.style.color = "var(--text-secondary)";
+        e.currentTarget.style.color = "rgba(255,255,255,0.60)";
       }}
       onMouseLeave={(e) => {
         e.currentTarget.style.background = "transparent";
