@@ -50,6 +50,20 @@ const EFFORT_LEVELS: EffortDef[] = [
   { id: "low", label: "Low", subtitle: "Fast, minimal reasoning" },
 ];
 
+/* ── Modes ──────────────────────────────────────────────────── */
+
+interface ModeDef {
+  id: string;
+  label: string;
+  subtitle: string;
+}
+
+const MODES: ModeDef[] = [
+  { id: "ask", label: "Ask before edits", subtitle: "Confirm each file change before applying" },
+  { id: "auto", label: "Auto-accept edits", subtitle: "Apply changes without asking" },
+  { id: "plan", label: "Plan mode", subtitle: "Outline a plan without making changes" },
+];
+
 /* ── File change card ────────────────────────────────────────── */
 
 function FileChangeCard({ changes }: { changes: FileChange[] }) {
@@ -233,9 +247,12 @@ export function ChatView({ thread }: ChatViewProps) {
   const [selectedEffort, setSelectedEffort] = useState(EFFORT_LEVELS[1]); // default "high"
   const [effortDropdownOpen, setEffortDropdownOpen] = useState(false);
   const effortDropdownRef = useRef<HTMLDivElement>(null);
+  const [selectedMode, setSelectedMode] = useState(MODES[0]); // default "Ask before edits"
+  const [modeDropdownOpen, setModeDropdownOpen] = useState(false);
+  const modeDropdownRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (!modelDropdownOpen && !effortDropdownOpen) return;
+    if (!modelDropdownOpen && !effortDropdownOpen && !modeDropdownOpen) return;
     const handleClick = (e: MouseEvent) => {
       if (modelDropdownOpen && modelDropdownRef.current && !modelDropdownRef.current.contains(e.target as Node)) {
         setModelDropdownOpen(false);
@@ -243,10 +260,13 @@ export function ChatView({ thread }: ChatViewProps) {
       if (effortDropdownOpen && effortDropdownRef.current && !effortDropdownRef.current.contains(e.target as Node)) {
         setEffortDropdownOpen(false);
       }
+      if (modeDropdownOpen && modeDropdownRef.current && !modeDropdownRef.current.contains(e.target as Node)) {
+        setModeDropdownOpen(false);
+      }
     };
     document.addEventListener("mousedown", handleClick);
     return () => document.removeEventListener("mousedown", handleClick);
-  }, [modelDropdownOpen, effortDropdownOpen]);
+  }, [modelDropdownOpen, effortDropdownOpen, modeDropdownOpen]);
 
   if (!thread) {
     return (
@@ -369,6 +389,22 @@ export function ChatView({ thread }: ChatViewProps) {
                 </div>
               </div>
               <div className="flex items-center gap-1.5">
+                <div className="relative" ref={modeDropdownRef}>
+                  <ControlButton onClick={() => setModeDropdownOpen((v) => !v)}>
+                    <span>{selectedMode.label}</span>
+                    <CaretDown size={10} weight="bold" />
+                  </ControlButton>
+                  {modeDropdownOpen && (
+                    <ModeDropdown
+                      modes={MODES}
+                      selected={selectedMode}
+                      onSelect={(m) => {
+                        setSelectedMode(m);
+                        setModeDropdownOpen(false);
+                      }}
+                    />
+                  )}
+                </div>
                 {thread.status === "running" ? (
                   <button
                     className="w-[30px] h-[30px] flex items-center justify-center rounded-full"
@@ -555,6 +591,63 @@ function EffortDropdown({
                 style={{ color: "var(--text-muted)" }}
               >
                 {lvl.subtitle}
+              </span>
+            </div>
+            {isSelected && (
+              <Check size={14} weight="bold" className="shrink-0" style={{ color: "var(--text-primary)" }} />
+            )}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/* ── Mode dropdown ─────────────────────────────────────────── */
+
+function ModeDropdown({
+  modes,
+  selected,
+  onSelect,
+}: {
+  modes: ModeDef[];
+  selected: ModeDef;
+  onSelect: (m: ModeDef) => void;
+}) {
+  return (
+    <div
+      className="absolute bottom-full right-0 mb-2 rounded-2xl p-1.5 min-w-[300px] z-50 flex flex-col gap-[2px]"
+      style={{
+        background: "var(--surface-3)",
+        border: "1px solid var(--border-emphasis)",
+        boxShadow: "0 8px 24px rgba(0,0,0,0.4)",
+      }}
+    >
+      {modes.map((mode) => {
+        const isSelected = mode.id === selected.id;
+        return (
+          <button
+            key={mode.id}
+            onClick={() => onSelect(mode)}
+            className="w-full flex items-center gap-2.5 rounded-xl px-2.5 py-2 text-left transition-colors"
+            style={{
+              background: isSelected ? "rgba(255,255,255,0.06)" : "transparent",
+            }}
+            onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.06)")}
+            onMouseLeave={(e) => (e.currentTarget.style.background = isSelected ? "rgba(255,255,255,0.06)" : "transparent")}
+          >
+            <div className="flex flex-col gap-0.5 flex-1 min-w-0">
+              <span
+                className="text-[13px] font-medium leading-tight"
+                style={{ color: "var(--text-primary)" }}
+              >
+                {mode.label}
+              </span>
+              <span
+                className="text-[11px] leading-tight"
+                style={{ color: "var(--text-muted)" }}
+              >
+                {mode.subtitle}
               </span>
             </div>
             {isSelected && (
