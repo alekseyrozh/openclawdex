@@ -58,7 +58,7 @@ export function Sidebar({
     >
       {/* Traffic light spacer */}
       <div
-        className="h-[52px] shrink-0"
+        className="h-[38px] shrink-0"
         style={{
           // @ts-expect-error -- webkit
           WebkitAppRegion: "drag",
