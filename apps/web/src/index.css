@@ -24,7 +24,7 @@
   --surface-4: #333333;
 
   /* Derived text (ink #fff with opacity layers) */
-  --text-primary: rgba(255, 255, 255, 0.95);
+  --text-primary: rgba(255, 255, 255, 1);
   --text-secondary: rgba(255, 255, 255, 0.75);
   --text-muted: rgba(255, 255, 255, 0.50);
   --text-faint: rgba(255, 255, 255, 0.28);

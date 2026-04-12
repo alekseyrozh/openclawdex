@@ -19,19 +19,19 @@ function FileChangeCard({ changes }: { changes: FileChange[] }) {
     <div
       className="rounded-2xl overflow-hidden my-3"
       style={{
-        background: "var(--surface-1)",
-        border: "1px solid var(--border-default)",
+        background: "var(--surface-2)",
+        border: "1px solid var(--border-emphasis)",
       }}
     >
       <div
         className="flex items-center justify-between px-3 py-[6px]"
         style={{ borderBottom: "1px solid var(--border-subtle)" }}
       >
-        <span className="text-[12px]" style={{ color: "var(--text-secondary)" }}>
+        <span className="text-[13px] font-medium" style={{ color: "var(--text-secondary)" }}>
           {total} file{total > 1 ? "s" : ""} changed
         </span>
         <button
-          className="flex items-center gap-1 text-[11px] transition-colors"
+          className="flex items-center gap-1 text-[13px] font-medium transition-colors"
           style={{ color: "var(--text-muted)" }}
           onMouseEnter={(e) =>
             (e.currentTarget.style.color = "var(--text-primary)")
@@ -47,7 +47,7 @@ function FileChangeCard({ changes }: { changes: FileChange[] }) {
       {changes.map((fc, i) => (
         <div
           key={i}
-          className="flex items-center gap-2 px-3 py-[5px] transition-colors"
+          className="flex items-center gap-2 px-3 py-[7px] transition-colors"
           style={{ cursor: "default" }}
           onMouseEnter={(e) =>
             (e.currentTarget.style.background = "rgba(255,255,255,0.02)")
@@ -58,19 +58,19 @@ function FileChangeCard({ changes }: { changes: FileChange[] }) {
         >
           <FileText size={13} weight="regular" style={{ color: "var(--text-faint)" }} />
           <span
-            className="flex-1 text-[12px] font-mono truncate"
+            className="flex-1 text-[13px] font-mono font-medium truncate"
             style={{ color: "var(--text-secondary)" }}
           >
             {fc.path}
           </span>
           <span
-            className="text-[11px] font-mono"
+            className="text-[13px] font-mono font-medium"
             style={{ color: "var(--diff-added)" }}
           >
             +{fc.additions}
           </span>
           <span
-            className="text-[11px] font-mono"
+            className="text-[13px] font-mono font-medium"
             style={{ color: "var(--diff-removed)" }}
           >
             −{fc.deletions}
@@ -87,7 +87,7 @@ function CollapsedIndicator({ count }: { count: number }) {
   return (
     <div className="flex items-center justify-center py-3">
       <button
-        className="flex items-center gap-1 text-[11px] px-3 py-[4px] rounded-full transition-colors"
+        className="flex items-center gap-1 text-[11px] font-medium px-3 py-[4px] rounded-full transition-colors"
         style={{
           color: "var(--text-muted)",
           border: "1px solid var(--border-subtle)",
@@ -120,9 +120,9 @@ function MessageBlock({ message }: { message: Message }) {
   if (isUser) {
     return (
       <div
-        className="rounded-2xl px-5 py-3.5 my-2 text-[13px] leading-[1.65]"
+        className="rounded-2xl px-5 py-3.5 my-3 text-[14px] leading-[1.6] font-medium"
         style={{
-          background: "var(--surface-2)",
+          background: "var(--surface-3)",
           color: "var(--text-primary)",
         }}
       >
@@ -132,9 +132,9 @@ function MessageBlock({ message }: { message: Message }) {
   }
 
   return (
-    <div className="py-3 px-1">
+    <div className="py-4 px-1">
       <div
-        className="text-[13px] leading-[1.7] whitespace-pre-wrap"
+        className="text-[14px] leading-[1.65] whitespace-pre-wrap font-medium"
         style={{ color: "var(--text-primary)" }}
       >
         {formatContent(message.content)}
@@ -155,9 +155,9 @@ function formatContent(text: string) {
       return (
         <span
           key={i}
-          className="font-mono text-[12px] px-[5px] py-[2px] rounded-lg"
+          className="font-mono text-[12.5px] font-medium px-[5px] py-[2px] rounded-md"
           style={{
-            background: "rgba(255,255,255,0.06)",
+            background: "rgba(255,255,255,0.10)",
             color: isFileRef ? "var(--accent)" : "#d4a276",
           }}
         >
@@ -224,7 +224,7 @@ export function ChatView({ thread }: ChatViewProps) {
             Start a conversation
           </div>
         ) : (
-          <div className="max-w-[640px] mx-auto px-5 py-3">
+          <div className="max-w-[720px] mx-auto px-5 py-3">
             {thread.messages.map((msg) => (
               <MessageBlock key={msg.id} message={msg} />
             ))}
@@ -234,7 +234,7 @@ export function ChatView({ thread }: ChatViewProps) {
 
       {/* Composer */}
       <div className="shrink-0 px-5 pb-4 pt-1">
-        <div className="max-w-[640px] mx-auto">
+        <div className="max-w-[720px] mx-auto">
           <div
             className="rounded-2xl overflow-hidden"
             style={{
@@ -247,7 +247,7 @@ export function ChatView({ thread }: ChatViewProps) {
               onChange={(e) => setInput(e.target.value)}
               placeholder="Ask for follow-up changes"
               rows={1}
-              className="w-full bg-transparent text-[13px] px-3 pt-3 pb-2 resize-none outline-none"
+              className="w-full bg-transparent text-[14px] px-3 pt-3 pb-2 resize-none outline-none"
               style={{
                 color: "var(--text-primary)",
                 minHeight: "38px",
