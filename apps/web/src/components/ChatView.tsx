@@ -286,22 +286,33 @@ function MessageHoverBar({ message, reverse }: { message: Message; reverse?: boo
   );
 }
 
-function MessageBlock({ message, isStreaming }: { message: Message; isStreaming: boolean }) {
-  const [hovered, setHovered] = useState(false);
+/* ── Tool use indicator ──────────────────────────────────────── */
 
+function ToolUseIndicator({ toolName }: { toolName: string }) {
+  return (
+    <div
+      className="py-2 px-1 text-[13px] font-medium"
+      style={{ color: "var(--text-muted)" }}
+    >
+      {toolName}
+    </div>
+  );
+}
+
+function MessageBlock({ message, isStreaming, showHoverBar }: { message: Message; isStreaming: boolean; showHoverBar: boolean }) {
   if (message.collapsed) {
     return <CollapsedIndicator count={message.collapsed} />;
+  }
+
+  if (message.role === "tool_use") {
+    return <ToolUseIndicator toolName={message.toolName ?? "unknown"} />;
   }
 
   const isUser = message.role === "user";
 
   if (isUser) {
     return (
-      <div
-        className="my-3 ml-auto w-fit max-w-[85%] min-w-0"
-        onMouseEnter={() => setHovered(true)}
-        onMouseLeave={() => setHovered(false)}
-      >
+      <div className="my-3 ml-auto w-fit max-w-[85%] min-w-0 group">
         <div
           className="rounded-2xl px-5 py-3.5 text-[14px] leading-[1.6] font-medium break-words"
           style={{
@@ -311,22 +322,17 @@ function MessageBlock({ message, isStreaming }: { message: Message; isStreaming:
         >
           {message.content}
         </div>
-        <div
-          className="flex justify-end px-2 transition-opacity duration-150"
-          style={{ opacity: hovered ? 1 : 0 }}
-        >
-          <MessageHoverBar message={message} reverse />
-        </div>
+        {showHoverBar && (
+          <div className="flex justify-end px-2 transition-opacity duration-300 opacity-0 group-hover:opacity-100">
+            <MessageHoverBar message={message} reverse />
+          </div>
+        )}
       </div>
     );
   }
 
   return (
-    <div
-      className="py-4 px-1"
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-    >
+    <div className="py-4 px-1 group">
       <div
         className="text-[14px] leading-[1.65] font-medium break-words min-w-0"
         style={{ color: "var(--text-primary)" }}
@@ -336,12 +342,11 @@ function MessageBlock({ message, isStreaming }: { message: Message; isStreaming:
       {message.fileChanges && message.fileChanges.length > 0 && (
         <FileChangeCard changes={message.fileChanges} />
       )}
-      <div
-        className="px-2 transition-opacity duration-150"
-        style={{ opacity: hovered ? 1 : 0 }}
-      >
-        <MessageHoverBar message={message} />
-      </div>
+      {showHoverBar && (
+        <div className="px-2 transition-opacity duration-300 opacity-0 group-hover:opacity-100">
+          <MessageHoverBar message={message} />
+        </div>
+      )}
     </div>
   );
 }
@@ -654,17 +659,28 @@ export function ChatView({ thread, onSend, onInterrupt }: ChatViewProps) {
           </div>
         ) : (
           <div className="max-w-[720px] mx-auto px-5 py-3">
-            {thread.messages.map((msg, i) => (
-              <MessageBlock
-                key={msg.id}
-                message={msg}
-                isStreaming={
-                  thread.status === "running" &&
-                  msg.role === "assistant" &&
-                  i === thread.messages.length - 1
-                }
-              />
-            ))}
+            {thread.messages.map((msg, i) => {
+              // Show hover bar only on the last assistant message before the next user message
+              // (tool_use entries between assistant messages don't break the group)
+              let showHoverBar = true;
+              if (msg.role === "assistant") {
+                let j = i + 1;
+                while (j < thread.messages.length && thread.messages[j].role === "tool_use") j++;
+                showHoverBar = j >= thread.messages.length || thread.messages[j].role === "user";
+              }
+              return (
+                <MessageBlock
+                  key={msg.id}
+                  message={msg}
+                  isStreaming={
+                    thread.status === "running" &&
+                    msg.role === "assistant" &&
+                    i === thread.messages.length - 1
+                  }
+                  showHoverBar={showHoverBar}
+                />
+              );
+            })}
             {thread.status === "running" && thread.messages[thread.messages.length - 1]?.role !== "assistant" && (
               <div className="py-4 px-1">
                 <ThinkingIndicator />
@@ -831,9 +847,11 @@ function StatusButton({ children }: { children: React.ReactNode }) {
       className="flex items-center gap-1.5 px-2 py-[3px] rounded-lg text-[12px] font-medium transition-colors"
       style={{ color: "var(--text-muted)" }}
       onMouseEnter={(e) => {
+        e.currentTarget.style.background = "var(--border-subtle)";
         e.currentTarget.style.color = "rgba(255,255,255,0.60)";
       }}
       onMouseLeave={(e) => {
+        e.currentTarget.style.background = "transparent";
         e.currentTarget.style.color = "var(--text-muted)";
       }}
     >

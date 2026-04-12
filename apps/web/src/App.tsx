@@ -19,11 +19,12 @@ export interface Thread {
 
 export interface Message {
   id: string;
-  role: "user" | "assistant";
+  role: "user" | "assistant" | "tool_use";
   content: string;
   timestamp: Date;
   fileChanges?: FileChange[];
   collapsed?: number;
+  toolName?: string;
 }
 
 export interface FileChange {
@@ -65,12 +66,12 @@ function sessionToThread(s: SessionInfo): Thread {
 }
 
 function historyToMessages(items: HistoryMessage[]): Message[] {
-  return items.map((h) => ({
-    id: h.id,
-    role: h.role,
-    content: h.content,
-    timestamp: new Date(),
-  }));
+  return items.map((h) => {
+    if (h.role === "tool_use") {
+      return { id: h.id, role: "tool_use" as const, content: "", timestamp: new Date(), toolName: h.toolName };
+    }
+    return { id: h.id, role: h.role, content: h.content, timestamp: new Date() };
+  });
 }
 
 const SIDEBAR_MIN = 180;
@@ -146,6 +147,9 @@ export function App() {
 
             case "status":
               return { ...t, status: event.status };
+
+            case "tool_use":
+              return { ...t, messages: [...t.messages, { id: msgId(), role: "tool_use" as const, content: "", timestamp: new Date(), toolName: event.toolName }] };
 
             case "error":
               return { ...t, status: "error" as const, messages: [...t.messages, { id: msgId(), role: "assistant" as const, content: `Error: ${event.message}`, timestamp: new Date() }] };

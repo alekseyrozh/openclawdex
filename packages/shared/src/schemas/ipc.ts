@@ -12,11 +12,11 @@ export const SessionInfo = z.object({
 });
 export type SessionInfo = z.infer<typeof SessionInfo>;
 
-export const HistoryMessage = z.object({
-  id: z.string(),
-  role: z.enum(["user", "assistant"]),
-  content: z.string(),
-});
+export const HistoryMessage = z.discriminatedUnion("role", [
+  z.object({ id: z.string(), role: z.literal("user"), content: z.string() }),
+  z.object({ id: z.string(), role: z.literal("assistant"), content: z.string() }),
+  z.object({ id: z.string(), role: z.literal("tool_use"), toolName: z.string() }),
+]);
 export type HistoryMessage = z.infer<typeof HistoryMessage>;
 
 // ── Events flowing from main process → renderer ──────────────
@@ -53,11 +53,18 @@ export const IpcSessionInit = z.object({
   model: z.string(),
 });
 
+export const IpcToolUse = z.object({
+  type: z.literal("tool_use"),
+  threadId: z.string(),
+  toolName: z.string(),
+});
+
 export const IpcEvent = z.discriminatedUnion("type", [
   IpcAssistantText,
   IpcStatus,
   IpcResult,
   IpcError,
   IpcSessionInit,
+  IpcToolUse,
 ]);
 export type IpcEvent = z.infer<typeof IpcEvent>;

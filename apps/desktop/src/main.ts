@@ -77,6 +77,14 @@ function setupIpcHandlers(): void {
             });
             break;
 
+          case "tool_use":
+            emitToRenderer({
+              type: "tool_use",
+              threadId,
+              toolName: e.toolName,
+            });
+            break;
+
           case "result":
             emitToRenderer({
               type: "result",
@@ -126,19 +134,23 @@ function setupIpcHandlers(): void {
   ipcMain.handle("claude:load-history", async (_event, sessionId: string) => {
     const msgs = await getSessionMessages(sessionId);
 
-    type Role = "user" | "assistant";
-    type HistoryMsg = { id: string; role: Role; content: string };
-
     // Zod schemas for message body shapes
-    const ContentBlock = z.object({ type: z.string(), text: z.string().optional() });
+    const TextBlock = z.object({ type: z.literal("text"), text: z.string() });
+    const ToolUseBlock = z.object({ type: z.literal("tool_use"), id: z.string(), name: z.string() });
+    const AnyBlock = z.union([TextBlock, ToolUseBlock, z.object({ type: z.string() })]);
     const UserBody = z.object({
       role: z.literal("user"),
-      content: z.union([z.string(), z.array(ContentBlock)]),
+      content: z.union([z.string(), z.array(AnyBlock)]),
     });
     const AssistantBody = z.object({
       role: z.literal("assistant"),
-      content: z.array(ContentBlock),
+      content: z.array(AnyBlock),
     });
+
+    type HistoryMsg =
+      | { id: string; role: "user"; content: string }
+      | { id: string; role: "assistant"; content: string }
+      | { id: string; role: "tool_use"; toolName: string };
 
     const result: HistoryMsg[] = [];
 
@@ -150,18 +162,23 @@ function setupIpcHandlers(): void {
           typeof parsed.data.content === "string"
             ? parsed.data.content
             : parsed.data.content
-                .filter((b) => b.type === "text")
-                .map((b) => b.text ?? "")
+                .filter((b): b is z.infer<typeof TextBlock> => b.type === "text")
+                .map((b) => b.text)
                 .join("");
         if (content.trim()) result.push({ id: m.uuid, role: "user", content });
       } else if (m.type === "assistant") {
         const parsed = AssistantBody.safeParse(m.message);
         if (!parsed.success) continue;
-        const content = parsed.data.content
-          .filter((b) => b.type === "text")
-          .map((b) => b.text ?? "")
+        const blocks = parsed.data.content;
+        const textContent = blocks
+          .filter((b): b is z.infer<typeof TextBlock> => b.type === "text")
+          .map((b) => b.text)
           .join("");
-        if (content.trim()) result.push({ id: m.uuid, role: "assistant", content });
+        if (textContent.trim()) result.push({ id: m.uuid, role: "assistant", content: textContent });
+        const toolBlocks = blocks.filter((b): b is z.infer<typeof ToolUseBlock> => b.type === "tool_use");
+        for (const t of toolBlocks) {
+          result.push({ id: `${m.uuid}-${t.id}`, role: "tool_use", toolName: t.name });
+        }
       }
     }
 

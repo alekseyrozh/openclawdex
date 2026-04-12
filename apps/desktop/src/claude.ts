@@ -33,6 +33,7 @@ export function findClaudeBinary(): string | null {
 export type SessionEvent =
   | { kind: "init"; sessionId: string; model: string }
   | { kind: "text_delta"; text: string }
+  | { kind: "tool_use"; toolName: string }
   | { kind: "result"; costUsd: number; durationMs: number; isError: boolean }
   | { kind: "error"; message: string }
   | { kind: "done" };
@@ -183,8 +184,16 @@ export class ClaudeSession {
       }
 
       case "assistant": {
-        // Complete assistant message arrives after all stream_event deltas.
-        // We already showed the text via deltas, so skip to avoid duplication.
+        // Complete assistant message — extract tool_use blocks (text already sent via deltas)
+        const content = (msg as { message?: { content?: unknown } }).message?.content;
+        if (Array.isArray(content)) {
+          for (const block of content) {
+            if (block && typeof block === "object" && (block as { type?: string }).type === "tool_use") {
+              const name = (block as { name?: string }).name;
+              if (name) onEvent({ kind: "tool_use", toolName: name });
+            }
+          }
+        }
         break;
       }
 
