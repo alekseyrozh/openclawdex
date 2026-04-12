@@ -1,6 +1,11 @@
 import { app, BrowserWindow, ipcMain, nativeTheme } from "electron";
 import path from "path";
 import { findClaudeBinary, ClaudeSession } from "./claude";
+import {
+  listSessions,
+  getSessionMessages,
+} from "@anthropic-ai/claude-agent-sdk";
+import { z } from "zod";
 import type { IpcEvent } from "@openclawdex/shared";
 
 const DEV_URL = "http://localhost:3000";
@@ -13,11 +18,11 @@ let mainWindow: BrowserWindow | null = null;
 const claudePath = findClaudeBinary();
 const sessions = new Map<string, ClaudeSession>();
 
-function getOrCreateSession(threadId: string): ClaudeSession | null {
+function getOrCreateSession(threadId: string, resumeSessionId?: string): ClaudeSession | null {
   if (!claudePath) return null;
   let session = sessions.get(threadId);
   if (!session) {
-    session = new ClaudeSession(claudePath);
+    session = new ClaudeSession(claudePath, resumeSessionId);
     sessions.set(threadId, session);
   }
   return session;
@@ -39,8 +44,8 @@ function setupIpcHandlers(): void {
   /** Send a user message to Claude for a given thread. */
   ipcMain.handle(
     "claude:send",
-    (_event, threadId: string, message: string) => {
-      const session = getOrCreateSession(threadId);
+    (_event, threadId: string, message: string, resumeSessionId?: string) => {
+      const session = getOrCreateSession(threadId, resumeSessionId);
       if (!session) {
         emitToRenderer({
           type: "error",
@@ -102,6 +107,65 @@ function setupIpcHandlers(): void {
   /** Interrupt the current Claude turn for a thread. */
   ipcMain.handle("claude:interrupt", (_event, threadId: string) => {
     sessions.get(threadId)?.interrupt();
+  });
+
+  /** List all past Claude sessions. */
+  ipcMain.handle("claude:list-sessions", async () => {
+    const all = await listSessions();
+    return all.map((s) => ({
+      sessionId: s.sessionId,
+      summary: s.summary,
+      lastModified: s.lastModified,
+      cwd: s.cwd,
+      firstPrompt: s.firstPrompt,
+      gitBranch: s.gitBranch,
+    }));
+  });
+
+  /** Load message history for a past session. */
+  ipcMain.handle("claude:load-history", async (_event, sessionId: string) => {
+    const msgs = await getSessionMessages(sessionId);
+
+    type Role = "user" | "assistant";
+    type HistoryMsg = { id: string; role: Role; content: string };
+
+    // Zod schemas for message body shapes
+    const ContentBlock = z.object({ type: z.string(), text: z.string().optional() });
+    const UserBody = z.object({
+      role: z.literal("user"),
+      content: z.union([z.string(), z.array(ContentBlock)]),
+    });
+    const AssistantBody = z.object({
+      role: z.literal("assistant"),
+      content: z.array(ContentBlock),
+    });
+
+    const result: HistoryMsg[] = [];
+
+    for (const m of msgs) {
+      if (m.type === "user") {
+        const parsed = UserBody.safeParse(m.message);
+        if (!parsed.success) continue;
+        const content =
+          typeof parsed.data.content === "string"
+            ? parsed.data.content
+            : parsed.data.content
+                .filter((b) => b.type === "text")
+                .map((b) => b.text ?? "")
+                .join("");
+        if (content.trim()) result.push({ id: m.uuid, role: "user", content });
+      } else if (m.type === "assistant") {
+        const parsed = AssistantBody.safeParse(m.message);
+        if (!parsed.success) continue;
+        const content = parsed.data.content
+          .filter((b) => b.type === "text")
+          .map((b) => b.text ?? "")
+          .join("");
+        if (content.trim()) result.push({ id: m.uuid, role: "assistant", content });
+      }
+    }
+
+    return result;
   });
 }
 

@@ -9,6 +9,8 @@ export {
 } from "./schemas/claude-events";
 
 export {
+  SessionInfo,
+  HistoryMessage,
   IpcAssistantText,
   IpcStatus,
   IpcResult,

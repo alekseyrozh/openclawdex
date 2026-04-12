@@ -62,39 +62,12 @@ svg {
   background: rgba(51, 156, 255, 0.3);
 }
 
-::-webkit-scrollbar {
-  width: 6px;
+/* Hide scrollbar on the custom ScrollArea scroll container */
+.hide-native-scrollbar::-webkit-scrollbar {
+  display: none;
 }
 
-::-webkit-scrollbar-track {
-  background: transparent;
-}
 
-::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.08);
-  border-radius: 3px;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.14);
-}
-
-/* Composer textarea scrollbar — inset and rounded */
-textarea::-webkit-scrollbar {
-  width: 12px;
-}
-
-textarea::-webkit-scrollbar-track {
-  background: transparent;
-  margin: 6px 0;
-}
-
-textarea::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.12);
-  border-radius: 100px;
-  border: 2px solid transparent;
-  background-clip: padding-box;
-}
 
 /* Token fade-in for streaming text */
 @keyframes token-fade {

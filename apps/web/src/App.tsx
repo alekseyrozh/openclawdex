@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import { Sidebar } from "./components/Sidebar";
 import { ChatView } from "./components/ChatView";
-import { IpcEvent } from "@openclawdex/shared";
+import { IpcEvent, SessionInfo, HistoryMessage } from "@openclawdex/shared";
 
 export type Provider = "claude" | "codex";
 
@@ -13,6 +13,8 @@ export interface Thread {
   status: "idle" | "running" | "error";
   messages: Message[];
   branch?: string;
+  claudeSessionId?: string;
+  historyLoaded?: boolean;
 }
 
 export interface Message {
@@ -35,26 +37,77 @@ function msgId() {
   return `msg-${nextMsgId++}`;
 }
 
-const INITIAL_THREAD: Thread = {
-  id: "1",
-  name: "New conversation",
-  provider: "claude",
-  project: "openclawdex",
-  status: "idle",
-  messages: [],
-};
+function newThread(): Thread {
+  return {
+    id: crypto.randomUUID(),
+    name: "New conversation",
+    provider: "claude",
+    project: "",
+    status: "idle",
+    messages: [],
+    historyLoaded: true,
+  };
+}
+
+function sessionToThread(s: SessionInfo): Thread {
+  const project = s.cwd ? s.cwd.split("/").filter(Boolean).at(-1) ?? "" : "";
+  return {
+    id: s.sessionId,
+    name: s.summary,
+    provider: "claude",
+    project,
+    status: "idle",
+    messages: [],
+    branch: s.gitBranch,
+    claudeSessionId: s.sessionId,
+    historyLoaded: false,
+  };
+}
+
+function historyToMessages(items: HistoryMessage[]): Message[] {
+  return items.map((h) => ({
+    id: h.id,
+    role: h.role,
+    content: h.content,
+    timestamp: new Date(),
+  }));
+}
 
 const SIDEBAR_MIN = 180;
 const SIDEBAR_MAX = 400;
 const SIDEBAR_DEFAULT = 240;
 
 export function App() {
-  const [threads, setThreads] = useState<Thread[]>([INITIAL_THREAD]);
-  const [activeThreadId, setActiveThreadId] = useState<string>("1");
+  const [threads, setThreads] = useState<Thread[]>(() => {
+    const t = newThread();
+    return [t];
+  });
+  const threadsRef = useRef(threads);
+  threadsRef.current = threads;
+  const [activeThreadId, setActiveThreadId] = useState<string>(() => threads[0].id);
   const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT);
   const dragging = useRef(false);
 
   const activeThread = threads.find((t) => t.id === activeThreadId);
+
+  // ── Load past sessions on mount ───────────────────────────
+
+  useEffect(() => {
+    if (!window.openclawdex?.listSessions) return;
+    window.openclawdex.listSessions().then((sessions) => {
+      const parsed = sessions.map((s) => SessionInfo.safeParse(s)).flatMap((r) => r.success ? [r.data] : []);
+      if (parsed.length === 0) return;
+      const historyThreads = parsed
+        .sort((a, b) => b.lastModified - a.lastModified)
+        .map(sessionToThread);
+      setThreads((prev) => {
+        // Keep any "new conversation" threads at the top, history below
+        const newConvos = prev.filter((t) => !t.claudeSessionId);
+        return [...newConvos, ...historyThreads];
+      });
+      setActiveThreadId((prev) => prev || historyThreads[0]?.id || "");
+    });
+  }, []);
 
   // ── IPC event listener ────────────────────────────────────
 
@@ -103,7 +156,7 @@ export function App() {
 
             case "session_init":
               console.log(`[thread ${t.id}] session=${event.sessionId} model=${event.model}`);
-              return t;
+              return { ...t, claudeSessionId: event.sessionId, historyLoaded: true };
           }
         }),
       );
@@ -111,6 +164,24 @@ export function App() {
 
     return unsubscribe;
   }, []);
+
+  // ── Lazy-load history when switching to a history thread ──
+
+  useEffect(() => {
+    if (!activeThread || activeThread.historyLoaded || !activeThread.claudeSessionId) return;
+    if (!window.openclawdex?.loadHistory) return;
+
+    const { claudeSessionId } = activeThread;
+    window.openclawdex.loadHistory(claudeSessionId).then((items) => {
+      setThreads((prev) =>
+        prev.map((t) =>
+          t.id === activeThread.id
+            ? { ...t, messages: historyToMessages(items), historyLoaded: true }
+            : t,
+        ),
+      );
+    });
+  }, [activeThread?.id, activeThread?.historyLoaded]);
 
   // ── Send message handler ──────────────────────────────────
 
@@ -134,7 +205,8 @@ export function App() {
         }),
       );
 
-      window.openclawdex?.send(threadId, text);
+      const thread = threadsRef.current.find((t) => t.id === threadId);
+      window.openclawdex?.send(threadId, text, thread?.claudeSessionId);
     },
     [],
   );

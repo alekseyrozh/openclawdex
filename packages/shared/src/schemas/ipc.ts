@@ -1,5 +1,24 @@
 import { z } from "zod";
 
+// ── Session listing (invoke, not event) ───────────────────────
+
+export const SessionInfo = z.object({
+  sessionId: z.string(),
+  summary: z.string(),
+  lastModified: z.number(),
+  cwd: z.string().optional(),
+  firstPrompt: z.string().optional(),
+  gitBranch: z.string().optional(),
+});
+export type SessionInfo = z.infer<typeof SessionInfo>;
+
+export const HistoryMessage = z.object({
+  id: z.string(),
+  role: z.enum(["user", "assistant"]),
+  content: z.string(),
+});
+export type HistoryMessage = z.infer<typeof HistoryMessage>;
+
 // ── Events flowing from main process → renderer ──────────────
 
 export const IpcAssistantText = z.object({

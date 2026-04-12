@@ -45,6 +45,7 @@ export type SessionEvent =
  */
 export class ClaudeSession {
   private claudePath: string;
+  private resumeSessionId: string | undefined;
   private queryInstance: ReturnType<typeof query> | null = null;
   private streamLoopRunning = false;
 
@@ -53,8 +54,9 @@ export class ClaudeSession {
   private messageResolve: ((value: IteratorResult<SDKUserMessage>) => void) | null = null;
   private closed = false;
 
-  constructor(claudePath: string) {
+  constructor(claudePath: string, resumeSessionId?: string) {
     this.claudePath = claudePath;
+    this.resumeSessionId = resumeSessionId;
   }
 
   private static toUserMessage(text: string): SDKUserMessage {
@@ -126,6 +128,7 @@ export class ClaudeSession {
       includePartialMessages: true,
       permissionMode: "bypassPermissions",
       allowDangerouslySkipPermissions: true,
+      resume: this.resumeSessionId,
     };
 
     this.queryInstance = query({
