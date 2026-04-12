@@ -15,6 +15,7 @@ export interface Thread {
   branch?: string;
   claudeSessionId?: string;
   historyLoaded?: boolean;
+  lastModified: Date;
 }
 
 export interface Message {
@@ -47,6 +48,7 @@ function newThread(): Thread {
     status: "idle",
     messages: [],
     historyLoaded: true,
+    lastModified: new Date(),
   };
 }
 
@@ -62,6 +64,7 @@ function sessionToThread(s: SessionInfo): Thread {
     branch: s.gitBranch,
     claudeSessionId: s.sessionId,
     historyLoaded: false,
+    lastModified: new Date(s.lastModified),
   };
 }
 
@@ -83,10 +86,15 @@ export function App() {
     const t = newThread();
     return [t];
   });
+  const [threadsLoading, setThreadsLoading] = useState(true);
   const threadsRef = useRef(threads);
   threadsRef.current = threads;
   const [activeThreadId, setActiveThreadId] = useState<string>(() => threads[0].id);
-  const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT);
+  const [sidebarWidth, setSidebarWidth] = useState(() => {
+    const saved = localStorage.getItem("sidebarWidth");
+    const parsed = saved ? parseInt(saved, 10) : NaN;
+    return isNaN(parsed) ? SIDEBAR_DEFAULT : Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, parsed));
+  });
   const dragging = useRef(false);
 
   const activeThread = threads.find((t) => t.id === activeThreadId);
@@ -94,19 +102,24 @@ export function App() {
   // ── Load past sessions on mount ───────────────────────────
 
   useEffect(() => {
-    if (!window.openclawdex?.listSessions) return;
+    if (!window.openclawdex?.listSessions) {
+      setThreadsLoading(false);
+      return;
+    }
     window.openclawdex.listSessions().then((sessions) => {
       const parsed = sessions.map((s) => SessionInfo.safeParse(s)).flatMap((r) => r.success ? [r.data] : []);
-      if (parsed.length === 0) return;
-      const historyThreads = parsed
-        .sort((a, b) => b.lastModified - a.lastModified)
-        .map(sessionToThread);
-      setThreads((prev) => {
-        // Keep any "new conversation" threads at the top, history below
-        const newConvos = prev.filter((t) => !t.claudeSessionId);
-        return [...newConvos, ...historyThreads];
-      });
-      setActiveThreadId((prev) => prev || historyThreads[0]?.id || "");
+      if (parsed.length > 0) {
+        const historyThreads = parsed
+          .sort((a, b) => b.lastModified - a.lastModified)
+          .map(sessionToThread);
+        setThreads((prev) => {
+          // Keep any "new conversation" threads at the top, history below
+          const newConvos = prev.filter((t) => !t.claudeSessionId);
+          return [...newConvos, ...historyThreads];
+        });
+        setActiveThreadId((prev) => prev || historyThreads[0]?.id || "");
+      }
+      setThreadsLoading(false);
     });
   }, []);
 
@@ -233,12 +246,14 @@ export function App() {
       setSidebarWidth(w);
     };
 
-    const onUp = () => {
+    const onUp = (ev: MouseEvent) => {
       dragging.current = false;
       document.removeEventListener("mousemove", onMove);
       document.removeEventListener("mouseup", onUp);
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
+      const w = Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, ev.clientX));
+      localStorage.setItem("sidebarWidth", String(w));
     };
 
     document.body.style.cursor = "col-resize";
@@ -254,6 +269,7 @@ export function App() {
         activeThreadId={activeThreadId}
         onSelectThread={setActiveThreadId}
         width={sidebarWidth}
+        isLoading={threadsLoading}
       />
       {/* Drag handle */}
       <div

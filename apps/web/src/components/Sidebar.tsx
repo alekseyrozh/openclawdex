@@ -31,6 +31,7 @@ interface SidebarProps {
   activeThreadId: string;
   onSelectThread: (id: string) => void;
   width: number;
+  isLoading?: boolean;
 }
 
 export function Sidebar({
@@ -38,6 +39,7 @@ export function Sidebar({
   activeThreadId,
   onSelectThread,
   width,
+  isLoading,
 }: SidebarProps) {
   const grouped = threads.reduce(
     (acc, t) => {
@@ -92,15 +94,19 @@ export function Sidebar({
 
       <ScrollArea className="flex-1">
         <div className="px-3 pb-2">
-        {Object.entries(grouped).map(([project, projectThreads]) => (
-          <ProjectGroup
-            key={project}
-            project={project}
-            threads={projectThreads}
-            activeThreadId={activeThreadId}
-            onSelectThread={onSelectThread}
-          />
-        ))}
+          {isLoading ? (
+            <ThreadSkeleton />
+          ) : (
+            Object.entries(grouped).map(([project, projectThreads]) => (
+              <ProjectGroup
+                key={project}
+                project={project}
+                threads={projectThreads}
+                activeThreadId={activeThreadId}
+                onSelectThread={onSelectThread}
+              />
+            ))
+          )}
         </div>
       </ScrollArea>
 
@@ -197,11 +203,36 @@ function ProjectGroup({
                 className="text-[12px] shrink-0 ml-2 leading-none"
                 style={{ color: "var(--text-muted)" }}
               >
-                {timeAgo(thread.messages[0]?.timestamp ?? new Date())}
+                {timeAgo(thread.lastModified)}
               </span>
             </button>
           );
         })}
+    </div>
+  );
+}
+
+const SKELETON_GROUPS: { labelWidth: string; rows: string[] }[] = [
+  { labelWidth: "55%", rows: ["100%", "90%", "95%"] },
+  { labelWidth: "45%", rows: ["100%", "85%"] },
+];
+
+function ThreadSkeleton() {
+  return (
+    <div className="animate-pulse">
+      {SKELETON_GROUPS.map((group, gi) => (
+        <div key={gi} className="mb-1">
+          <div className="flex items-center gap-1.5 px-2 py-[5px] mb-[2px]">
+            <div className="w-3 h-3 rounded-sm" style={{ background: "rgba(255,255,255,0.08)" }} />
+            <div className="h-[18px] rounded-lg" style={{ width: group.labelWidth, background: "rgba(255,255,255,0.08)" }} />
+          </div>
+          {group.rows.map((w, ri) => (
+            <div key={ri} className="flex items-center pl-9 pr-2 py-[7px] mb-[2px]">
+              <div className="h-[22px] rounded-xl" style={{ width: w, background: "rgba(255,255,255,0.06)" }} />
+            </div>
+          ))}
+        </div>
+      ))}
     </div>
   );
 }
