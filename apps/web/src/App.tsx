@@ -1,6 +1,7 @@
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import { Sidebar } from "./components/Sidebar";
 import { ChatView } from "./components/ChatView";
+import { IpcEvent } from "@openclawdex/shared";
 
 export type Provider = "claude" | "codex";
 
@@ -20,7 +21,7 @@ export interface Message {
   content: string;
   timestamp: Date;
   fileChanges?: FileChange[];
-  collapsed?: number; // "N previous messages"
+  collapsed?: number;
 }
 
 export interface FileChange {
@@ -29,111 +30,122 @@ export interface FileChange {
   deletions: number;
 }
 
-const MOCK_THREADS: Thread[] = [
-  {
-    id: "1",
-    name: "Fix auth middleware",
-    provider: "claude",
-    project: "api-server",
-    status: "running",
-    branch: "fix/auth-jwt-expiry",
-    messages: [
-      {
-        id: "m1",
-        role: "user",
-        content:
-          "The authentication middleware isn't validating JWT expiry. Tokens work even after they expire.",
-        timestamp: new Date(Date.now() - 1000 * 60 * 5),
-      },
-      {
-        id: "m-collapse",
-        role: "assistant",
-        content: "",
-        collapsed: 4,
-        timestamp: new Date(Date.now() - 1000 * 60 * 4),
-      },
-      {
-        id: "m4",
-        role: "assistant",
-        content:
-          'The issue is on line 23 in `src/middleware/auth.ts` (line 23). `jwt.decode()` is used instead of `jwt.verify()` — decode skips all validation including expiration.\n\nI replaced `jwt.decode()` with `jwt.verify()` and added an explicit `exp` claim check. I also adjusted the supporting error messages in `src/middleware/auth.ts` (line 31) to distinguish between invalid and expired tokens.',
-        timestamp: new Date(Date.now() - 1000 * 60 * 3),
-        fileChanges: [
-          { path: "src/middleware/auth.ts", additions: 9, deletions: 4 },
-        ],
-      },
-      {
-        id: "m5",
-        role: "user",
-        content:
-          "the error messages should be generic for security, don't reveal whether the token is expired vs invalid",
-        timestamp: new Date(Date.now() - 1000 * 60 * 2),
-      },
-      {
-        id: "m6",
-        role: "assistant",
-        content:
-          'Made the error response generic in `src/middleware/auth.ts` (line 31). Both the invalid signature and expired token paths now return the same `{ error: "Unauthorized" }` message. Verification passed with `npm test`.',
-        timestamp: new Date(Date.now() - 1000 * 60 * 1),
-        fileChanges: [
-          { path: "src/middleware/auth.ts", additions: 2, deletions: 3 },
-        ],
-      },
-    ],
-  },
-  {
-    id: "2",
-    name: "Add rate limiting",
-    provider: "codex",
-    project: "api-server",
-    status: "idle",
-    branch: "feat/rate-limit",
-    messages: [
-      {
-        id: "m10",
-        role: "user",
-        content:
-          "Add rate limiting to the API using a sliding window. Use Redis for the counter store.",
-        timestamp: new Date(Date.now() - 1000 * 60 * 30),
-      },
-      {
-        id: "m11",
-        role: "assistant",
-        content:
-          "I'll implement a sliding window rate limiter backed by Redis. Checking the existing middleware and Redis setup.",
-        timestamp: new Date(Date.now() - 1000 * 60 * 29),
-      },
-    ],
-  },
-  {
-    id: "3",
-    name: "Refactor database layer",
-    provider: "claude",
-    project: "api-server",
-    status: "idle",
-    messages: [],
-  },
-  {
-    id: "4",
-    name: "Write API docs",
-    provider: "codex",
-    project: "docs-site",
-    status: "error",
-    messages: [],
-  },
-];
+let nextMsgId = 1;
+function msgId() {
+  return `msg-${nextMsgId++}`;
+}
+
+const INITIAL_THREAD: Thread = {
+  id: "1",
+  name: "New conversation",
+  provider: "claude",
+  project: "openclawdex",
+  status: "idle",
+  messages: [],
+};
 
 const SIDEBAR_MIN = 180;
 const SIDEBAR_MAX = 400;
 const SIDEBAR_DEFAULT = 240;
 
 export function App() {
-  const [threads] = useState<Thread[]>(MOCK_THREADS);
+  const [threads, setThreads] = useState<Thread[]>([INITIAL_THREAD]);
   const [activeThreadId, setActiveThreadId] = useState<string>("1");
   const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT);
   const dragging = useRef(false);
 
   const activeThread = threads.find((t) => t.id === activeThreadId);
+
+  // ── IPC event listener ────────────────────────────────────
+
+  useEffect(() => {
+    if (!window.openclawdex?.onEvent) return;
+
+    const unsubscribe = window.openclawdex.onEvent((raw: unknown) => {
+      const parsed = IpcEvent.safeParse(raw);
+      if (!parsed.success) {
+        console.warn("[ipc] unrecognized event:", raw);
+        return;
+      }
+      const event = parsed.data;
+
+      setThreads((prev) =>
+        prev.map((t) => {
+          if (t.id !== event.threadId) return t;
+
+          switch (event.type) {
+            case "assistant_text": {
+              const msgs = [...t.messages];
+              const last = msgs[msgs.length - 1];
+              // Append to existing assistant message, or create one
+              if (last?.role === "assistant") {
+                msgs[msgs.length - 1] = { ...last, content: last.content + event.text };
+              } else {
+                msgs.push({ id: msgId(), role: "assistant", content: event.text, timestamp: new Date() });
+              }
+              const firstLine = msgs[msgs.length - 1].content.trim().split("\n")[0];
+              const name =
+                t.name === "New conversation" && firstLine.length > 0
+                  ? firstLine.slice(0, 40) + (firstLine.length > 40 ? "..." : "")
+                  : t.name;
+              return { ...t, name, messages: msgs };
+            }
+
+            case "status":
+              return { ...t, status: event.status };
+
+            case "error":
+              return { ...t, status: "error" as const, messages: [...t.messages, { id: msgId(), role: "assistant" as const, content: `Error: ${event.message}`, timestamp: new Date() }] };
+
+            case "result":
+              console.log(`[thread ${t.id}] cost=$${event.costUsd.toFixed(4)} duration=${event.durationMs}ms`);
+              return t;
+
+            case "session_init":
+              console.log(`[thread ${t.id}] session=${event.sessionId} model=${event.model}`);
+              return t;
+          }
+        }),
+      );
+    });
+
+    return unsubscribe;
+  }, []);
+
+  // ── Send message handler ──────────────────────────────────
+
+  const handleSend = useCallback(
+    (threadId: string, text: string) => {
+      const userMsg: Message = {
+        id: msgId(),
+        role: "user",
+        content: text,
+        timestamp: new Date(),
+      };
+
+      setThreads((prev) =>
+        prev.map((t) => {
+          if (t.id !== threadId) return t;
+          return {
+            ...t,
+            status: "running" as const,
+            messages: [...t.messages, userMsg],
+          };
+        }),
+      );
+
+      window.openclawdex?.send(threadId, text);
+    },
+    [],
+  );
+
+  // ── Interrupt handler ─────────────────────────────────────
+
+  const handleInterrupt = useCallback((threadId: string) => {
+    window.openclawdex?.interrupt(threadId);
+  }, []);
+
+  // ── Sidebar drag ──────────────────────────────────────────
 
   const onDragStart = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -161,30 +173,40 @@ export function App() {
 
   return (
     <div className="flex h-full">
-        <Sidebar
-          threads={threads}
-          activeThreadId={activeThreadId}
-          onSelectThread={setActiveThreadId}
-          width={sidebarWidth}
+      <Sidebar
+        threads={threads}
+        activeThreadId={activeThreadId}
+        onSelectThread={setActiveThreadId}
+        width={sidebarWidth}
+      />
+      {/* Drag handle */}
+      <div
+        className="w-[2px] shrink-0 cursor-col-resize hover:bg-white/10 active:bg-white/15 transition-colors rounded-full"
+        onMouseDown={onDragStart}
+        style={{
+          marginLeft: "-2px",
+          marginRight: "-2px",
+          marginTop: "16px",
+          marginBottom: "16px",
+          zIndex: 10,
+        }}
+      />
+      {/* Main content panel */}
+      <div
+        className="flex-1 flex flex-col min-w-0 overflow-hidden"
+        style={{
+          background: "var(--surface-0)",
+          borderRadius: "16px 0 0 16px",
+          border: "1px solid var(--border-default)",
+          borderRight: "none",
+        }}
+      >
+        <ChatView
+          thread={activeThread ?? null}
+          onSend={handleSend}
+          onInterrupt={handleInterrupt}
         />
-        {/* Drag handle */}
-        <div
-          className="w-[2px] shrink-0 cursor-col-resize hover:bg-white/10 active:bg-white/15 transition-colors rounded-full"
-          onMouseDown={onDragStart}
-          style={{ marginLeft: "-2px", marginRight: "-2px", marginTop: "16px", marginBottom: "16px", zIndex: 10 }}
-        />
-        {/* Main content panel */}
-        <div
-          className="flex-1 flex flex-col min-w-0 overflow-hidden"
-          style={{
-            background: "var(--surface-0)",
-            borderRadius: "16px 0 0 16px",
-            border: "1px solid var(--border-default)",
-            borderRight: "none",
-          }}
-        >
-          <ChatView thread={activeThread ?? null} />
-        </div>
+      </div>
     </div>
   );
 }

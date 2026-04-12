@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import {
   ArrowUp,
+  ArrowDown,
   Stop,
   CaretDown,
   Check,
@@ -161,9 +162,86 @@ function CollapsedIndicator({ count }: { count: number }) {
   );
 }
 
+/* ── Thinking indicator ──────────────────────────────────────── */
+
+function ThinkingIndicator() {
+  return (
+    <div
+      className="thinking-shimmer flex items-center gap-2 text-[14px] font-medium"
+      style={{ color: "var(--text-secondary)" }}
+    >
+      Thinking…
+    </div>
+  );
+}
+
+/* ── Streaming text with fade-in ─────────────────────────────── */
+
+/**
+ * Renders streaming text where each word fades in individually.
+ * Splits incoming chunks into words, each mounted as a separate span
+ * with a staggered animation delay.
+ */
+function StreamingText({ text, isStreaming }: { text: string; isStreaming: boolean }) {
+  // Each entry: { token, key, delay, settled }
+  const tokens = useRef<{ token: string; key: number; delay: number; settled: boolean }[]>([]);
+  const prevLength = useRef(0);
+  const nextKey = useRef(0);
+
+  if (isStreaming && text.length > prevLength.current) {
+    // Settle all previous tokens immediately
+    for (const t of tokens.current) {
+      t.settled = true;
+    }
+
+    const fresh = text.slice(prevLength.current);
+    const parts = fresh.split(/(\s+)/);
+    let wordIndex = 0;
+    for (const part of parts) {
+      if (!part) continue;
+      const isWord = !/^\s+$/.test(part);
+      tokens.current.push({
+        token: part,
+        key: nextKey.current++,
+        delay: isWord ? wordIndex * 30 : 0,
+        settled: false,
+      });
+      if (isWord) wordIndex++;
+    }
+    prevLength.current = text.length;
+  }
+
+  if (!isStreaming) {
+    tokens.current = [];
+    prevLength.current = 0;
+    nextKey.current = 0;
+    return <>{formatContent(text)}</>;
+  }
+
+  return (
+    <>
+      {tokens.current.map(({ token, key, delay, settled }) =>
+        /^\s+$/.test(token) ? (
+          <span key={key}>{token}</span>
+        ) : settled ? (
+          <span key={key}>{token}</span>
+        ) : (
+          <span
+            key={key}
+            className="token-new"
+            style={{ animationDelay: `${delay}ms` }}
+          >
+            {token}
+          </span>
+        ),
+      )}
+    </>
+  );
+}
+
 /* ── Message block ───────────────────────────────────────────── */
 
-function MessageBlock({ message }: { message: Message }) {
+function MessageBlock({ message, isStreaming }: { message: Message; isStreaming: boolean }) {
   if (message.collapsed) {
     return <CollapsedIndicator count={message.collapsed} />;
   }
@@ -190,7 +268,7 @@ function MessageBlock({ message }: { message: Message }) {
         className="text-[14px] leading-[1.65] whitespace-pre-wrap font-medium"
         style={{ color: "var(--text-primary)" }}
       >
-        {formatContent(message.content)}
+        <StreamingText text={message.content} isStreaming={isStreaming} />
       </div>
       {message.fileChanges && message.fileChanges.length > 0 && (
         <FileChangeCard changes={message.fileChanges} />
@@ -237,9 +315,11 @@ function formatContent(text: string) {
 
 interface ChatViewProps {
   thread: Thread | null;
+  onSend: (threadId: string, text: string) => void;
+  onInterrupt: (threadId: string) => void;
 }
 
-export function ChatView({ thread }: ChatViewProps) {
+export function ChatView({ thread, onSend, onInterrupt }: ChatViewProps) {
   const [input, setInput] = useState("");
   const [selectedModel, setSelectedModel] = useState(CLAUDE_MODELS[0]);
   const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
@@ -250,6 +330,39 @@ export function ChatView({ thread }: ChatViewProps) {
   const [selectedMode, setSelectedMode] = useState(MODES[0]); // default "Ask before edits"
   const [modeDropdownOpen, setModeDropdownOpen] = useState(false);
   const modeDropdownRef = useRef<HTMLDivElement>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const [showScrollBtn, setShowScrollBtn] = useState(false);
+  const lastScrollTop = useRef(0);
+
+  // Track scroll position and direction
+  useEffect(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    const onScroll = () => {
+      const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+      const scrollingDown = el.scrollTop > lastScrollTop.current;
+      lastScrollTop.current = el.scrollTop;
+
+      // Show only when not at bottom AND scrolling up (or stationary)
+      setShowScrollBtn(!atBottom && !scrollingDown);
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
+  }, []);
+
+  // Auto-scroll to bottom when messages change (only if already at bottom)
+  useEffect(() => {
+    if (!showScrollBtn) {
+      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [thread?.messages, showScrollBtn]);
+
+  const handleSubmit = () => {
+    if (!thread || !input.trim() || thread.status === "running") return;
+    onSend(thread.id, input.trim());
+    setInput("");
+  };
 
   useEffect(() => {
     if (!modelDropdownOpen && !effortDropdownOpen && !modeDropdownOpen) return;
@@ -284,7 +397,7 @@ export function ChatView({ thread }: ChatViewProps) {
 
   return (
     <div
-      className="flex-1 flex flex-col min-w-0"
+      className="flex-1 flex flex-col min-w-0 min-h-0"
     >
       {/* Title bar area */}
       <div
@@ -304,7 +417,7 @@ export function ChatView({ thread }: ChatViewProps) {
       </div>
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto">
+      <div className="flex-1 overflow-y-auto relative" ref={scrollContainerRef}>
         {thread.messages.length === 0 ? (
           <div
             className="flex items-center justify-center h-full text-[13px]"
@@ -314,12 +427,52 @@ export function ChatView({ thread }: ChatViewProps) {
           </div>
         ) : (
           <div className="max-w-[720px] mx-auto px-5 py-3">
-            {thread.messages.map((msg) => (
-              <MessageBlock key={msg.id} message={msg} />
+            {thread.messages.map((msg, i) => (
+              <MessageBlock
+                key={msg.id}
+                message={msg}
+                isStreaming={
+                  thread.status === "running" &&
+                  msg.role === "assistant" &&
+                  i === thread.messages.length - 1
+                }
+              />
             ))}
+            {thread.status === "running" && thread.messages[thread.messages.length - 1]?.role !== "assistant" && (
+              <div className="py-4 px-1">
+                <ThinkingIndicator />
+              </div>
+            )}
+            <div ref={messagesEndRef} />
           </div>
         )}
       </div>
+
+      {/* Scroll to bottom */}
+      {showScrollBtn && thread.messages.length > 0 && (
+        <div className="relative shrink-0">
+          <button
+            onClick={() => messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })}
+            className="absolute left-1/2 -translate-x-1/2 -top-14 w-[36px] h-[36px] flex items-center justify-center rounded-full transition-colors"
+            style={{
+              background: "var(--surface-2)",
+              border: "1px solid var(--border-emphasis)",
+              color: "var(--text-primary)",
+              boxShadow: "0 4px 12px rgba(0,0,0,0.4)",
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = "var(--surface-3)";
+              e.currentTarget.style.borderColor = "var(--text-muted)";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = "var(--surface-2)";
+              e.currentTarget.style.borderColor = "var(--border-emphasis)";
+            }}
+          >
+            <ArrowDown size={18} weight="bold" />
+          </button>
+        </div>
+      )}
 
       {/* Composer */}
       <div className="shrink-0 px-5 pb-4 pt-1">
@@ -336,7 +489,7 @@ export function ChatView({ thread }: ChatViewProps) {
               onChange={(e) => setInput(e.target.value)}
               placeholder="Ask for follow-up changes"
               rows={1}
-              className="w-full bg-transparent text-[14px] px-4 pt-3 pb-1 resize-none outline-none placeholder:text-[var(--text-faint)]"
+              className="w-full bg-transparent text-[14px] font-medium px-4 pt-3 pb-1 resize-none outline-none placeholder:text-[var(--text-faint)]"
               style={{
                 color: "var(--text-primary)",
                 minHeight: "36px",
@@ -348,7 +501,10 @@ export function ChatView({ thread }: ChatViewProps) {
                 el.style.height = el.scrollHeight + "px";
               }}
               onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) e.preventDefault();
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  handleSubmit();
+                }
               }}
             />
             {/* Controls */}
@@ -407,6 +563,7 @@ export function ChatView({ thread }: ChatViewProps) {
                 </div>
                 {thread.status === "running" ? (
                   <button
+                    onClick={() => onInterrupt(thread.id)}
                     className="w-[30px] h-[30px] flex items-center justify-center rounded-full"
                     style={{
                       background: "var(--text-primary)",
@@ -416,6 +573,8 @@ export function ChatView({ thread }: ChatViewProps) {
                   </button>
                 ) : (
                   <button
+                    onClick={handleSubmit}
+                    disabled={!input.trim()}
                     className="w-[30px] h-[30px] flex items-center justify-center rounded-full transition-colors"
                     style={{
                       background: input.trim()
@@ -472,7 +631,7 @@ function ControlButton({ children, onClick }: { children: React.ReactNode; onCli
   return (
     <button
       onClick={onClick}
-      className="flex items-center gap-1.5 px-2 py-[5px] rounded-xl text-[13px] transition-colors"
+      className="flex items-center gap-1.5 px-2 py-[5px] rounded-xl text-[13px] font-medium transition-colors"
       style={{ color: "var(--text-muted)" }}
       onMouseEnter={(e) => {
         e.currentTarget.style.background = "var(--border-subtle)";
@@ -530,7 +689,7 @@ function ModelDropdown({
                 {m.label}
               </span>
               <span
-                className="text-[11px] leading-tight"
+                className="text-[11px] font-medium leading-tight"
                 style={{ color: "var(--text-muted)" }}
               >
                 {m.subtitle}
@@ -587,7 +746,7 @@ function EffortDropdown({
                 {lvl.label}
               </span>
               <span
-                className="text-[11px] leading-tight"
+                className="text-[11px] font-medium leading-tight"
                 style={{ color: "var(--text-muted)" }}
               >
                 {lvl.subtitle}
@@ -644,7 +803,7 @@ function ModeDropdown({
                 {mode.label}
               </span>
               <span
-                className="text-[11px] leading-tight"
+                className="text-[11px] font-medium leading-tight"
                 style={{ color: "var(--text-muted)" }}
               >
                 {mode.subtitle}

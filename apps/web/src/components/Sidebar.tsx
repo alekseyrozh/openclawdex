@@ -128,7 +128,7 @@ function ProjectGroup({
     <div className="mb-1">
       <button
         onClick={() => setCollapsed(!collapsed)}
-        className="flex items-center gap-1.5 w-full px-2 py-[5px] rounded-xl transition-colors"
+        className="flex items-center gap-1.5 w-full px-2 py-[5px] mb-[2px] rounded-xl transition-colors"
         onMouseEnter={(e) =>
           (e.currentTarget.style.background = "rgba(255,255,255,0.04)")
         }
@@ -187,11 +187,11 @@ function ProjectGroup({
                   e.currentTarget.style.background = "transparent";
               }}
             >
-              <span className="flex-1 text-[13px] font-medium truncate">
+              <span className="flex-1 min-w-0 text-[13px] font-medium truncate">
                 {thread.name}
               </span>
               <span
-                className="text-[12px] font-mono shrink-0 ml-2"
+                className="text-[12px] shrink-0 ml-2 leading-none"
                 style={{ color: "var(--text-muted)" }}
               >
                 {timeAgo(thread.messages[0]?.timestamp ?? new Date())}

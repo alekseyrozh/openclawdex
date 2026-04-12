@@ -1,11 +1,11 @@
 {
-  "name": "codeui2",
+  "name": "openclawdex",
   "private": true,
   "version": "0.1.0",
   "description": "Desktop UI for orchestrating Claude and Codex agents",
   "scripts": {
-    "dev": "pnpm --filter @codeui2/web dev",
-    "dev:desktop": "pnpm --filter @codeui2/web dev & pnpm --filter @codeui2/desktop dev",
-    "build": "pnpm --filter @codeui2/web build"
+    "dev": "pnpm --filter @openclawdex/web dev",
+    "dev:desktop": "pnpm --filter @openclawdex/shared build && pnpm --filter @openclawdex/web dev & pnpm --filter @openclawdex/shared build && pnpm --filter @openclawdex/desktop dev",
+    "build": "pnpm --filter @openclawdex/web build"
   }
 }

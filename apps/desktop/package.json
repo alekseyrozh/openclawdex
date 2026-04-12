@@ -1,5 +1,5 @@
 {
-  "name": "@codeui2/desktop",
+  "name": "@openclawdex/desktop",
   "private": true,
   "version": "0.1.0",
   "main": "dist/main.js",
@@ -8,6 +8,8 @@
     "build": "tsc"
   },
   "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.2.104",
+    "@openclawdex/shared": "workspace:*",
     "electron-is-dev": "^3.0.1"
   },
   "devDependencies": {
