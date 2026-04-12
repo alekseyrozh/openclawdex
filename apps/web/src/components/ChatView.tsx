@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useLayoutEffect, useCallback } from "react";
 import { ScrollArea, type ScrollAreaHandle } from "./ScrollArea";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -299,7 +299,7 @@ function ToolUseIndicator({ toolName }: { toolName: string }) {
   );
 }
 
-function MessageBlock({ message, isStreaming, showHoverBar }: { message: Message; isStreaming: boolean; showHoverBar: boolean }) {
+function MessageBlock({ message, isStreaming, showHoverBar, useTurnGroup }: { message: Message; isStreaming: boolean; showHoverBar: boolean; useTurnGroup?: boolean }) {
   if (message.collapsed) {
     return <CollapsedIndicator count={message.collapsed} />;
   }
@@ -331,8 +331,10 @@ function MessageBlock({ message, isStreaming, showHoverBar }: { message: Message
     );
   }
 
+  const hoverClass = useTurnGroup ? "group-hover/turn:opacity-100" : "group-hover:opacity-100";
+
   return (
-    <div className="py-4 px-1 group">
+    <div className="py-4 px-1">
       <div
         className="text-[14px] leading-[1.65] font-medium break-words min-w-0"
         style={{ color: "var(--text-primary)" }}
@@ -343,7 +345,7 @@ function MessageBlock({ message, isStreaming, showHoverBar }: { message: Message
         <FileChangeCard changes={message.fileChanges} />
       )}
       {showHoverBar && (
-        <div className="px-2 transition-opacity duration-300 opacity-0 group-hover:opacity-100">
+        <div className={`px-2 transition-opacity duration-300 opacity-0 ${hoverClass}`}>
           <MessageHoverBar message={message} />
         </div>
       )}
@@ -569,6 +571,8 @@ export function ChatView({ thread, onSend, onInterrupt }: ChatViewProps) {
   const scrollAreaRef = useRef<ScrollAreaHandle>(null);
   const [showScrollBtn, setShowScrollBtn] = useState(false);
   const isAtBottomRef = useRef(true);
+  const currentThreadIdRef = useRef<string | undefined>(undefined);
+  const prevHistoryLoadedRef = useRef<boolean | undefined>(undefined);
 
   const handleMessagesScroll = useCallback((el: HTMLDivElement) => {
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
@@ -576,12 +580,22 @@ export function ChatView({ thread, onSend, onInterrupt }: ChatViewProps) {
     setShowScrollBtn(!atBottom);
   }, []);
 
-  // Auto-scroll to bottom when messages change (only if already at bottom)
-  useEffect(() => {
-    if (isAtBottomRef.current) {
+  // Scroll to bottom: instant on thread switch or history load, smooth for new messages
+  useLayoutEffect(() => {
+    const threadChanged = thread?.id !== currentThreadIdRef.current;
+    const historyJustLoaded = !threadChanged && !!thread?.historyLoaded && !prevHistoryLoadedRef.current;
+
+    currentThreadIdRef.current = thread?.id;
+    prevHistoryLoadedRef.current = thread?.historyLoaded;
+
+    if (threadChanged || historyJustLoaded) {
+      isAtBottomRef.current = true;
+      setShowScrollBtn(false);
+      messagesEndRef.current?.scrollIntoView({ behavior: "instant" });
+    } else if (isAtBottomRef.current) {
       messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
     }
-  }, [thread?.messages]);
+  }, [thread?.id, thread?.historyLoaded, thread?.messages]);
 
   // Autofocus composer when thread changes
   useEffect(() => {
@@ -650,37 +664,77 @@ export function ChatView({ thread, onSend, onInterrupt }: ChatViewProps) {
 
       {/* Messages */}
       <ScrollArea ref={scrollAreaRef} className="flex-1" onScroll={handleMessagesScroll}>
-        {thread.messages.length === 0 ? (
+        {thread.messages.length === 0 && thread.historyLoaded ? (
           <div
+            key={thread.id}
             className="flex items-center justify-center h-full text-[13px]"
-            style={{ color: "var(--text-muted)" }}
+            style={{ color: "var(--text-muted)", animation: "fadeIn 120ms ease" }}
           >
             Start a conversation
           </div>
         ) : (
-          <div className="max-w-[720px] mx-auto px-5 py-3">
-            {thread.messages.map((msg, i) => {
-              // Show hover bar only on the last assistant message before the next user message
-              // (tool_use entries between assistant messages don't break the group)
-              let showHoverBar = true;
-              if (msg.role === "assistant") {
-                let j = i + 1;
-                while (j < thread.messages.length && thread.messages[j].role === "tool_use") j++;
-                showHoverBar = j >= thread.messages.length || thread.messages[j].role === "user";
-              }
-              return (
-                <MessageBlock
-                  key={msg.id}
-                  message={msg}
-                  isStreaming={
-                    thread.status === "running" &&
-                    msg.role === "assistant" &&
-                    i === thread.messages.length - 1
+          <div
+            key={`${thread.id}-${thread.historyLoaded}`}
+            className="max-w-[720px] mx-auto px-5 py-3"
+            style={{ animation: "fadeIn 120ms ease" }}
+          >
+            {(() => {
+              const msgs = thread.messages;
+              const rendered: React.ReactNode[] = [];
+              // ID of the last assistant message (for streaming indicator)
+              const streamingMsgId =
+                thread.status === "running" && msgs[msgs.length - 1]?.role === "assistant"
+                  ? msgs[msgs.length - 1].id
+                  : null;
+
+              let i = 0;
+              while (i < msgs.length) {
+                const msg = msgs[i];
+
+                if (msg.collapsed || msg.role === "user") {
+                  rendered.push(
+                    <MessageBlock
+                      key={msg.id}
+                      message={msg}
+                      isStreaming={false}
+                      showHoverBar={msg.role === "user"}
+                    />
+                  );
+                  i++;
+                } else {
+                  // Collect full assistant turn (assistant + tool_use messages)
+                  const turnStart = i;
+                  while (
+                    i < msgs.length &&
+                    (msgs[i].role === "assistant" || msgs[i].role === "tool_use")
+                  ) {
+                    i++;
                   }
-                  showHoverBar={showHoverBar}
-                />
-              );
-            })}
+                  const turnMsgs = msgs.slice(turnStart, i);
+
+                  // Hover bar goes on the last assistant message in the turn
+                  const lastAssistantIdx = turnMsgs.reduce(
+                    (last, m, idx) => (m.role === "assistant" ? idx : last),
+                    -1
+                  );
+
+                  rendered.push(
+                    <div key={`turn-${msg.id}`} className="group/turn">
+                      {turnMsgs.map((m, j) => (
+                        <MessageBlock
+                          key={m.id}
+                          message={m}
+                          isStreaming={m.id === streamingMsgId}
+                          showHoverBar={j === lastAssistantIdx}
+                          useTurnGroup
+                        />
+                      ))}
+                    </div>
+                  );
+                }
+              }
+              return rendered;
+            })()}
             {thread.status === "running" && thread.messages[thread.messages.length - 1]?.role !== "assistant" && (
               <div className="py-4 px-1">
                 <ThinkingIndicator />
