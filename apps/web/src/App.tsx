@@ -177,7 +177,7 @@ export function App() {
         <div
           className="flex-1 flex flex-col min-w-0 overflow-hidden"
           style={{
-            background: "#181818",
+            background: "var(--surface-0)",
             borderRadius: "16px 0 0 16px",
             border: "1px solid var(--border-default)",
             borderRight: "none",

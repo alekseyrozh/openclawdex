@@ -307,7 +307,7 @@ export function ChatView({ thread }: ChatViewProps) {
           <div
             className="rounded-2xl"
             style={{
-              background: "var(--surface-1)",
+              background: "var(--surface-2)",
               border: "1px solid var(--border-default)",
             }}
           >
@@ -465,7 +465,7 @@ function ModelDropdown({
 }) {
   return (
     <div
-      className="absolute bottom-full left-0 mb-2 rounded-2xl p-1.5 min-w-[260px] z-50"
+      className="absolute bottom-full left-0 mb-2 rounded-2xl p-1.5 min-w-[260px] z-50 flex flex-col gap-[2px]"
       style={{
         background: "var(--surface-3)",
         border: "1px solid var(--border-emphasis)",
@@ -523,7 +523,7 @@ function EffortDropdown({
 }) {
   return (
     <div
-      className="absolute bottom-full left-0 mb-2 rounded-2xl p-1.5 min-w-[280px] z-50"
+      className="absolute bottom-full left-0 mb-2 rounded-2xl p-1.5 min-w-[280px] z-50 flex flex-col gap-[2px]"
       style={{
         background: "var(--surface-3)",
         border: "1px solid var(--border-emphasis)",
