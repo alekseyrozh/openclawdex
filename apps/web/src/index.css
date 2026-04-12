@@ -1,0 +1,80 @@
+@import "tailwindcss";
+
+@theme {
+  --font-mono: ui-monospace, "SFMono-Regular", "SF Mono", Menlo, monospace;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+}
+
+:root {
+  /* Codex theme tokens */
+  --accent: #339cff;
+  --surface: #181818;
+  --ink: #ffffff;
+  --contrast: 60;
+
+  --diff-added: #40c977;
+  --diff-removed: #fa423e;
+  --skill: #ad7bf9;
+
+  /* Derived surfaces (contrast 60 → moderate stepping) */
+  --surface-0: #181818;
+  --surface-1: #1e1e1e;
+  --surface-2: #242424;
+  --surface-3: #2b2b2b;
+  --surface-4: #333333;
+
+  /* Derived text (ink #fff with opacity layers) */
+  --text-primary: rgba(255, 255, 255, 0.95);
+  --text-secondary: rgba(255, 255, 255, 0.75);
+  --text-muted: rgba(255, 255, 255, 0.50);
+  --text-faint: rgba(255, 255, 255, 0.28);
+
+  /* Borders */
+  --border-subtle: rgba(255, 255, 255, 0.06);
+  --border-default: rgba(255, 255, 255, 0.10);
+  --border-emphasis: rgba(255, 255, 255, 0.16);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  /* Transparent so Electron vibrancy shows through the sidebar.
+     The main content area has its own opaque background. */
+  background: transparent;
+  color: var(--text-primary);
+  font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+  font-size: 13px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Softer, rounder icon strokes globally */
+svg {
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+::selection {
+  background: rgba(51, 156, 255, 0.3);
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.14);
+}

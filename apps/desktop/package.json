@@ -1,0 +1,17 @@
+{
+  "name": "@codeui2/desktop",
+  "private": true,
+  "version": "0.1.0",
+  "main": "dist/main.js",
+  "scripts": {
+    "dev": "tsc && electron .",
+    "build": "tsc"
+  },
+  "dependencies": {
+    "electron-is-dev": "^3.0.1"
+  },
+  "devDependencies": {
+    "electron": "^35.1.2",
+    "typescript": "^5.8.3"
+  }
+}

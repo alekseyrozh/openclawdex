@@ -1,0 +1,11 @@
+{
+  "name": "codeui2",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Desktop UI for orchestrating Claude and Codex agents",
+  "scripts": {
+    "dev": "pnpm --filter @codeui2/web dev",
+    "dev:desktop": "pnpm --filter @codeui2/web dev & pnpm --filter @codeui2/desktop dev",
+    "build": "pnpm --filter @codeui2/web build"
+  }
+}
