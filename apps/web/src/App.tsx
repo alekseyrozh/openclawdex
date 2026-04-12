@@ -169,15 +169,18 @@ export function App() {
         />
         {/* Drag handle */}
         <div
-          className="w-[4px] shrink-0 cursor-col-resize hover:bg-white/10 active:bg-white/15 transition-colors"
+          className="w-[2px] shrink-0 cursor-col-resize hover:bg-white/10 active:bg-white/15 transition-colors rounded-full"
           onMouseDown={onDragStart}
-          style={{ marginLeft: "-2px", marginRight: "-2px", zIndex: 10 }}
+          style={{ marginLeft: "-2px", marginRight: "-2px", marginTop: "16px", marginBottom: "16px", zIndex: 10 }}
         />
         {/* Main content panel */}
         <div
           className="flex-1 flex flex-col min-w-0 overflow-hidden"
           style={{
-            background: "var(--surface-0)",
+            background: "#181818",
+            borderRadius: "16px 0 0 16px",
+            border: "1px solid var(--border-default)",
+            borderRight: "none",
           }}
         >
           <ChatView thread={activeThread ?? null} />
