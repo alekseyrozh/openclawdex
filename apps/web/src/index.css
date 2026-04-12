@@ -58,6 +58,11 @@ svg {
   stroke-linejoin: round;
 }
 
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
 ::selection {
   background: rgba(51, 156, 255, 0.3);
 }
