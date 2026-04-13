@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect, useMemo } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import { Sidebar } from "./components/Sidebar";
 import { ChatView } from "./components/ChatView";
 import { IpcEvent, SessionInfo, HistoryMessage } from "@openclawdex/shared";
@@ -82,14 +82,14 @@ const SIDEBAR_MAX = 400;
 const SIDEBAR_DEFAULT = 240;
 
 export function App() {
-  const [threads, setThreads] = useState<Thread[]>(() => {
-    const t = newThread();
-    return [t];
-  });
+  const [threads, setThreads] = useState<Thread[]>([]);
+  const [pendingThread, setPendingThread] = useState<Thread>(newThread);
   const [threadsLoading, setThreadsLoading] = useState(true);
   const threadsRef = useRef(threads);
   threadsRef.current = threads;
-  const [activeThreadId, setActiveThreadId] = useState<string>(() => threads[0].id);
+  const pendingThreadRef = useRef(pendingThread);
+  pendingThreadRef.current = pendingThread;
+  const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     const saved = localStorage.getItem("sidebarWidth");
     const parsed = saved ? parseInt(saved, 10) : NaN;
@@ -97,7 +97,10 @@ export function App() {
   });
   const dragging = useRef(false);
 
-  const activeThread = threads.find((t) => t.id === activeThreadId);
+  // Real thread if selected, otherwise show the pending (not-yet-committed) thread
+  const activeThread: Thread | null = activeThreadId
+    ? threads.find((t) => t.id === activeThreadId) ?? null
+    : pendingThread;
 
   // ── Load past sessions on mount ───────────────────────────
 
@@ -117,7 +120,7 @@ export function App() {
           const inProgress = prev.filter((t) => !t.claudeSessionId);
           return [...inProgress, ...historyThreads];
         });
-        setActiveThreadId((prev) => prev || historyThreads[0]?.id || "");
+        setActiveThreadId((prev) => prev ?? historyThreads[0]?.id ?? null);
       }
       setThreadsLoading(false);
     }).catch((err) => {
@@ -216,19 +219,27 @@ export function App() {
         timestamp: new Date(),
       };
 
-      setThreads((prev) =>
-        prev.map((t) => {
-          if (t.id !== threadId) return t;
-          return {
-            ...t,
-            status: "running" as const,
-            messages: [...t.messages, userMsg],
-          };
-        }),
-      );
-
-      const thread = threadsRef.current.find((t) => t.id === threadId);
-      window.openclawdex?.send(threadId, text, thread?.claudeSessionId);
+      if (threadId === pendingThreadRef.current.id) {
+        // First message on a new thread — commit it to the sidebar
+        const committed: Thread = {
+          ...pendingThreadRef.current,
+          status: "running",
+          messages: [userMsg],
+        };
+        setThreads((prev) => [committed, ...prev]);
+        setActiveThreadId(committed.id);
+        setPendingThread(newThread()); // fresh pending for next time
+        window.openclawdex?.send(committed.id, text, undefined);
+      } else {
+        setThreads((prev) =>
+          prev.map((t) => {
+            if (t.id !== threadId) return t;
+            return { ...t, status: "running" as const, messages: [...t.messages, userMsg] };
+          }),
+        );
+        const thread = threadsRef.current.find((t) => t.id === threadId);
+        window.openclawdex?.send(threadId, text, thread?.claudeSessionId);
+      }
     },
     [],
   );
@@ -236,9 +247,7 @@ export function App() {
   // ── New thread handler ────────────────────────────────────
 
   const handleNewThread = useCallback(() => {
-    const t = newThread();
-    setThreads((prev) => [t, ...prev]);
-    setActiveThreadId(t.id);
+    setActiveThreadId(null);
   }, []);
 
   // ── Interrupt handler ─────────────────────────────────────
