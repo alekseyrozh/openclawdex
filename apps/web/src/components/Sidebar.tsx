@@ -9,6 +9,7 @@ import {
   Trash,
   Plus,
   FolderPlus,
+  Archive,
 } from "@phosphor-icons/react";
 import type { Thread } from "../App";
 import type { ProjectInfo } from "@openclawdex/shared";
@@ -37,6 +38,7 @@ interface SidebarProps {
   onDeleteProject: (projectId: string) => void;
   onRenameThread: (threadId: string, name: string) => void;
   onDeleteThread: (threadId: string) => void;
+  onArchiveThread: (threadId: string) => void;
   width: number;
   isLoading?: boolean;
 }
@@ -52,22 +54,29 @@ export function Sidebar({
   onDeleteProject,
   onRenameThread,
   onDeleteThread,
+  onArchiveThread,
   width,
   isLoading,
 }: SidebarProps) {
-  // Threads per project
+  const [archivedExpanded, setArchivedExpanded] = useState(false);
+
+  // Split active vs archived
+  const activeThreads = threads.filter((t) => !t.archived);
+  const archivedThreads = threads.filter((t) => t.archived);
+
+  // Threads per project (active only)
   const threadsByProject = new Map<string, Thread[]>();
   for (const p of projects) {
     threadsByProject.set(p.id, []);
   }
-  for (const t of threads) {
+  for (const t of activeThreads) {
     if (t.projectId && threadsByProject.has(t.projectId)) {
       threadsByProject.get(t.projectId)!.push(t);
     }
   }
 
   // Ungrouped threads (orphaned — project was deleted)
-  const ungrouped = threads.filter((t) => !t.projectId);
+  const ungrouped = activeThreads.filter((t) => !t.projectId);
 
   return (
     <div
@@ -133,6 +142,7 @@ export function Sidebar({
                     onDelete={() => onDeleteProject(project.id)}
                     onRenameThread={onRenameThread}
                     onDeleteThread={onDeleteThread}
+                    onArchiveThread={onArchiveThread}
                   />
                 );
               })}
@@ -146,6 +156,7 @@ export function Sidebar({
                   onSelect={onSelectThread}
                   onRename={(name) => onRenameThread(thread.id, name)}
                   onDelete={() => onDeleteThread(thread.id)}
+                  onArchive={() => onArchiveThread(thread.id)}
                 />
               ))}
 
@@ -161,6 +172,43 @@ export function Sidebar({
                   <FolderPlus size={16} weight="regular" />
                   Add a project
                 </button>
+              )}
+
+              {/* Archived section */}
+              {archivedThreads.length > 0 && (
+                <div className="mt-3 pt-3" style={{ borderTop: "1px solid rgba(255,255,255,0.06)" }}>
+                  <button
+                    onClick={() => setArchivedExpanded(!archivedExpanded)}
+                    className="flex items-center gap-1.5 w-full px-2 py-[5px] mb-[2px] rounded-xl transition-colors"
+                    onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.04)")}
+                    onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                  >
+                    {archivedExpanded ? (
+                      <CaretDown size={12} weight="bold" style={{ color: "rgba(255,255,255,0.4)", flexShrink: 0 }} />
+                    ) : (
+                      <CaretRight size={12} weight="bold" style={{ color: "rgba(255,255,255,0.4)", flexShrink: 0 }} />
+                    )}
+                    <Archive size={15} weight="regular" style={{ color: "rgba(255,255,255,0.4)", flexShrink: 0 }} />
+                    <span className="text-[13px] font-semibold" style={{ color: "rgba(255,255,255,0.4)" }}>
+                      Archived
+                    </span>
+                    <span className="text-[11px] ml-auto" style={{ color: "rgba(255,255,255,0.25)" }}>
+                      {archivedThreads.length}
+                    </span>
+                  </button>
+                  {archivedExpanded && archivedThreads.map((thread) => (
+                    <ThreadRow
+                      key={thread.id}
+                      thread={thread}
+                      active={thread.id === activeThreadId}
+                      onSelect={onSelectThread}
+                      onRename={(name) => onRenameThread(thread.id, name)}
+                      onDelete={() => onDeleteThread(thread.id)}
+                      onArchive={() => onArchiveThread(thread.id)}
+                      indent
+                    />
+                  ))}
+                </div>
               )}
             </>
           )}
@@ -181,6 +229,7 @@ function ThreadRow({
   onSelect,
   onRename,
   onDelete,
+  onArchive,
   indent = false,
 }: {
   thread: Thread;
@@ -188,6 +237,7 @@ function ThreadRow({
   onSelect: (id: string) => void;
   onRename: (name: string) => void;
   onDelete: () => void;
+  onArchive: () => void;
   indent?: boolean;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
@@ -304,6 +354,19 @@ function ThreadRow({
                   <button
                     onClick={() => {
                       setMenuOpen(false);
+                      onArchive();
+                    }}
+                    className="flex items-center gap-2.5 w-full px-3 py-[8px] text-[13px] text-left rounded-lg transition-colors"
+                    style={{ color: "rgba(255,255,255,0.85)" }}
+                    onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.07)")}
+                    onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                  >
+                    <Archive size={15} weight="regular" />
+                    {thread.archived ? "Unarchive" : "Archive"}
+                  </button>
+                  <button
+                    onClick={() => {
+                      setMenuOpen(false);
                       onDelete();
                     }}
                     className="flex items-center gap-2.5 w-full px-3 py-[8px] text-[13px] text-left rounded-lg transition-colors"
@@ -334,6 +397,7 @@ function ProjectGroup({
   onDelete,
   onRenameThread,
   onDeleteThread,
+  onArchiveThread,
 }: {
   project: ProjectInfo;
   threads: Thread[];
@@ -344,6 +408,7 @@ function ProjectGroup({
   onDelete: () => void;
   onRenameThread: (threadId: string, name: string) => void;
   onDeleteThread: (threadId: string) => void;
+  onArchiveThread: (threadId: string) => void;
 }) {
   const [collapsed, setCollapsed] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -525,6 +590,7 @@ function ProjectGroup({
               onSelect={onSelectThread}
               onRename={(name) => onRenameThread(thread.id, name)}
               onDelete={() => onDeleteThread(thread.id)}
+              onArchive={() => onArchiveThread(thread.id)}
               indent
             />
           ))

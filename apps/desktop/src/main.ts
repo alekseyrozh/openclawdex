@@ -81,9 +81,12 @@ function setupIpcHandlers(): void {
 
       emitToRenderer({ type: "status", threadId, status: "running" });
 
+      let currentSessionId: string | null = opts?.resumeSessionId ?? null;
+
       session.send(message, async (e) => {
         switch (e.kind) {
           case "init": {
+            currentSessionId = e.sessionId;
             try {
               await getDb()
                 .insert(knownThreads)
@@ -123,20 +126,36 @@ function setupIpcHandlers(): void {
             });
             break;
 
-          case "result":
-            emitToRenderer({
-              type: "result",
-              threadId,
+          case "result": {
+            // Fetch real context window stats from the SDK
+            const usage = await session.getContextUsage();
+            const contextStats = {
+              ...(usage != null && {
+                totalTokens: usage.totalTokens,
+                maxTokens: usage.maxTokens,
+                percentage: usage.percentage,
+              }),
               costUsd: e.costUsd,
               durationMs: e.durationMs,
-              inputTokens: e.inputTokens,
-              outputTokens: e.outputTokens,
-              cacheReadTokens: e.cacheReadTokens,
-              cacheWriteTokens: e.cacheWriteTokens,
-            });
+            };
+
+            // Persist to DB so it survives restarts
+            if (currentSessionId) {
+              try {
+                await getDb()
+                  .update(knownThreads)
+                  .set({ contextStats: JSON.stringify(contextStats) })
+                  .where(eq(knownThreads.sessionId, currentSessionId));
+              } catch (err) {
+                console.error("[db] failed to save context stats:", err);
+              }
+            }
+
+            emitToRenderer({ type: "result", threadId, ...contextStats });
             // Turn is complete — mark thread as idle so user can send follow-ups
             emitToRenderer({ type: "status", threadId, status: "idle" });
             break;
+          }
 
           case "error":
             emitToRenderer({
@@ -163,20 +182,26 @@ function setupIpcHandlers(): void {
   ipcMain.handle("claude:list-sessions", async () => {
     const [all, known] = await Promise.all([
       listSessions(),
-      getDb().select({ sessionId: knownThreads.sessionId, projectId: knownThreads.projectId, customName: knownThreads.customName }).from(knownThreads),
+      getDb().select({ sessionId: knownThreads.sessionId, projectId: knownThreads.projectId, customName: knownThreads.customName, contextStats: knownThreads.contextStats }).from(knownThreads),
     ]);
-    const knownMap = new Map(known.map((r) => [r.sessionId, { projectId: r.projectId ?? undefined, customName: r.customName ?? undefined }]));
+    const knownMap = new Map(known.map((r) => [r.sessionId, { projectId: r.projectId ?? undefined, customName: r.customName ?? undefined, contextStats: r.contextStats ?? undefined }]));
     return all
       .filter((s) => knownMap.has(s.sessionId))
-      .map((s) => ({
-        sessionId: s.sessionId,
-        summary: knownMap.get(s.sessionId)?.customName ?? s.summary,
-        lastModified: s.lastModified,
-        cwd: s.cwd,
-        firstPrompt: s.firstPrompt,
-        gitBranch: s.gitBranch,
-        projectId: knownMap.get(s.sessionId)?.projectId,
-      }));
+      .map((s) => {
+        const row = knownMap.get(s.sessionId)!;
+        let contextStats: object | undefined;
+        try { contextStats = row.contextStats ? JSON.parse(row.contextStats) : undefined; } catch { /* ignore */ }
+        return {
+          sessionId: s.sessionId,
+          summary: row.customName ?? s.summary,
+          lastModified: s.lastModified,
+          cwd: s.cwd,
+          firstPrompt: s.firstPrompt,
+          gitBranch: s.gitBranch,
+          projectId: row.projectId,
+          contextStats,
+        };
+      });
   });
 
   /** Load message history for a past session. */

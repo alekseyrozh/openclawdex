@@ -14,6 +14,17 @@ export const ProjectInfo = z.object({
 });
 export type ProjectInfo = z.infer<typeof ProjectInfo>;
 
+// ── Context stats (persisted per session) ─────────────────────
+
+export const ContextStats = z.object({
+  totalTokens: z.number().optional(),
+  maxTokens: z.number().optional(),
+  percentage: z.number().optional(),
+  costUsd: z.number(),
+  durationMs: z.number(),
+});
+export type ContextStats = z.infer<typeof ContextStats>;
+
 // ── Session listing (invoke, not event) ───────────────────────
 
 export const SessionInfo = z.object({
@@ -24,6 +35,7 @@ export const SessionInfo = z.object({
   firstPrompt: z.string().optional(),
   gitBranch: z.string().optional(),
   projectId: z.string().optional(),
+  contextStats: ContextStats.optional(),
 });
 export type SessionInfo = z.infer<typeof SessionInfo>;
 
@@ -53,10 +65,9 @@ export const IpcResult = z.object({
   threadId: z.string(),
   costUsd: z.number(),
   durationMs: z.number(),
-  inputTokens: z.number(),
-  outputTokens: z.number(),
-  cacheReadTokens: z.number(),
-  cacheWriteTokens: z.number(),
+  totalTokens: z.number().optional(),
+  maxTokens: z.number().optional(),
+  percentage: z.number().optional(),
 });
 
 export const IpcError = z.object({

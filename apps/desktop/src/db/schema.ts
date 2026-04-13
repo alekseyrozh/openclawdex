@@ -18,4 +18,5 @@ export const knownThreads = sqliteTable("known_threads", {
   createdAt: integer("created_at").notNull(),
   projectId: text("project_id"),
   customName: text("custom_name"),
+  contextStats: text("context_stats"),
 });
