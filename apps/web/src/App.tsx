@@ -77,6 +77,41 @@ function historyToMessages(items: HistoryMessage[]): Message[] {
   });
 }
 
+/** Pure reducer — applies one IPC event to a thread. */
+function applyIpcEvent(thread: Thread, event: IpcEvent): Thread {
+  switch (event.type) {
+    case "assistant_text": {
+      const msgs = [...thread.messages];
+      const last = msgs[msgs.length - 1];
+      if (last?.role === "assistant") {
+        msgs[msgs.length - 1] = { ...last, content: last.content + event.text };
+      } else {
+        msgs.push({ id: msgId(), role: "assistant", content: event.text, timestamp: new Date() });
+      }
+      const firstLine = msgs[msgs.length - 1].content.trim().split("\n")[0];
+      const name =
+        thread.name === "New conversation" && firstLine.length > 0
+          ? firstLine.slice(0, 40) + (firstLine.length > 40 ? "..." : "")
+          : thread.name;
+      return { ...thread, name, messages: msgs };
+    }
+    case "status":
+      return { ...thread, status: event.status };
+    case "tool_use":
+      return { ...thread, messages: [...thread.messages, { id: msgId(), role: "tool_use" as const, content: "", timestamp: new Date(), toolName: event.toolName }] };
+    case "error":
+      return { ...thread, status: "error" as const, messages: [...thread.messages, { id: msgId(), role: "assistant" as const, content: `Error: ${event.message}`, timestamp: new Date() }] };
+    case "result":
+      console.log(`[thread ${thread.id}] cost=$${event.costUsd.toFixed(4)} duration=${event.durationMs}ms`);
+      return thread;
+    case "session_init": {
+      console.log(`[thread ${thread.id}] session=${event.sessionId} model=${event.model}`);
+      const project = event.cwd ? event.cwd.split("/").filter(Boolean).at(-1) ?? "" : thread.project;
+      return { ...thread, claudeSessionId: event.sessionId, historyLoaded: true, project };
+    }
+  }
+}
+
 const SIDEBAR_MIN = 180;
 const SIDEBAR_MAX = 400;
 const SIDEBAR_DEFAULT = 240;
@@ -142,49 +177,23 @@ export function App() {
       }
       const event = parsed.data;
 
-      setThreads((prev) =>
-        prev.map((t) => {
-          if (t.id !== event.threadId) return t;
+      // Events for the pending thread are handled separately — it isn't in `threads` yet.
+      if (event.threadId === pendingThreadRef.current.id) {
+        if (event.type === "session_init") {
+          // Now we have cwd — commit the pending thread to the sidebar.
+          const project = event.cwd ? event.cwd.split("/").filter(Boolean).at(-1) ?? "" : "";
+          const committed = { ...pendingThreadRef.current, claudeSessionId: event.sessionId, historyLoaded: true, project };
+          setThreads((prev) => [committed, ...prev]);
+          setActiveThreadId((prev) => (prev === null ? committed.id : prev));
+          setPendingThread(newThread());
+        } else {
+          setPendingThread((prev) => applyIpcEvent(prev, event));
+        }
+        return;
+      }
 
-          switch (event.type) {
-            case "assistant_text": {
-              const msgs = [...t.messages];
-              const last = msgs[msgs.length - 1];
-              // Append to existing assistant message, or create one
-              if (last?.role === "assistant") {
-                msgs[msgs.length - 1] = { ...last, content: last.content + event.text };
-              } else {
-                msgs.push({ id: msgId(), role: "assistant", content: event.text, timestamp: new Date() });
-              }
-              const firstLine = msgs[msgs.length - 1].content.trim().split("\n")[0];
-              const name =
-                t.name === "New conversation" && firstLine.length > 0
-                  ? firstLine.slice(0, 40) + (firstLine.length > 40 ? "..." : "")
-                  : t.name;
-              return { ...t, name, messages: msgs };
-            }
-
-            case "status":
-              return { ...t, status: event.status };
-
-            case "tool_use":
-              return { ...t, messages: [...t.messages, { id: msgId(), role: "tool_use" as const, content: "", timestamp: new Date(), toolName: event.toolName }] };
-
-            case "error":
-              return { ...t, status: "error" as const, messages: [...t.messages, { id: msgId(), role: "assistant" as const, content: `Error: ${event.message}`, timestamp: new Date() }] };
-
-            case "result":
-              console.log(`[thread ${t.id}] cost=$${event.costUsd.toFixed(4)} duration=${event.durationMs}ms`);
-              return t;
-
-            case "session_init": {
-              console.log(`[thread ${t.id}] session=${event.sessionId} model=${event.model}`);
-              const project = event.cwd ? event.cwd.split("/").filter(Boolean).at(-1) ?? "" : t.project;
-              return { ...t, claudeSessionId: event.sessionId, historyLoaded: true, project };
-            }
-          }
-        }),
-      );
+      // Events for already-committed threads.
+      setThreads((prev) => prev.map((t) => t.id !== event.threadId ? t : applyIpcEvent(t, event)));
     });
 
     return unsubscribe;
@@ -220,21 +229,11 @@ export function App() {
       };
 
       if (threadId === pendingThreadRef.current.id) {
-        // First message on a new thread — commit it to the sidebar
-        const cwd = window.openclawdex?.cwd;
-        const project = cwd ? cwd.split("/").filter(Boolean).at(-1) ?? "" : "";
+        // First message — update pendingThread but don't add to sidebar yet.
+        // We wait for session_init (which carries cwd/project) before committing.
         const name = text.length > 40 ? text.slice(0, 40) + "…" : text;
-        const committed: Thread = {
-          ...pendingThreadRef.current,
-          name,
-          project,
-          status: "running",
-          messages: [userMsg],
-        };
-        setThreads((prev) => [committed, ...prev]);
-        setActiveThreadId(committed.id);
-        setPendingThread(newThread()); // fresh pending for next time
-        window.openclawdex?.send(committed.id, text, undefined);
+        setPendingThread((prev) => ({ ...prev, name, status: "running", messages: [userMsg] }));
+        window.openclawdex?.send(pendingThreadRef.current.id, text, undefined);
       } else {
         setThreads((prev) =>
           prev.map((t) => {
