@@ -1,7 +1,8 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import { Sidebar } from "./components/Sidebar";
 import { ChatView } from "./components/ChatView";
-import { IpcEvent, SessionInfo, HistoryMessage, ProjectInfo } from "@openclawdex/shared";
+import { IpcEvent, SessionInfo, HistoryMessage, ProjectInfo, ContextStats } from "@openclawdex/shared";
+export type { ContextStats };
 
 export type Provider = "claude" | "codex";
 
@@ -16,16 +17,8 @@ export interface Thread {
   claudeSessionId?: string;
   historyLoaded?: boolean;
   lastModified: Date;
-  lastTurnStats?: TurnStats;
-}
-
-export interface TurnStats {
-  inputTokens: number;
-  outputTokens: number;
-  cacheReadTokens: number;
-  cacheWriteTokens: number;
-  costUsd: number;
-  durationMs: number;
+  contextStats?: ContextStats;
+  archived?: boolean;
 }
 
 export interface Message {
@@ -63,19 +56,22 @@ function newThread(projectId: string | null): Thread {
   };
 }
 
-const STATS_LS_PREFIX = "thread-stats:";
+const ARCHIVED_LS_PREFIX = "thread-archived:";
 
-function saveStatsToStorage(sessionId: string, stats: TurnStats) {
+function saveArchivedToStorage(threadId: string, archived: boolean) {
   try {
-    localStorage.setItem(STATS_LS_PREFIX + sessionId, JSON.stringify(stats));
+    if (archived) {
+      localStorage.setItem(ARCHIVED_LS_PREFIX + threadId, "1");
+    } else {
+      localStorage.removeItem(ARCHIVED_LS_PREFIX + threadId);
+    }
   } catch { /* ignore quota errors */ }
 }
 
-function loadStatsFromStorage(sessionId: string): TurnStats | undefined {
+function loadArchivedFromStorage(threadId: string): boolean {
   try {
-    const raw = localStorage.getItem(STATS_LS_PREFIX + sessionId);
-    return raw ? (JSON.parse(raw) as TurnStats) : undefined;
-  } catch { return undefined; }
+    return localStorage.getItem(ARCHIVED_LS_PREFIX + threadId) === "1";
+  } catch { return false; }
 }
 
 function sessionToThread(s: SessionInfo): Thread {
@@ -90,7 +86,8 @@ function sessionToThread(s: SessionInfo): Thread {
     claudeSessionId: s.sessionId,
     historyLoaded: false,
     lastModified: new Date(s.lastModified),
-    lastTurnStats: loadStatsFromStorage(s.sessionId),
+    contextStats: s.contextStats,
+    archived: loadArchivedFromStorage(s.sessionId),
   };
 }
 
@@ -128,15 +125,14 @@ function applyIpcEvent(thread: Thread, event: IpcEvent): Thread {
     case "error":
       return { ...thread, status: "error" as const, messages: [...thread.messages, { id: msgId(), role: "assistant" as const, content: `Error: ${event.message}`, timestamp: new Date() }] };
     case "result": {
-      const lastTurnStats: TurnStats = {
-        inputTokens: event.inputTokens,
-        outputTokens: event.outputTokens,
-        cacheReadTokens: event.cacheReadTokens,
-        cacheWriteTokens: event.cacheWriteTokens,
+      const contextStats: ContextStats = {
+        ...(event.totalTokens != null && { totalTokens: event.totalTokens }),
+        ...(event.maxTokens != null && { maxTokens: event.maxTokens }),
+        ...(event.percentage != null && { percentage: event.percentage }),
         costUsd: event.costUsd,
         durationMs: event.durationMs,
       };
-      return { ...thread, lastTurnStats };
+      return { ...thread, contextStats };
     }
     case "session_init": {
       console.log(`[thread ${thread.id}] session=${event.sessionId} model=${event.model}`);
@@ -243,19 +239,6 @@ export function App() {
       }
 
       // Events for already-committed threads.
-      if (event.type === "result") {
-        const thread = threadsRef.current.find((t) => t.id === event.threadId);
-        if (thread?.claudeSessionId) {
-          saveStatsToStorage(thread.claudeSessionId, {
-            inputTokens: event.inputTokens,
-            outputTokens: event.outputTokens,
-            cacheReadTokens: event.cacheReadTokens,
-            cacheWriteTokens: event.cacheWriteTokens,
-            costUsd: event.costUsd,
-            durationMs: event.durationMs,
-          });
-        }
-      }
       setThreads((prev) => prev.map((t) => t.id !== event.threadId ? t : applyIpcEvent(t, event)));
     });
 
@@ -382,6 +365,25 @@ export function App() {
     }
   }, [activeThreadId]);
 
+  const handleArchiveThread = useCallback((threadId: string) => {
+    setThreads((prev) =>
+      prev.map((t) => {
+        if (t.id !== threadId) return t;
+        const archived = !t.archived;
+        saveArchivedToStorage(t.claudeSessionId ?? t.id, archived);
+        return { ...t, archived };
+      }),
+    );
+    // If archiving the active thread, deselect it
+    if (activeThreadId === threadId) {
+      const thread = threadsRef.current.find((t) => t.id === threadId);
+      if (!thread?.archived) {
+        // Currently not archived → about to be archived → deselect
+        setActiveThreadId(null);
+      }
+    }
+  }, [activeThreadId]);
+
   // ── Sidebar drag ──────────────────────────────────────────────
 
   const onDragStart = useCallback((e: React.MouseEvent) => {
@@ -423,6 +425,7 @@ export function App() {
         onDeleteProject={handleDeleteProject}
         onRenameThread={handleRenameThread}
         onDeleteThread={handleDeleteThread}
+        onArchiveThread={handleArchiveThread}
         width={sidebarWidth}
         isLoading={threadsLoading}
       />

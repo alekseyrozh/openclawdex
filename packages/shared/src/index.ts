@@ -11,6 +11,7 @@ export {
 export {
   ProjectFolder,
   ProjectInfo,
+  ContextStats,
   SessionInfo,
   HistoryMessage,
   IpcAssistantText,

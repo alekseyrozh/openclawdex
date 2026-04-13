@@ -15,10 +15,7 @@ import {
   GitBranch,
   Copy,
 } from "@phosphor-icons/react";
-import type { Thread, Message, FileChange, TurnStats } from "../App";
-
-// Claude context window (tokens) — used for progress circle fill
-const CONTEXT_WINDOW = 200_000;
+import type { Thread, Message, FileChange, ContextStats } from "../App";
 
 /* ── Claude sparkle icon ────────────────────────────────────── */
 
@@ -356,12 +353,12 @@ function ToolUseIndicator({ toolName, toolInput }: { toolName: string; toolInput
 
 /* ── Token progress indicator ────────────────────────────────── */
 
-function TokenProgressIndicator({ stats }: { stats: TurnStats }) {
+function TokenProgressIndicator({ stats }: { stats: ContextStats }) {
   const r = 5.5;
   const circ = 2 * Math.PI * r;
-  const percent = Math.min(stats.inputTokens / CONTEXT_WINDOW, 1);
+  const percent = Math.min(stats.percentage / 100, 1);
   const offset = circ * (1 - percent);
-  const pct = Math.round(percent * 100);
+  const pct = Math.round(stats.percentage);
 
   function fmt(n: number) {
     return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
@@ -414,24 +411,8 @@ function TokenProgressIndicator({ stats }: { stats: TurnStats }) {
           Context window
         </div>
         <div className="mb-0.5">{pct}% used ({100 - pct}% left)</div>
-        <div className="mb-2">{fmt(stats.inputTokens)} / {fmt(CONTEXT_WINDOW)} tokens</div>
+        <div className="mb-2">{fmt(stats.totalTokens)} / {fmt(stats.maxTokens)} tokens</div>
         <div className="pt-2" style={{ borderTop: "1px solid var(--border-subtle)" }}>
-          <div className="flex justify-between gap-4 mb-0.5">
-            <span style={{ color: "var(--text-muted)" }}>output</span>
-            <span>{fmt(stats.outputTokens)}</span>
-          </div>
-          {stats.cacheReadTokens > 0 && (
-            <div className="flex justify-between gap-4 mb-0.5">
-              <span style={{ color: "var(--text-muted)" }}>cache read</span>
-              <span>{fmt(stats.cacheReadTokens)}</span>
-            </div>
-          )}
-          {stats.cacheWriteTokens > 0 && (
-            <div className="flex justify-between gap-4 mb-0.5">
-              <span style={{ color: "var(--text-muted)" }}>cache write</span>
-              <span>{fmt(stats.cacheWriteTokens)}</span>
-            </div>
-          )}
           <div className="flex justify-between gap-4 mt-1.5">
             <span style={{ color: "var(--text-muted)" }}>cost</span>
             <span>{costStr}</span>
@@ -493,7 +474,7 @@ function MessageBlock({ message, isStreaming, showHoverBar }: { message: Message
   );
 }
 
-/* ── Syntax highlighting theme (matches Codex dark surface) ── */
+/* ── Syntax highlighting theme (Codex-style vivid on dark) ─── */
 const codeTheme: Record<string, React.CSSProperties> = {
   'pre[class*="language-"]': {
     background: "transparent",
@@ -504,40 +485,42 @@ const codeTheme: Record<string, React.CSSProperties> = {
   'code[class*="language-"]': {
     background: "transparent",
     fontFamily: 'var(--font-mono)',
-    fontSize: "12px",
-    lineHeight: "1.6",
-    color: "#e6e6e6",
+    fontSize: "13px",
+    lineHeight: "1.55",
+    color: "#ced4e0",
   },
-  // Catppuccin Mocha
-  comment: { color: "#6c7086", fontStyle: "italic" },
-  prolog: { color: "#6c7086", fontStyle: "italic" },
-  doctype: { color: "#6c7086" },
-  cdata: { color: "#6c7086" },
-  punctuation: { color: "#9399b2" },
-  property: { color: "#f38ba8" },
-  tag: { color: "#f38ba8" },
-  boolean: { color: "#fab387" },
-  number: { color: "#fab387" },
-  constant: { color: "#fab387" },
-  symbol: { color: "#f2cdcd" },
-  deleted: { color: "#f38ba8" },
-  selector: { color: "#a6e3a1" },
-  "attr-name": { color: "#f9e2af" },
-  string: { color: "#a6e3a1" },
-  char: { color: "#a6e3a1" },
-  builtin: { color: "#94e2d5" },
-  inserted: { color: "#a6e3a1" },
-  operator: { color: "#89dceb" },
-  entity: { color: "#89dceb" },
-  url: { color: "#89dceb" },
-  atrule: { color: "#cba6f7" },
-  "attr-value": { color: "#a6e3a1" },
-  keyword: { color: "#cba6f7" },
-  function: { color: "#89b4fa" },
-  "class-name": { color: "#f9e2af" },
-  regex: { color: "#fab387" },
-  important: { color: "#f38ba8", fontWeight: "bold" },
-  variable: { color: "#cdd6f4" },
+  comment: { color: "#5c6370", fontStyle: "italic" },
+  prolog: { color: "#5c6370", fontStyle: "italic" },
+  doctype: { color: "#5c6370" },
+  cdata: { color: "#5c6370" },
+  punctuation: { color: "#abb2bf" },
+  property: { color: "#e06c75" },
+  tag: { color: "#e06c75" },
+  boolean: { color: "#d19a66" },
+  number: { color: "#d19a66" },
+  constant: { color: "#d19a66" },
+  symbol: { color: "#56b6c2" },
+  deleted: { color: "#e06c75" },
+  selector: { color: "#98c379" },
+  "attr-name": { color: "#e5c07b" },
+  string: { color: "#98c379" },
+  char: { color: "#98c379" },
+  builtin: { color: "#e5c07b" },
+  inserted: { color: "#98c379" },
+  operator: { color: "#56b6c2" },
+  entity: { color: "#56b6c2" },
+  url: { color: "#56b6c2" },
+  atrule: { color: "#c678dd" },
+  "attr-value": { color: "#98c379" },
+  keyword: { color: "#e06c75" },
+  function: { color: "#e5c07b" },
+  "class-name": { color: "#e5c07b" },
+  regex: { color: "#56b6c2" },
+  important: { color: "#e06c75", fontWeight: "bold" },
+  variable: { color: "#ced4e0" },
+  "template-string": { color: "#98c379" },
+  interpolation: { color: "#ced4e0" },
+  "template-punctuation": { color: "#98c379" },
   bold: { fontWeight: "bold" },
   italic: { fontStyle: "italic" },
 };
@@ -604,8 +587,8 @@ function CodeBlock({ language, children }: { language: string | undefined; child
     <div
       className="rounded-xl overflow-hidden"
       style={{
-        background: "rgba(255,255,255,0.06)",
-        border: "1px solid var(--border-subtle)",
+        background: "var(--surface-1)",
+        border: "1px solid var(--border-default)",
       }}
     >
       {/* Header: language label + copy icon */}
@@ -648,8 +631,8 @@ function CodeBlock({ language, children }: { language: string | undefined; child
           codeTagProps={{
             style: {
               fontFamily: "var(--font-mono)",
-              fontSize: "12px",
-              lineHeight: "1.6",
+              fontSize: "13px",
+              lineHeight: "1.55",
             },
           }}
         >
@@ -996,7 +979,7 @@ export function ChatView({ thread, onSend, onInterrupt }: ChatViewProps) {
         ) : (
           <div
             key={`${thread.id}-${thread.historyLoaded}`}
-            className="max-w-[720px] mx-auto px-5 py-3"
+            className="max-w-[720px] mx-auto px-5 pt-3 pb-16"
             style={{ animation: "fadeIn 120ms ease" }}
           >
             {(() => {
@@ -1221,8 +1204,8 @@ export function ChatView({ thread, onSend, onInterrupt }: ChatViewProps) {
                 <CaretDown size={10} weight="bold" />
               </StatusButton>
             )}
-            {thread.lastTurnStats && (
-              <TokenProgressIndicator stats={thread.lastTurnStats} />
+            {thread.contextStats && (
+              <TokenProgressIndicator stats={thread.contextStats} />
             )}
           </div>
         </div>

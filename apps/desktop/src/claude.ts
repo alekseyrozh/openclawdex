@@ -220,6 +220,15 @@ export class ClaudeSession {
     }
   }
 
+  /** Fetch context window usage from the active session. */
+  async getContextUsage() {
+    try {
+      return await this.queryInstance?.getContextUsage() ?? null;
+    } catch {
+      return null;
+    }
+  }
+
   /** Interrupt the current turn. */
   async interrupt(): Promise<void> {
     try {
