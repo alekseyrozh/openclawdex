@@ -356,9 +356,10 @@ function ToolUseIndicator({ toolName, toolInput }: { toolName: string; toolInput
 function TokenProgressIndicator({ stats }: { stats: ContextStats }) {
   const r = 5.5;
   const circ = 2 * Math.PI * r;
-  const percent = Math.min(stats.percentage / 100, 1);
+  const hasContext = stats.percentage != null && stats.totalTokens != null && stats.maxTokens != null;
+  const percent = hasContext ? Math.min(stats.percentage! / 100, 1) : 0;
   const offset = circ * (1 - percent);
-  const pct = Math.round(stats.percentage);
+  const pct = hasContext ? Math.round(stats.percentage!) : null;
 
   function fmt(n: number) {
     return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
@@ -384,15 +385,17 @@ function TokenProgressIndicator({ stats }: { stats: ContextStats }) {
       >
         <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
           <circle cx="7" cy="7" r={r} stroke="currentColor" strokeOpacity="0.2" strokeWidth="1.5" />
-          <circle
-            cx="7" cy="7" r={r}
-            stroke="currentColor"
-            strokeWidth="1.5"
-            strokeDasharray={circ}
-            strokeDashoffset={offset}
-            strokeLinecap="round"
-            transform="rotate(-90 7 7)"
-          />
+          {hasContext && (
+            <circle
+              cx="7" cy="7" r={r}
+              stroke="currentColor"
+              strokeWidth="1.5"
+              strokeDasharray={circ}
+              strokeDashoffset={offset}
+              strokeLinecap="round"
+              transform="rotate(-90 7 7)"
+            />
+          )}
         </svg>
       </button>
       {/* Tooltip */}
@@ -410,8 +413,14 @@ function TokenProgressIndicator({ stats }: { stats: ContextStats }) {
         <div className="font-semibold mb-1.5" style={{ color: "var(--text-primary)" }}>
           Context window
         </div>
-        <div className="mb-0.5">{pct}% used ({100 - pct}% left)</div>
-        <div className="mb-2">{fmt(stats.totalTokens)} / {fmt(stats.maxTokens)} tokens</div>
+        {hasContext && pct != null ? (
+          <>
+            <div className="mb-0.5">{pct}% used ({100 - pct}% left)</div>
+            <div className="mb-2">{fmt(stats.totalTokens!)} / {fmt(stats.maxTokens!)} tokens</div>
+          </>
+        ) : (
+          <div className="mb-2" style={{ color: "var(--text-muted)" }}>Usage unavailable</div>
+        )}
         <div className="pt-2" style={{ borderTop: "1px solid var(--border-subtle)" }}>
           <div className="flex justify-between gap-4 mt-1.5">
             <span style={{ color: "var(--text-muted)" }}>cost</span>
