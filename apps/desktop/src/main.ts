@@ -70,6 +70,8 @@ function setupIpcHandlers(): void {
                 .onConflictDoNothing();
             } catch (err) {
               console.error("[db] failed to register session:", err);
+              emitToRenderer({ type: "error", threadId, message: "Failed to save session to database — your conversation won't appear in the sidebar after restart." });
+              return;
             }
             emitToRenderer({
               type: "session_init",
