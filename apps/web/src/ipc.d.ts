@@ -7,6 +7,7 @@ export {};
 declare global {
   interface OpenClawdexBridge {
     platform: string;
+    cwd: string;
     checkClaude: () => Promise<{ available: boolean }>;
     send: (threadId: string, message: string, resumeSessionId?: string) => Promise<void>;
     interrupt: (threadId: string) => Promise<void>;

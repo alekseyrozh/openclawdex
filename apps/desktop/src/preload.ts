@@ -3,6 +3,7 @@ import type { SessionInfo, HistoryMessage } from "@openclawdex/shared";
 
 contextBridge.exposeInMainWorld("openclawdex", {
   platform: process.platform,
+  cwd: process.cwd(),
 
   /** Check if the claude binary is available on this machine. */
   checkClaude: (): Promise<{ available: boolean }> =>

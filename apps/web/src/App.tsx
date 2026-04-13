@@ -221,8 +221,13 @@ export function App() {
 
       if (threadId === pendingThreadRef.current.id) {
         // First message on a new thread — commit it to the sidebar
+        const cwd = window.openclawdex?.cwd;
+        const project = cwd ? cwd.split("/").filter(Boolean).at(-1) ?? "" : "";
+        const name = text.length > 40 ? text.slice(0, 40) + "…" : text;
         const committed: Thread = {
           ...pendingThreadRef.current,
+          name,
+          project,
           status: "running",
           messages: [userMsg],
         };
