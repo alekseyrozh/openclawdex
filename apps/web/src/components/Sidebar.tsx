@@ -28,7 +28,7 @@ function timeAgo(date: Date): string {
 
 interface SidebarProps {
   threads: Thread[];
-  activeThreadId: string;
+  activeThreadId: string | null;
   onSelectThread: (id: string) => void;
   onNewThread: () => void;
   width: number;
@@ -184,7 +184,7 @@ function ProjectGroup({
 }: {
   project: string;
   threads: Thread[];
-  activeThreadId: string;
+  activeThreadId: string | null;
   onSelectThread: (id: string) => void;
 }) {
   const [collapsed, setCollapsed] = useState(false);
