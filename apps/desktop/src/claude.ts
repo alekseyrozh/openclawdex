@@ -34,7 +34,7 @@ export type SessionEvent =
   | { kind: "init"; sessionId: string; model: string }
   | { kind: "text_delta"; text: string }
   | { kind: "tool_use"; toolName: string }
-  | { kind: "result"; costUsd: number; durationMs: number; isError: boolean }
+  | { kind: "result"; costUsd: number; durationMs: number; isError: boolean; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number }
   | { kind: "error"; message: string }
   | { kind: "done" };
 
@@ -207,6 +207,10 @@ export class ClaudeSession {
           costUsd: msg.total_cost_usd,
           durationMs: msg.duration_ms,
           isError: msg.is_error,
+          inputTokens: msg.usage.input_tokens,
+          outputTokens: msg.usage.output_tokens,
+          cacheReadTokens: msg.usage.cache_read_input_tokens,
+          cacheWriteTokens: msg.usage.cache_creation_input_tokens,
         });
         break;
       }
