@@ -30,6 +30,7 @@ interface SidebarProps {
   threads: Thread[];
   activeThreadId: string;
   onSelectThread: (id: string) => void;
+  onNewThread: () => void;
   width: number;
   isLoading?: boolean;
 }
@@ -38,18 +39,22 @@ export function Sidebar({
   threads,
   activeThreadId,
   onSelectThread,
+  onNewThread,
   width,
   isLoading,
 }: SidebarProps) {
-  const grouped = threads.reduce(
-    (acc, t) => {
-      const key = t.project ?? "Ungrouped";
-      if (!acc[key]) acc[key] = [];
-      acc[key].push(t);
-      return acc;
-    },
-    {} as Record<string, Thread[]>,
-  );
+  const ungrouped = threads.filter((t) => !t.project);
+  const grouped = threads
+    .filter((t) => !!t.project)
+    .reduce(
+      (acc, t) => {
+        const key = t.project!;
+        if (!acc[key]) acc[key] = [];
+        acc[key].push(t);
+        return acc;
+      },
+      {} as Record<string, Thread[]>,
+    );
 
   return (
     <div
@@ -77,6 +82,8 @@ export function Sidebar({
           Threads
         </span>
         <button
+          onClick={onNewThread}
+          title="New conversation"
           className="p-[4px] rounded-lg transition-colors"
           style={{ color: "var(--text-secondary)" }}
           onMouseEnter={(e) => {
@@ -97,15 +104,25 @@ export function Sidebar({
           {isLoading ? (
             <ThreadSkeleton />
           ) : (
-            Object.entries(grouped).map(([project, projectThreads]) => (
-              <ProjectGroup
-                key={project}
-                project={project}
-                threads={projectThreads}
-                activeThreadId={activeThreadId}
-                onSelectThread={onSelectThread}
-              />
-            ))
+            <>
+              {ungrouped.map((thread) => (
+                <ThreadRow
+                  key={thread.id}
+                  thread={thread}
+                  active={thread.id === activeThreadId}
+                  onSelect={onSelectThread}
+                />
+              ))}
+              {Object.entries(grouped).map(([project, projectThreads]) => (
+                <ProjectGroup
+                  key={project}
+                  project={project}
+                  threads={projectThreads}
+                  activeThreadId={activeThreadId}
+                  onSelectThread={onSelectThread}
+                />
+              ))}
+            </>
           )}
         </div>
       </ScrollArea>
@@ -117,6 +134,45 @@ export function Sidebar({
         <NavItem icon={<GearSix size={17} weight="regular" />} label="Settings" />
       </div>
     </div>
+  );
+}
+
+function ThreadRow({
+  thread,
+  active,
+  onSelect,
+  indent = false,
+}: {
+  thread: Thread;
+  active: boolean;
+  onSelect: (id: string) => void;
+  indent?: boolean;
+}) {
+  return (
+    <button
+      onClick={() => onSelect(thread.id)}
+      className={`flex items-center w-full ${indent ? "pl-9" : "pl-2"} pr-2 py-[7px] mb-[2px] rounded-xl text-left transition-all duration-100`}
+      style={{
+        background: active ? "rgba(255,255,255,0.09)" : "transparent",
+        color: active ? "var(--text-primary)" : "var(--text-secondary)",
+      }}
+      onMouseEnter={(e) => {
+        if (!active) e.currentTarget.style.background = "rgba(255,255,255,0.04)";
+      }}
+      onMouseLeave={(e) => {
+        if (!active) e.currentTarget.style.background = "transparent";
+      }}
+    >
+      <span className="flex-1 min-w-0 text-[13px] font-medium truncate">
+        {thread.name}
+      </span>
+      <span
+        className="text-[12px] shrink-0 ml-2 leading-none"
+        style={{ color: "var(--text-muted)" }}
+      >
+        {timeAgo(thread.lastModified)}
+      </span>
+    </button>
   );
 }
 
@@ -172,42 +228,15 @@ function ProjectGroup({
       </button>
 
       {!collapsed &&
-        threads.map((thread) => {
-          const active = thread.id === activeThreadId;
-          return (
-            <button
-              key={thread.id}
-              onClick={() => onSelectThread(thread.id)}
-              className="flex items-center w-full pl-9 pr-2 py-[7px] mb-[2px] rounded-xl text-left transition-all duration-100"
-              style={{
-                background: active
-                  ? "rgba(255,255,255,0.09)"
-                  : "transparent",
-                color: active
-                  ? "var(--text-primary)"
-                  : "var(--text-secondary)",
-              }}
-              onMouseEnter={(e) => {
-                if (!active)
-                  e.currentTarget.style.background = "rgba(255,255,255,0.04)";
-              }}
-              onMouseLeave={(e) => {
-                if (!active)
-                  e.currentTarget.style.background = "transparent";
-              }}
-            >
-              <span className="flex-1 min-w-0 text-[13px] font-medium truncate">
-                {thread.name}
-              </span>
-              <span
-                className="text-[12px] shrink-0 ml-2 leading-none"
-                style={{ color: "var(--text-muted)" }}
-              >
-                {timeAgo(thread.lastModified)}
-              </span>
-            </button>
-          );
-        })}
+        threads.map((thread) => (
+          <ThreadRow
+            key={thread.id}
+            thread={thread}
+            active={thread.id === activeThreadId}
+            onSelect={onSelectThread}
+            indent
+          />
+        ))}
     </div>
   );
 }

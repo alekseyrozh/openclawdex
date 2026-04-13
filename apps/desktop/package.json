@@ -5,15 +5,21 @@
   "main": "dist/main.js",
   "scripts": {
     "dev": "tsc && electron .",
-    "build": "tsc"
+    "build": "tsc",
+    "db:studio": "drizzle-kit studio",
+    "db:generate": "drizzle-kit generate"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.104",
+    "@libsql/client": "^0.17.2",
     "@openclawdex/shared": "workspace:*",
+    "drizzle-orm": "^0.44.2",
     "electron-is-dev": "^3.0.1",
     "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@types/node": "^24.0.0",
+    "drizzle-kit": "^0.30.4",
     "electron": "41.2.0",
     "typescript": "^6.0.2"
   }

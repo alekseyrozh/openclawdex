@@ -7,6 +7,8 @@ import {
 } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import type { IpcEvent } from "@openclawdex/shared";
+import { initDb, getDb } from "./db";
+import { knownThreads } from "./db/schema";
 
 const DEV_URL = "http://localhost:3000";
 const IS_DEV = !app.isPackaged;
@@ -58,16 +60,26 @@ function setupIpcHandlers(): void {
 
       emitToRenderer({ type: "status", threadId, status: "running" });
 
-      session.send(message, (e) => {
+      session.send(message, async (e) => {
         switch (e.kind) {
-          case "init":
+          case "init": {
+            try {
+              await getDb()
+                .insert(knownThreads)
+                .values({ sessionId: e.sessionId, createdAt: Date.now() })
+                .onConflictDoNothing();
+            } catch (err) {
+              console.error("[db] failed to register session:", err);
+            }
             emitToRenderer({
               type: "session_init",
               threadId,
               sessionId: e.sessionId,
               model: e.model,
+              cwd: process.cwd(),
             });
             break;
+          }
 
           case "text_delta":
             emitToRenderer({
@@ -117,17 +129,23 @@ function setupIpcHandlers(): void {
     sessions.get(threadId)?.interrupt();
   });
 
-  /** List all past Claude sessions. */
+  /** List only sessions started from this UI. */
   ipcMain.handle("claude:list-sessions", async () => {
-    const all = await listSessions();
-    return all.map((s) => ({
-      sessionId: s.sessionId,
-      summary: s.summary,
-      lastModified: s.lastModified,
-      cwd: s.cwd,
-      firstPrompt: s.firstPrompt,
-      gitBranch: s.gitBranch,
-    }));
+    const [all, known] = await Promise.all([
+      listSessions(),
+      getDb().select({ sessionId: knownThreads.sessionId }).from(knownThreads),
+    ]);
+    const knownSet = new Set(known.map((r) => r.sessionId));
+    return all
+      .filter((s) => knownSet.has(s.sessionId))
+      .map((s) => ({
+        sessionId: s.sessionId,
+        summary: s.summary,
+        lastModified: s.lastModified,
+        cwd: s.cwd,
+        firstPrompt: s.firstPrompt,
+        gitBranch: s.gitBranch,
+      }));
   });
 
   /** Load message history for a past session. */
@@ -230,8 +248,9 @@ function createWindow() {
 
 // ── App lifecycle ─────────────────────────────────────────────
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   app.dock?.setIcon(path.join(__dirname, "../resources/icon.png"));
+  await initDb();
   setupIpcHandlers();
   createWindow();
 });

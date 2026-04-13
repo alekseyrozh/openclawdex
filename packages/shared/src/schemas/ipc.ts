@@ -51,6 +51,7 @@ export const IpcSessionInit = z.object({
   threadId: z.string(),
   sessionId: z.string(),
   model: z.string(),
+  cwd: z.string().optional(),
 });
 
 export const IpcToolUse = z.object({

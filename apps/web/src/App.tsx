@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { Sidebar } from "./components/Sidebar";
 import { ChatView } from "./components/ChatView";
 import { IpcEvent, SessionInfo, HistoryMessage } from "@openclawdex/shared";
@@ -113,12 +113,15 @@ export function App() {
           .sort((a, b) => b.lastModified - a.lastModified)
           .map(sessionToThread);
         setThreads((prev) => {
-          // Keep any "new conversation" threads at the top, history below
-          const newConvos = prev.filter((t) => !t.claudeSessionId);
-          return [...newConvos, ...historyThreads];
+          // Keep any in-progress threads at the top, history below
+          const inProgress = prev.filter((t) => !t.claudeSessionId);
+          return [...inProgress, ...historyThreads];
         });
         setActiveThreadId((prev) => prev || historyThreads[0]?.id || "");
       }
+      setThreadsLoading(false);
+    }).catch((err) => {
+      console.error("[listSessions] failed:", err);
       setThreadsLoading(false);
     });
   }, []);
@@ -171,9 +174,11 @@ export function App() {
               console.log(`[thread ${t.id}] cost=$${event.costUsd.toFixed(4)} duration=${event.durationMs}ms`);
               return t;
 
-            case "session_init":
+            case "session_init": {
               console.log(`[thread ${t.id}] session=${event.sessionId} model=${event.model}`);
-              return { ...t, claudeSessionId: event.sessionId, historyLoaded: true };
+              const project = event.cwd ? event.cwd.split("/").filter(Boolean).at(-1) ?? "" : t.project;
+              return { ...t, claudeSessionId: event.sessionId, historyLoaded: true, project };
+            }
           }
         }),
       );
@@ -228,6 +233,14 @@ export function App() {
     [],
   );
 
+  // ── New thread handler ────────────────────────────────────
+
+  const handleNewThread = useCallback(() => {
+    const t = newThread();
+    setThreads((prev) => [t, ...prev]);
+    setActiveThreadId(t.id);
+  }, []);
+
   // ── Interrupt handler ─────────────────────────────────────
 
   const handleInterrupt = useCallback((threadId: string) => {
@@ -268,6 +281,7 @@ export function App() {
         threads={threads}
         activeThreadId={activeThreadId}
         onSelectThread={setActiveThreadId}
+        onNewThread={handleNewThread}
         width={sidebarWidth}
         isLoading={threadsLoading}
       />
