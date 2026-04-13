@@ -30,7 +30,7 @@ export type SessionInfo = z.infer<typeof SessionInfo>;
 export const HistoryMessage = z.discriminatedUnion("role", [
   z.object({ id: z.string(), role: z.literal("user"), content: z.string() }),
   z.object({ id: z.string(), role: z.literal("assistant"), content: z.string() }),
-  z.object({ id: z.string(), role: z.literal("tool_use"), toolName: z.string() }),
+  z.object({ id: z.string(), role: z.literal("tool_use"), toolName: z.string(), toolInput: z.record(z.string(), z.unknown()).optional() }),
 ]);
 export type HistoryMessage = z.infer<typeof HistoryMessage>;
 
@@ -78,6 +78,7 @@ export const IpcToolUse = z.object({
   type: z.literal("tool_use"),
   threadId: z.string(),
   toolName: z.string(),
+  toolInput: z.record(z.string(), z.unknown()).optional(),
 });
 
 export const IpcEvent = z.discriminatedUnion("type", [

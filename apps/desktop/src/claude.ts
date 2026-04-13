@@ -33,7 +33,7 @@ export function findClaudeBinary(): string | null {
 export type SessionEvent =
   | { kind: "init"; sessionId: string; model: string }
   | { kind: "text_delta"; text: string }
-  | { kind: "tool_use"; toolName: string }
+  | { kind: "tool_use"; toolName: string; toolInput: Record<string, unknown> }
   | { kind: "result"; costUsd: number; durationMs: number; isError: boolean; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number }
   | { kind: "error"; message: string }
   | { kind: "done" };
@@ -194,7 +194,8 @@ export class ClaudeSession {
           for (const block of content) {
             if (block && typeof block === "object" && (block as { type?: string }).type === "tool_use") {
               const name = (block as { name?: string }).name;
-              if (name) onEvent({ kind: "tool_use", toolName: name });
+              const input = (block as { input?: Record<string, unknown> }).input ?? {};
+              if (name) onEvent({ kind: "tool_use", toolName: name, toolInput: input });
             }
           }
         }

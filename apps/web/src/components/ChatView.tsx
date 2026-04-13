@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useLayoutEffect, useCallback } from "react
 import { ScrollArea, type ScrollAreaHandle } from "./ScrollArea";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import {
   ArrowUp,
   ArrowDown,
@@ -15,6 +16,9 @@ import {
   Copy,
 } from "@phosphor-icons/react";
 import type { Thread, Message, FileChange, TurnStats } from "../App";
+
+// Claude context window (tokens) — used for progress circle fill
+const CONTEXT_WINDOW = 200_000;
 
 /* ── Claude sparkle icon ────────────────────────────────────── */
 
@@ -262,7 +266,7 @@ function MessageHoverBar({ message, reverse }: { message: Message; reverse?: boo
 
   return (
     <div
-      className={`flex items-center mt-3${reverse ? " flex-row-reverse gap-3" : " gap-2"}`}
+      className={`flex items-center mt-1.5${reverse ? " flex-row-reverse gap-3" : " gap-2"}`}
       style={{ color: "rgba(255,255,255,0.60)" }}
     >
       <button
@@ -288,66 +292,167 @@ function MessageHoverBar({ message, reverse }: { message: Message; reverse?: boo
 
 /* ── Tool use indicator ──────────────────────────────────────── */
 
-function ToolUseIndicator({ toolName }: { toolName: string }) {
+/** Human-readable one-liner for a tool call. */
+function toolSummary(name: string, input?: Record<string, unknown>): string {
+  if (!input) return name;
+  switch (name) {
+    case "Bash": {
+      const cmd = String(input.command ?? "");
+      return cmd ? `$ ${cmd}` : "Bash";
+    }
+    case "Read": {
+      const fp = String(input.file_path ?? "");
+      const basename = fp.split("/").at(-1) ?? fp;
+      return basename ? `Read ${basename}` : "Read";
+    }
+    case "Edit": {
+      const fp = String(input.file_path ?? "");
+      const basename = fp.split("/").at(-1) ?? fp;
+      return basename ? `Edit ${basename}` : "Edit";
+    }
+    case "Write": {
+      const fp = String(input.file_path ?? "");
+      const basename = fp.split("/").at(-1) ?? fp;
+      return basename ? `Write ${basename}` : "Write";
+    }
+    case "Grep": {
+      const pat = String(input.pattern ?? "");
+      return pat ? `Grep "${pat}"` : "Grep";
+    }
+    case "Glob": {
+      const pat = String(input.pattern ?? "");
+      return pat ? `Glob ${pat}` : "Glob";
+    }
+    case "WebFetch": {
+      const url = String(input.url ?? "");
+      return url ? `Fetch ${url}` : "WebFetch";
+    }
+    case "WebSearch": {
+      const q = String(input.query ?? "");
+      return q ? `Search "${q}"` : "WebSearch";
+    }
+    default:
+      return name;
+  }
+}
+
+function ToolUseIndicator({ toolName, toolInput }: { toolName: string; toolInput?: Record<string, unknown> }) {
+  const summary = toolSummary(toolName, toolInput);
+  const maxLen = 120;
+  const display = summary.length > maxLen ? summary.slice(0, maxLen) + "…" : summary;
+
   return (
     <div
-      className="py-2 px-1 text-[13px] font-medium"
-      style={{ color: "var(--text-muted)" }}
+      className="flex items-center gap-2 py-1.5 px-1 text-[13px]"
+      style={{
+        color: "var(--text-muted)",
+        fontFamily: 'var(--font-code)',
+      }}
     >
-      {toolName}
+      <span className="truncate">{display}</span>
     </div>
   );
 }
 
-/* ── Turn stats bar ──────────────────────────────────────────── */
+/* ── Token progress indicator ────────────────────────────────── */
 
-function TurnStatsBar({ stats }: { stats: TurnStats }) {
+function TokenProgressIndicator({ stats }: { stats: TurnStats }) {
+  const r = 5.5;
+  const circ = 2 * Math.PI * r;
+  const percent = Math.min(stats.inputTokens / CONTEXT_WINDOW, 1);
+  const offset = circ * (1 - percent);
+  const pct = Math.round(percent * 100);
+
   function fmt(n: number) {
     return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
   }
-  const durationSec = (stats.durationMs / 1000).toFixed(1);
   const costStr = stats.costUsd < 0.01
     ? `$${stats.costUsd.toFixed(4)}`
     : `$${stats.costUsd.toFixed(3)}`;
-
-  const parts: { label: string; value: string }[] = [
-    { label: "in", value: fmt(stats.inputTokens) },
-    { label: "out", value: fmt(stats.outputTokens) },
-  ];
-  if (stats.cacheReadTokens > 0) {
-    parts.push({ label: "cache read", value: fmt(stats.cacheReadTokens) });
-  }
-  if (stats.cacheWriteTokens > 0) {
-    parts.push({ label: "cache write", value: fmt(stats.cacheWriteTokens) });
-  }
-  parts.push({ label: "", value: costStr });
-  parts.push({ label: "", value: `${durationSec}s` });
+  const durationSec = (stats.durationMs / 1000).toFixed(1);
 
   return (
-    <div
-      className="flex items-center gap-2.5 px-1 pb-2 text-[11.5px] font-medium flex-wrap"
-      style={{ color: "var(--text-faint)" }}
-    >
-      {parts.map((p, i) => (
-        <span key={i} className="flex items-center gap-1">
-          {p.label && <span style={{ color: "rgba(255,255,255,0.22)" }}>{p.label}</span>}
-          <span>{p.value}</span>
-          {i < parts.length - 1 && (
-            <span className="ml-1.5" style={{ color: "rgba(255,255,255,0.12)" }}>·</span>
+    <div className="relative group/token ml-auto">
+      <button
+        className="flex items-center justify-center w-[24px] h-[24px] rounded-lg transition-colors"
+        style={{ color: "var(--text-muted)" }}
+        onMouseEnter={(e) => {
+          e.currentTarget.style.background = "var(--border-subtle)";
+          e.currentTarget.style.color = "rgba(255,255,255,0.60)";
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.background = "transparent";
+          e.currentTarget.style.color = "var(--text-muted)";
+        }}
+      >
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+          <circle cx="7" cy="7" r={r} stroke="currentColor" strokeOpacity="0.2" strokeWidth="1.5" />
+          <circle
+            cx="7" cy="7" r={r}
+            stroke="currentColor"
+            strokeWidth="1.5"
+            strokeDasharray={circ}
+            strokeDashoffset={offset}
+            strokeLinecap="round"
+            transform="rotate(-90 7 7)"
+          />
+        </svg>
+      </button>
+      {/* Tooltip */}
+      <div
+        className="absolute bottom-full right-0 mb-2 rounded-xl text-[13px] font-medium pointer-events-none z-50 opacity-0 group-hover/token:opacity-100 transition-opacity duration-150"
+        style={{
+          background: "var(--surface-3)",
+          border: "1px solid var(--border-emphasis)",
+          boxShadow: "0 8px 24px rgba(0,0,0,0.5)",
+          minWidth: "180px",
+          padding: "10px 12px",
+          color: "var(--text-secondary)",
+        }}
+      >
+        <div className="font-semibold mb-1.5" style={{ color: "var(--text-primary)" }}>
+          Context window
+        </div>
+        <div className="mb-0.5">{pct}% used ({100 - pct}% left)</div>
+        <div className="mb-2">{fmt(stats.inputTokens)} / {fmt(CONTEXT_WINDOW)} tokens</div>
+        <div className="pt-2" style={{ borderTop: "1px solid var(--border-subtle)" }}>
+          <div className="flex justify-between gap-4 mb-0.5">
+            <span style={{ color: "var(--text-muted)" }}>output</span>
+            <span>{fmt(stats.outputTokens)}</span>
+          </div>
+          {stats.cacheReadTokens > 0 && (
+            <div className="flex justify-between gap-4 mb-0.5">
+              <span style={{ color: "var(--text-muted)" }}>cache read</span>
+              <span>{fmt(stats.cacheReadTokens)}</span>
+            </div>
           )}
-        </span>
-      ))}
+          {stats.cacheWriteTokens > 0 && (
+            <div className="flex justify-between gap-4 mb-0.5">
+              <span style={{ color: "var(--text-muted)" }}>cache write</span>
+              <span>{fmt(stats.cacheWriteTokens)}</span>
+            </div>
+          )}
+          <div className="flex justify-between gap-4 mt-1.5">
+            <span style={{ color: "var(--text-muted)" }}>cost</span>
+            <span>{costStr}</span>
+          </div>
+          <div className="flex justify-between gap-4">
+            <span style={{ color: "var(--text-muted)" }}>duration</span>
+            <span>{durationSec}s</span>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
 
-function MessageBlock({ message, isStreaming, showHoverBar, useTurnGroup }: { message: Message; isStreaming: boolean; showHoverBar: boolean; useTurnGroup?: boolean }) {
+function MessageBlock({ message, isStreaming, showHoverBar }: { message: Message; isStreaming: boolean; showHoverBar: boolean }) {
   if (message.collapsed) {
     return <CollapsedIndicator count={message.collapsed} />;
   }
 
   if (message.role === "tool_use") {
-    return <ToolUseIndicator toolName={message.toolName ?? "unknown"} />;
+    return <ToolUseIndicator toolName={message.toolName ?? "unknown"} toolInput={message.toolInput} />;
   }
 
   const isUser = message.role === "user";
@@ -365,15 +470,13 @@ function MessageBlock({ message, isStreaming, showHoverBar, useTurnGroup }: { me
           {message.content}
         </div>
         {showHoverBar && (
-          <div className="flex justify-end px-2 transition-opacity duration-300 opacity-0 group-hover:opacity-100">
+          <div className="flex justify-end px-1 transition-opacity duration-300 opacity-0 group-hover:opacity-100">
             <MessageHoverBar message={message} reverse />
           </div>
         )}
       </div>
     );
   }
-
-  const hoverClass = useTurnGroup ? "group-hover/turn:opacity-100" : "group-hover:opacity-100";
 
   return (
     <div className="py-4 px-1">
@@ -386,12 +489,173 @@ function MessageBlock({ message, isStreaming, showHoverBar, useTurnGroup }: { me
       {message.fileChanges && message.fileChanges.length > 0 && (
         <FileChangeCard changes={message.fileChanges} />
       )}
-      {message.turnStats && <TurnStatsBar stats={message.turnStats} />}
-      {showHoverBar && (
-        <div className={`px-2 transition-opacity duration-300 opacity-0 ${hoverClass}`}>
-          <MessageHoverBar message={message} />
-        </div>
-      )}
+    </div>
+  );
+}
+
+/* ── Syntax highlighting theme (matches Codex dark surface) ── */
+const codeTheme: Record<string, React.CSSProperties> = {
+  'pre[class*="language-"]': {
+    background: "transparent",
+    margin: 0,
+    padding: 0,
+    overflow: "visible",
+  },
+  'code[class*="language-"]': {
+    background: "transparent",
+    fontFamily: 'var(--font-mono)',
+    fontSize: "12px",
+    lineHeight: "1.6",
+    color: "#e6e6e6",
+  },
+  // Catppuccin Mocha
+  comment: { color: "#6c7086", fontStyle: "italic" },
+  prolog: { color: "#6c7086", fontStyle: "italic" },
+  doctype: { color: "#6c7086" },
+  cdata: { color: "#6c7086" },
+  punctuation: { color: "#9399b2" },
+  property: { color: "#f38ba8" },
+  tag: { color: "#f38ba8" },
+  boolean: { color: "#fab387" },
+  number: { color: "#fab387" },
+  constant: { color: "#fab387" },
+  symbol: { color: "#f2cdcd" },
+  deleted: { color: "#f38ba8" },
+  selector: { color: "#a6e3a1" },
+  "attr-name": { color: "#f9e2af" },
+  string: { color: "#a6e3a1" },
+  char: { color: "#a6e3a1" },
+  builtin: { color: "#94e2d5" },
+  inserted: { color: "#a6e3a1" },
+  operator: { color: "#89dceb" },
+  entity: { color: "#89dceb" },
+  url: { color: "#89dceb" },
+  atrule: { color: "#cba6f7" },
+  "attr-value": { color: "#a6e3a1" },
+  keyword: { color: "#cba6f7" },
+  function: { color: "#89b4fa" },
+  "class-name": { color: "#f9e2af" },
+  regex: { color: "#fab387" },
+  important: { color: "#f38ba8", fontWeight: "bold" },
+  variable: { color: "#cdd6f4" },
+  bold: { fontWeight: "bold" },
+  italic: { fontStyle: "italic" },
+};
+
+/* ── Language display labels ─────────────────────────────────── */
+const LANG_LABELS: Record<string, string> = {
+  js: "JavaScript",
+  jsx: "JSX",
+  ts: "TypeScript",
+  tsx: "TSX",
+  py: "Python",
+  python: "Python",
+  rb: "Ruby",
+  ruby: "Ruby",
+  rs: "Rust",
+  rust: "Rust",
+  go: "Go",
+  java: "Java",
+  sh: "Shell",
+  bash: "Bash",
+  zsh: "Shell",
+  json: "JSON",
+  yaml: "YAML",
+  yml: "YAML",
+  toml: "TOML",
+  html: "HTML",
+  css: "CSS",
+  scss: "SCSS",
+  sql: "SQL",
+  md: "Markdown",
+  markdown: "Markdown",
+  dockerfile: "Dockerfile",
+  graphql: "GraphQL",
+  swift: "Swift",
+  kotlin: "Kotlin",
+  c: "C",
+  cpp: "C++",
+  "c++": "C++",
+  csharp: "C#",
+  "c#": "C#",
+  php: "PHP",
+  lua: "Lua",
+  zig: "Zig",
+  elixir: "Elixir",
+  diff: "Diff",
+  xml: "XML",
+  txt: "Text",
+  text: "Text",
+};
+
+function CodeBlock({ language, children }: { language: string | undefined; children: string }) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = useCallback(() => {
+    navigator.clipboard.writeText(children).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  }, [children]);
+
+  const label = language ? LANG_LABELS[language] ?? language : null;
+
+  return (
+    <div
+      className="rounded-xl overflow-hidden"
+      style={{
+        background: "rgba(255,255,255,0.06)",
+        border: "1px solid var(--border-subtle)",
+      }}
+    >
+      {/* Header: language label + copy icon */}
+      <div className="flex items-center justify-between px-3 pt-2">
+        <span
+          className="text-[11px] font-medium"
+          style={{ color: "rgba(255,255,255,0.35)" }}
+        >
+          {label ?? ""}
+        </span>
+        <button
+          onClick={handleCopy}
+          className="flex items-center rounded-lg p-1 -m-1 transition-colors cursor-pointer"
+          style={{ color: copied ? "#2EB67D" : "rgba(255,255,255,0.35)", lineHeight: 1 }}
+          onMouseEnter={(e) => {
+            if (!copied) {
+              e.currentTarget.style.color = "var(--text-primary)";
+              e.currentTarget.style.background = "var(--surface-3)";
+            }
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.color = copied ? "#2EB67D" : "rgba(255,255,255,0.35)";
+            e.currentTarget.style.background = "transparent";
+          }}
+          title="Copy code"
+        >
+          {copied ? <Check size={14} weight="bold" /> : <Copy size={14} weight="regular" />}
+        </button>
+      </div>
+      {/* Highlighted code */}
+      <div className="px-3 py-2 overflow-x-auto">
+        <SyntaxHighlighter
+          language={language ?? "text"}
+          style={codeTheme}
+          customStyle={{
+            background: "transparent",
+            margin: 0,
+            padding: 0,
+          }}
+          codeTagProps={{
+            style: {
+              fontFamily: "var(--font-mono)",
+              fontSize: "12px",
+              lineHeight: "1.6",
+            },
+          }}
+        >
+          {children}
+        </SyntaxHighlighter>
+      </div>
     </div>
   );
 }
@@ -429,20 +693,13 @@ function MarkdownContent({ text }: { text: string }) {
           <li className="leading-[1.65]">{children}</li>
         ),
         code: ({ children, className }) => {
-          const isBlock = className?.includes("language-");
+          const codeString = String(children).replace(/\n$/, "");
+          // Block code: has language class OR contains newlines (fenced block without lang)
+          const hasLang = className?.includes("language-");
+          const isBlock = hasLang || codeString.includes("\n");
           if (isBlock) {
-            return (
-              <code
-                className="block font-mono text-[12px] font-medium px-3 py-2.5 rounded-xl overflow-x-auto"
-                style={{
-                  background: "rgba(255,255,255,0.06)",
-                  color: "var(--text-primary)",
-                  border: "1px solid var(--border-subtle)",
-                }}
-              >
-                {children}
-              </code>
-            );
+            const language = hasLang ? className?.replace("language-", "") : undefined;
+            return <CodeBlock language={language}>{codeString}</CodeBlock>;
           }
           const inner = String(children);
           const isFileRef = inner.includes("/") || inner.includes("(line");
@@ -776,23 +1033,29 @@ export function ChatView({ thread, onSend, onInterrupt }: ChatViewProps) {
                   }
                   const turnMsgs = msgs.slice(turnStart, i);
 
-                  // Hover bar goes on the last assistant message in the turn
-                  const lastAssistantIdx = turnMsgs.reduce(
-                    (last, m, idx) => (m.role === "assistant" ? idx : last),
-                    -1
+                  // Find the last assistant message for the hover bar
+                  const lastAssistantMsg = turnMsgs.reduce<Message | undefined>(
+                    (last, m) => (m.role === "assistant" ? m : last),
+                    undefined
                   );
+                  // Turn is complete if there are more messages after it, or thread is idle
+                  const isTurnComplete = i < msgs.length || thread.status === "idle";
 
                   rendered.push(
                     <div key={`turn-${msg.id}`} className="group/turn">
-                      {turnMsgs.map((m, j) => (
+                      {turnMsgs.map((m) => (
                         <MessageBlock
                           key={m.id}
                           message={m}
                           isStreaming={m.id === streamingMsgId}
-                          showHoverBar={j === lastAssistantIdx}
-                          useTurnGroup
+                          showHoverBar={false}
                         />
                       ))}
+                      {lastAssistantMsg && isTurnComplete && (
+                        <div className="px-1 transition-opacity duration-300 opacity-0 group-hover/turn:opacity-100">
+                          <MessageHoverBar message={lastAssistantMsg} />
+                        </div>
+                      )}
                     </div>
                   );
                 }
@@ -957,6 +1220,9 @@ export function ChatView({ thread, onSend, onInterrupt }: ChatViewProps) {
                 <span>{thread.branch}</span>
                 <CaretDown size={10} weight="bold" />
               </StatusButton>
+            )}
+            {thread.lastTurnStats && (
+              <TokenProgressIndicator stats={thread.lastTurnStats} />
             )}
           </div>
         </div>

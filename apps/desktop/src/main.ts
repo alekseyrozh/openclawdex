@@ -119,6 +119,7 @@ function setupIpcHandlers(): void {
               type: "tool_use",
               threadId,
               toolName: e.toolName,
+              toolInput: e.toolInput,
             });
             break;
 
@@ -184,7 +185,7 @@ function setupIpcHandlers(): void {
 
     // Zod schemas for message body shapes
     const TextBlock = z.object({ type: z.literal("text"), text: z.string() });
-    const ToolUseBlock = z.object({ type: z.literal("tool_use"), id: z.string(), name: z.string() });
+    const ToolUseBlock = z.object({ type: z.literal("tool_use"), id: z.string(), name: z.string(), input: z.record(z.string(), z.unknown()).optional() });
     const AnyBlock = z.union([TextBlock, ToolUseBlock, z.object({ type: z.string() })]);
     const UserBody = z.object({
       role: z.literal("user"),
@@ -198,7 +199,7 @@ function setupIpcHandlers(): void {
     type HistoryMsg =
       | { id: string; role: "user"; content: string }
       | { id: string; role: "assistant"; content: string }
-      | { id: string; role: "tool_use"; toolName: string };
+      | { id: string; role: "tool_use"; toolName: string; toolInput?: Record<string, unknown> };
 
     const result: HistoryMsg[] = [];
 
@@ -225,7 +226,7 @@ function setupIpcHandlers(): void {
         if (textContent.trim()) result.push({ id: m.uuid, role: "assistant", content: textContent });
         const toolBlocks = blocks.filter((b): b is z.infer<typeof ToolUseBlock> => b.type === "tool_use");
         for (const t of toolBlocks) {
-          result.push({ id: `${m.uuid}-${t.id}`, role: "tool_use", toolName: t.name });
+          result.push({ id: `${m.uuid}-${t.id}`, role: "tool_use", toolName: t.name, toolInput: t.input });
         }
       }
     }

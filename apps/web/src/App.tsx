@@ -16,6 +16,7 @@ export interface Thread {
   claudeSessionId?: string;
   historyLoaded?: boolean;
   lastModified: Date;
+  lastTurnStats?: TurnStats;
 }
 
 export interface TurnStats {
@@ -35,7 +36,7 @@ export interface Message {
   fileChanges?: FileChange[];
   collapsed?: number;
   toolName?: string;
-  turnStats?: TurnStats;
+  toolInput?: Record<string, unknown>;
 }
 
 export interface FileChange {
@@ -62,6 +63,21 @@ function newThread(projectId: string | null): Thread {
   };
 }
 
+const STATS_LS_PREFIX = "thread-stats:";
+
+function saveStatsToStorage(sessionId: string, stats: TurnStats) {
+  try {
+    localStorage.setItem(STATS_LS_PREFIX + sessionId, JSON.stringify(stats));
+  } catch { /* ignore quota errors */ }
+}
+
+function loadStatsFromStorage(sessionId: string): TurnStats | undefined {
+  try {
+    const raw = localStorage.getItem(STATS_LS_PREFIX + sessionId);
+    return raw ? (JSON.parse(raw) as TurnStats) : undefined;
+  } catch { return undefined; }
+}
+
 function sessionToThread(s: SessionInfo): Thread {
   return {
     id: s.sessionId,
@@ -74,13 +90,14 @@ function sessionToThread(s: SessionInfo): Thread {
     claudeSessionId: s.sessionId,
     historyLoaded: false,
     lastModified: new Date(s.lastModified),
+    lastTurnStats: loadStatsFromStorage(s.sessionId),
   };
 }
 
 function historyToMessages(items: HistoryMessage[]): Message[] {
   return items.map((h) => {
     if (h.role === "tool_use") {
-      return { id: h.id, role: "tool_use" as const, content: "", timestamp: new Date(), toolName: h.toolName };
+      return { id: h.id, role: "tool_use" as const, content: "", timestamp: new Date(), toolName: h.toolName, toolInput: h.toolInput };
     }
     return { id: h.id, role: h.role, content: h.content, timestamp: new Date() };
   });
@@ -107,12 +124,11 @@ function applyIpcEvent(thread: Thread, event: IpcEvent): Thread {
     case "status":
       return { ...thread, status: event.status };
     case "tool_use":
-      return { ...thread, messages: [...thread.messages, { id: msgId(), role: "tool_use" as const, content: "", timestamp: new Date(), toolName: event.toolName }] };
+      return { ...thread, messages: [...thread.messages, { id: msgId(), role: "tool_use" as const, content: "", timestamp: new Date(), toolName: event.toolName, toolInput: event.toolInput }] };
     case "error":
       return { ...thread, status: "error" as const, messages: [...thread.messages, { id: msgId(), role: "assistant" as const, content: `Error: ${event.message}`, timestamp: new Date() }] };
     case "result": {
-      // Attach turn stats to the last assistant message in this turn
-      const stats: TurnStats = {
+      const lastTurnStats: TurnStats = {
         inputTokens: event.inputTokens,
         outputTokens: event.outputTokens,
         cacheReadTokens: event.cacheReadTokens,
@@ -120,12 +136,7 @@ function applyIpcEvent(thread: Thread, event: IpcEvent): Thread {
         costUsd: event.costUsd,
         durationMs: event.durationMs,
       };
-      const msgs = [...thread.messages];
-      const lastAssistantIdx = msgs.reduceRight((found, m, i) => found !== -1 ? found : m.role === "assistant" ? i : -1, -1);
-      if (lastAssistantIdx !== -1) {
-        msgs[lastAssistantIdx] = { ...msgs[lastAssistantIdx], turnStats: stats };
-      }
-      return { ...thread, messages: msgs };
+      return { ...thread, lastTurnStats };
     }
     case "session_init": {
       console.log(`[thread ${thread.id}] session=${event.sessionId} model=${event.model}`);
@@ -232,6 +243,19 @@ export function App() {
       }
 
       // Events for already-committed threads.
+      if (event.type === "result") {
+        const thread = threadsRef.current.find((t) => t.id === event.threadId);
+        if (thread?.claudeSessionId) {
+          saveStatsToStorage(thread.claudeSessionId, {
+            inputTokens: event.inputTokens,
+            outputTokens: event.outputTokens,
+            cacheReadTokens: event.cacheReadTokens,
+            cacheWriteTokens: event.cacheWriteTokens,
+            costUsd: event.costUsd,
+            durationMs: event.durationMs,
+          });
+        }
+      }
       setThreads((prev) => prev.map((t) => t.id !== event.threadId ? t : applyIpcEvent(t, event)));
     });
 
@@ -281,7 +305,7 @@ export function App() {
           }),
         );
         const thread = threadsRef.current.find((t) => t.id === threadId);
-        window.openclawdex?.send(threadId, text, { resumeSessionId: thread?.claudeSessionId });
+        window.openclawdex?.send(threadId, text, { resumeSessionId: thread?.claudeSessionId, projectId: thread?.projectId ?? undefined });
       }
     },
     [],
