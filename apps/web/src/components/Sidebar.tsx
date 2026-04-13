@@ -153,7 +153,7 @@ export function Sidebar({
               {projects.length === 0 && ungrouped.length === 0 && !isLoading && (
                 <button
                   onClick={onCreateProject}
-                  className="flex items-center gap-2 w-full px-2 py-3 mt-2 rounded-xl text-[13px] transition-colors"
+                  className="flex items-center gap-2 w-full px-2 py-3 rounded-xl text-[13px] transition-colors"
                   style={{ color: "rgba(255,255,255,0.4)" }}
                   onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.04)")}
                   onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
@@ -487,8 +487,8 @@ function ProjectGroup({
                     onDelete();
                   }}
                   className="flex items-center gap-2.5 w-full px-3 py-[8px] text-[13px] text-left rounded-lg transition-colors"
-                  style={{ color: "#fa423e" }}
-                  onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(250,66,62,0.1)")}
+                  style={{ color: "rgba(255,255,255,0.85)" }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.07)")}
                   onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
                 >
                   <Trash size={16} weight="regular" />

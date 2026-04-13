@@ -128,6 +128,10 @@ function setupIpcHandlers(): void {
               threadId,
               costUsd: e.costUsd,
               durationMs: e.durationMs,
+              inputTokens: e.inputTokens,
+              outputTokens: e.outputTokens,
+              cacheReadTokens: e.cacheReadTokens,
+              cacheWriteTokens: e.cacheWriteTokens,
             });
             // Turn is complete — mark thread as idle so user can send follow-ups
             emitToRenderer({ type: "status", threadId, status: "idle" });

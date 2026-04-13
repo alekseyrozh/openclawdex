@@ -14,7 +14,7 @@ import {
   GitBranch,
   Copy,
 } from "@phosphor-icons/react";
-import type { Thread, Message, FileChange } from "../App";
+import type { Thread, Message, FileChange, TurnStats } from "../App";
 
 /* ── Claude sparkle icon ────────────────────────────────────── */
 
@@ -299,6 +299,48 @@ function ToolUseIndicator({ toolName }: { toolName: string }) {
   );
 }
 
+/* ── Turn stats bar ──────────────────────────────────────────── */
+
+function TurnStatsBar({ stats }: { stats: TurnStats }) {
+  function fmt(n: number) {
+    return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+  }
+  const durationSec = (stats.durationMs / 1000).toFixed(1);
+  const costStr = stats.costUsd < 0.01
+    ? `$${stats.costUsd.toFixed(4)}`
+    : `$${stats.costUsd.toFixed(3)}`;
+
+  const parts: { label: string; value: string }[] = [
+    { label: "in", value: fmt(stats.inputTokens) },
+    { label: "out", value: fmt(stats.outputTokens) },
+  ];
+  if (stats.cacheReadTokens > 0) {
+    parts.push({ label: "cache read", value: fmt(stats.cacheReadTokens) });
+  }
+  if (stats.cacheWriteTokens > 0) {
+    parts.push({ label: "cache write", value: fmt(stats.cacheWriteTokens) });
+  }
+  parts.push({ label: "", value: costStr });
+  parts.push({ label: "", value: `${durationSec}s` });
+
+  return (
+    <div
+      className="flex items-center gap-2.5 px-1 pb-2 text-[11.5px] font-medium flex-wrap"
+      style={{ color: "var(--text-faint)" }}
+    >
+      {parts.map((p, i) => (
+        <span key={i} className="flex items-center gap-1">
+          {p.label && <span style={{ color: "rgba(255,255,255,0.22)" }}>{p.label}</span>}
+          <span>{p.value}</span>
+          {i < parts.length - 1 && (
+            <span className="ml-1.5" style={{ color: "rgba(255,255,255,0.12)" }}>·</span>
+          )}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 function MessageBlock({ message, isStreaming, showHoverBar, useTurnGroup }: { message: Message; isStreaming: boolean; showHoverBar: boolean; useTurnGroup?: boolean }) {
   if (message.collapsed) {
     return <CollapsedIndicator count={message.collapsed} />;
@@ -344,6 +386,7 @@ function MessageBlock({ message, isStreaming, showHoverBar, useTurnGroup }: { me
       {message.fileChanges && message.fileChanges.length > 0 && (
         <FileChangeCard changes={message.fileChanges} />
       )}
+      {message.turnStats && <TurnStatsBar stats={message.turnStats} />}
       {showHoverBar && (
         <div className={`px-2 transition-opacity duration-300 opacity-0 ${hoverClass}`}>
           <MessageHoverBar message={message} />
@@ -438,6 +481,26 @@ function MarkdownContent({ text }: { text: string }) {
         ),
         hr: () => (
           <hr className="my-3" style={{ borderColor: "var(--border-subtle)" }} />
+        ),
+        table: ({ children }) => (
+          <div className="mb-3 last:mb-0 overflow-x-auto rounded-2xl" style={{ border: "2px solid var(--border-subtle)" }}>
+            <table className="w-full text-[13px]">
+              {children}
+            </table>
+          </div>
+        ),
+        thead: ({ children }) => (
+          <thead style={{ background: "rgba(255,255,255,0.06)" }}>{children}</thead>
+        ),
+        tbody: ({ children }) => <tbody>{children}</tbody>,
+        tr: ({ children }) => (
+          <tr className="border-b-2 last:border-b-0" style={{ borderColor: "var(--border-subtle)" }}>{children}</tr>
+        ),
+        th: ({ children }) => (
+          <th className="px-3 py-2 text-left font-semibold border-r-2 last:border-r-0" style={{ color: "var(--text-primary)", borderColor: "var(--border-subtle)" }}>{children}</th>
+        ),
+        td: ({ children }) => (
+          <td className="px-3 py-2 border-r-2 last:border-r-0" style={{ color: "var(--text-secondary)", borderColor: "var(--border-subtle)" }}>{children}</td>
         ),
       }}
     >

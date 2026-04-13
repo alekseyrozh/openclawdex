@@ -53,6 +53,10 @@ export const IpcResult = z.object({
   threadId: z.string(),
   costUsd: z.number(),
   durationMs: z.number(),
+  inputTokens: z.number(),
+  outputTokens: z.number(),
+  cacheReadTokens: z.number(),
+  cacheWriteTokens: z.number(),
 });
 
 export const IpcError = z.object({

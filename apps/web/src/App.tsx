@@ -18,6 +18,15 @@ export interface Thread {
   lastModified: Date;
 }
 
+export interface TurnStats {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  costUsd: number;
+  durationMs: number;
+}
+
 export interface Message {
   id: string;
   role: "user" | "assistant" | "tool_use";
@@ -26,6 +35,7 @@ export interface Message {
   fileChanges?: FileChange[];
   collapsed?: number;
   toolName?: string;
+  turnStats?: TurnStats;
 }
 
 export interface FileChange {
@@ -100,9 +110,23 @@ function applyIpcEvent(thread: Thread, event: IpcEvent): Thread {
       return { ...thread, messages: [...thread.messages, { id: msgId(), role: "tool_use" as const, content: "", timestamp: new Date(), toolName: event.toolName }] };
     case "error":
       return { ...thread, status: "error" as const, messages: [...thread.messages, { id: msgId(), role: "assistant" as const, content: `Error: ${event.message}`, timestamp: new Date() }] };
-    case "result":
-      console.log(`[thread ${thread.id}] cost=$${event.costUsd.toFixed(4)} duration=${event.durationMs}ms`);
-      return thread;
+    case "result": {
+      // Attach turn stats to the last assistant message in this turn
+      const stats: TurnStats = {
+        inputTokens: event.inputTokens,
+        outputTokens: event.outputTokens,
+        cacheReadTokens: event.cacheReadTokens,
+        cacheWriteTokens: event.cacheWriteTokens,
+        costUsd: event.costUsd,
+        durationMs: event.durationMs,
+      };
+      const msgs = [...thread.messages];
+      const lastAssistantIdx = msgs.reduceRight((found, m, i) => found !== -1 ? found : m.role === "assistant" ? i : -1, -1);
+      if (lastAssistantIdx !== -1) {
+        msgs[lastAssistantIdx] = { ...msgs[lastAssistantIdx], turnStats: stats };
+      }
+      return { ...thread, messages: msgs };
+    }
     case "session_init": {
       console.log(`[thread ${thread.id}] session=${event.sessionId} model=${event.model}`);
       return { ...thread, claudeSessionId: event.sessionId, historyLoaded: true };
