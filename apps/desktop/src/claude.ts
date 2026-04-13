@@ -55,9 +55,12 @@ export class ClaudeSession {
   private messageResolve: ((value: IteratorResult<SDKUserMessage>) => void) | null = null;
   private closed = false;
 
-  constructor(claudePath: string, resumeSessionId?: string) {
+  private cwd: string | undefined;
+
+  constructor(claudePath: string, opts?: { resumeSessionId?: string; cwd?: string }) {
     this.claudePath = claudePath;
-    this.resumeSessionId = resumeSessionId;
+    this.resumeSessionId = opts?.resumeSessionId;
+    this.cwd = opts?.cwd;
   }
 
   private static toUserMessage(text: string): SDKUserMessage {
@@ -130,6 +133,7 @@ export class ClaudeSession {
       permissionMode: "bypassPermissions",
       allowDangerouslySkipPermissions: true,
       resume: this.resumeSessionId,
+      cwd: this.cwd,
     };
 
     this.queryInstance = query({

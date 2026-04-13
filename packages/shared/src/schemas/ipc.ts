@@ -1,5 +1,19 @@
 import { z } from "zod";
 
+// ── Project types ─────────────────────────────────────────────
+
+export const ProjectFolder = z.object({
+  id: z.string(),
+  path: z.string(),
+});
+
+export const ProjectInfo = z.object({
+  id: z.string(),
+  name: z.string(),
+  folders: z.array(ProjectFolder),
+});
+export type ProjectInfo = z.infer<typeof ProjectInfo>;
+
 // ── Session listing (invoke, not event) ───────────────────────
 
 export const SessionInfo = z.object({
@@ -9,6 +23,7 @@ export const SessionInfo = z.object({
   cwd: z.string().optional(),
   firstPrompt: z.string().optional(),
   gitBranch: z.string().optional(),
+  projectId: z.string().optional(),
 });
 export type SessionInfo = z.infer<typeof SessionInfo>;
 
@@ -52,6 +67,7 @@ export const IpcSessionInit = z.object({
   sessionId: z.string(),
   model: z.string(),
   cwd: z.string().optional(),
+  projectId: z.string().optional(),
 });
 
 export const IpcToolUse = z.object({

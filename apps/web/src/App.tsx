@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import { Sidebar } from "./components/Sidebar";
 import { ChatView } from "./components/ChatView";
-import { IpcEvent, SessionInfo, HistoryMessage } from "@openclawdex/shared";
+import { IpcEvent, SessionInfo, HistoryMessage, ProjectInfo } from "@openclawdex/shared";
 
 export type Provider = "claude" | "codex";
 
@@ -9,7 +9,7 @@ export interface Thread {
   id: string;
   name: string;
   provider: Provider;
-  project: string;
+  projectId: string | null;
   status: "idle" | "running" | "error";
   messages: Message[];
   branch?: string;
@@ -39,12 +39,12 @@ function msgId() {
   return `msg-${nextMsgId++}`;
 }
 
-function newThread(): Thread {
+function newThread(projectId: string | null): Thread {
   return {
     id: crypto.randomUUID(),
     name: "New conversation",
     provider: "claude",
-    project: "",
+    projectId,
     status: "idle",
     messages: [],
     historyLoaded: true,
@@ -53,12 +53,11 @@ function newThread(): Thread {
 }
 
 function sessionToThread(s: SessionInfo): Thread {
-  const project = s.cwd ? s.cwd.split("/").filter(Boolean).at(-1) ?? "" : "";
   return {
     id: s.sessionId,
     name: s.summary,
     provider: "claude",
-    project,
+    projectId: s.projectId ?? null,
     status: "idle",
     messages: [],
     branch: s.gitBranch,
@@ -106,8 +105,7 @@ function applyIpcEvent(thread: Thread, event: IpcEvent): Thread {
       return thread;
     case "session_init": {
       console.log(`[thread ${thread.id}] session=${event.sessionId} model=${event.model}`);
-      const project = event.cwd ? event.cwd.split("/").filter(Boolean).at(-1) ?? "" : thread.project;
-      return { ...thread, claudeSessionId: event.sessionId, historyLoaded: true, project };
+      return { ...thread, claudeSessionId: event.sessionId, historyLoaded: true };
     }
   }
 }
@@ -118,7 +116,8 @@ const SIDEBAR_DEFAULT = 240;
 
 export function App() {
   const [threads, setThreads] = useState<Thread[]>([]);
-  const [pendingThread, setPendingThread] = useState<Thread>(newThread);
+  const [projects, setProjects] = useState<ProjectInfo[]>([]);
+  const [pendingThread, setPendingThread] = useState<Thread | null>(null);
   const [threadsLoading, setThreadsLoading] = useState(true);
   const threadsRef = useRef(threads);
   threadsRef.current = threads;
@@ -132,14 +131,28 @@ export function App() {
   });
   const dragging = useRef(false);
 
-  // Real thread if selected, otherwise show the pending (not-yet-committed) thread
+  // Real thread if selected, pending thread if viewing the new-thread composer, or null
   const activeThread: Thread | null = activeThreadId
-    ? threads.find((t) => t.id === activeThreadId) ?? null
-    : pendingThread;
+    ? (activeThreadId === pendingThread?.id ? pendingThread : threads.find((t) => t.id === activeThreadId) ?? null)
+    : null;
 
-  // ── Load past sessions on mount ───────────────────────────
+  // ── Load projects ─────────────────────────────────────────────
+
+  const refreshProjects = useCallback(() => {
+    if (!window.openclawdex?.listProjects) return;
+    window.openclawdex.listProjects().then((raw) => {
+      const parsed = raw.map((p) => ProjectInfo.safeParse(p)).flatMap((r) => r.success ? [r.data] : []);
+      setProjects(parsed);
+    }).catch((err) => {
+      console.error("[listProjects] failed:", err);
+    });
+  }, []);
+
+  // ── Load past sessions on mount ───────────────────────────────
 
   useEffect(() => {
+    refreshProjects();
+
     if (!window.openclawdex?.listSessions) {
       setThreadsLoading(false);
       return;
@@ -151,7 +164,6 @@ export function App() {
           .sort((a, b) => b.lastModified - a.lastModified)
           .map(sessionToThread);
         setThreads((prev) => {
-          // Keep any in-progress threads at the top, history below
           const inProgress = prev.filter((t) => !t.claudeSessionId);
           return [...inProgress, ...historyThreads];
         });
@@ -164,7 +176,7 @@ export function App() {
     });
   }, []);
 
-  // ── IPC event listener ────────────────────────────────────
+  // ── IPC event listener ────────────────────────────────────────
 
   useEffect(() => {
     if (!window.openclawdex?.onEvent) return;
@@ -177,17 +189,20 @@ export function App() {
       }
       const event = parsed.data;
 
-      // Events for the pending thread are handled separately — it isn't in `threads` yet.
-      if (event.threadId === pendingThreadRef.current.id) {
+      // Events for the pending thread
+      if (pendingThreadRef.current && event.threadId === pendingThreadRef.current.id) {
         if (event.type === "session_init") {
-          // Now we have cwd — commit the pending thread to the sidebar.
-          const project = event.cwd ? event.cwd.split("/").filter(Boolean).at(-1) ?? "" : "";
-          const committed = { ...pendingThreadRef.current, claudeSessionId: event.sessionId, historyLoaded: true, project };
+          // Commit the pending thread to the sidebar.
+          const committed = {
+            ...pendingThreadRef.current,
+            claudeSessionId: event.sessionId,
+            historyLoaded: true,
+          };
           setThreads((prev) => [committed, ...prev]);
-          setActiveThreadId((prev) => (prev === null ? committed.id : prev));
-          setPendingThread(newThread());
+          // Keep activeThreadId pointing at this thread (same id)
+          setPendingThread(null);
         } else {
-          setPendingThread((prev) => applyIpcEvent(prev, event));
+          setPendingThread((prev) => prev ? applyIpcEvent(prev, event) : prev);
         }
         return;
       }
@@ -217,7 +232,7 @@ export function App() {
     });
   }, [activeThread?.id, activeThread?.historyLoaded]);
 
-  // ── Send message handler ──────────────────────────────────
+  // ── Send message handler ──────────────────────────────────────
 
   const handleSend = useCallback(
     (threadId: string, text: string) => {
@@ -228,12 +243,12 @@ export function App() {
         timestamp: new Date(),
       };
 
-      if (threadId === pendingThreadRef.current.id) {
-        // First message — update pendingThread but don't add to sidebar yet.
-        // We wait for session_init (which carries cwd/project) before committing.
+      const pending = pendingThreadRef.current;
+      if (pending && threadId === pending.id) {
+        // First message on pending thread — update it, send with projectId
         const name = text.length > 40 ? text.slice(0, 40) + "…" : text;
-        setPendingThread((prev) => ({ ...prev, name, status: "running", messages: [userMsg] }));
-        window.openclawdex?.send(pendingThreadRef.current.id, text, undefined);
+        setPendingThread((prev) => prev ? { ...prev, name, status: "running", messages: [userMsg] } : prev);
+        window.openclawdex?.send(pending.id, text, { projectId: pending.projectId ?? undefined });
       } else {
         setThreads((prev) =>
           prev.map((t) => {
@@ -242,25 +257,84 @@ export function App() {
           }),
         );
         const thread = threadsRef.current.find((t) => t.id === threadId);
-        window.openclawdex?.send(threadId, text, thread?.claudeSessionId);
+        window.openclawdex?.send(threadId, text, { resumeSessionId: thread?.claudeSessionId });
       }
     },
     [],
   );
 
-  // ── New thread handler ────────────────────────────────────
+  // ── New thread within a project ──────────────────────────────
 
-  const handleNewThread = useCallback(() => {
-    setActiveThreadId(null);
+  const handleNewThread = useCallback((projectId: string) => {
+    const thread = newThread(projectId);
+    setPendingThread(thread);
+    setActiveThreadId(thread.id);
   }, []);
 
-  // ── Interrupt handler ─────────────────────────────────────
+  // ── Create project (folder picker) ───────────────────────────
+
+  const handleCreateProject = useCallback(() => {
+    if (!window.openclawdex?.createProject) return;
+    window.openclawdex.createProject().then((project) => {
+      if (!project) return; // cancelled
+      const parsed = ProjectInfo.safeParse(project);
+      if (parsed.success) {
+        setProjects((prev) => [...prev, parsed.data]);
+        // Immediately start a new thread in the new project
+        const thread = newThread(parsed.data.id);
+        setPendingThread(thread);
+        setActiveThreadId(thread.id);
+      }
+    });
+  }, []);
+
+  // ── Interrupt handler ─────────────────────────────────────────
 
   const handleInterrupt = useCallback((threadId: string) => {
     window.openclawdex?.interrupt(threadId);
   }, []);
 
-  // ── Sidebar drag ──────────────────────────────────────────
+  // ── Project rename/delete handlers ────────────────────────────
+
+  const handleRenameProject = useCallback((projectId: string, name: string) => {
+    window.openclawdex?.renameProject(projectId, name).then(refreshProjects);
+  }, [refreshProjects]);
+
+  const handleDeleteProject = useCallback((projectId: string) => {
+    window.openclawdex?.deleteProject(projectId).then(() => {
+      setThreads((prev) => {
+        const removed = prev.filter((t) => t.projectId === projectId);
+        if (removed.some((t) => t.id === activeThreadId)) {
+          setActiveThreadId(null);
+        }
+        return prev.filter((t) => t.projectId !== projectId);
+      });
+      refreshProjects();
+    });
+  }, [refreshProjects, activeThreadId]);
+
+  // ── Thread rename/delete handlers ─────────────────────────────
+
+  const handleRenameThread = useCallback((threadId: string, name: string) => {
+    setThreads((prev) => prev.map((t) => t.id === threadId ? { ...t, name } : t));
+    const thread = threadsRef.current.find((t) => t.id === threadId);
+    if (thread?.claudeSessionId) {
+      window.openclawdex?.renameThread(thread.claudeSessionId, name);
+    }
+  }, []);
+
+  const handleDeleteThread = useCallback((threadId: string) => {
+    const thread = threadsRef.current.find((t) => t.id === threadId);
+    setThreads((prev) => prev.filter((t) => t.id !== threadId));
+    if (activeThreadId === threadId) {
+      setActiveThreadId(null);
+    }
+    if (thread?.claudeSessionId) {
+      window.openclawdex?.deleteThread(thread.claudeSessionId);
+    }
+  }, [activeThreadId]);
+
+  // ── Sidebar drag ──────────────────────────────────────────────
 
   const onDragStart = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -292,9 +366,15 @@ export function App() {
     <div className="flex h-full">
       <Sidebar
         threads={threads}
+        projects={projects}
         activeThreadId={activeThreadId}
         onSelectThread={setActiveThreadId}
         onNewThread={handleNewThread}
+        onCreateProject={handleCreateProject}
+        onRenameProject={handleRenameProject}
+        onDeleteProject={handleDeleteProject}
+        onRenameThread={handleRenameThread}
+        onDeleteThread={handleDeleteThread}
         width={sidebarWidth}
         isLoading={threadsLoading}
       />
@@ -321,7 +401,7 @@ export function App() {
         }}
       >
         <ChatView
-          thread={activeThread ?? null}
+          thread={activeThread}
           onSend={handleSend}
           onInterrupt={handleInterrupt}
         />

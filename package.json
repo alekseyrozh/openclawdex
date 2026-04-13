@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "pnpm --filter @openclawdex/web dev",
     "dev:desktop": "pnpm --filter @openclawdex/shared build && pnpm --filter @openclawdex/web dev & pnpm --filter @openclawdex/shared build && pnpm --filter @openclawdex/desktop dev",
-    "build": "pnpm --filter @openclawdex/web build"
+    "build": "pnpm --filter @openclawdex/web build",
+    "db:studio": "pnpm --filter @openclawdex/desktop db:studio",
+    "db:generate": "pnpm --filter @openclawdex/desktop db:generate"
   }
 }

@@ -9,6 +9,8 @@ export {
 } from "./schemas/claude-events";
 
 export {
+  ProjectFolder,
+  ProjectInfo,
   SessionInfo,
   HistoryMessage,
   IpcAssistantText,

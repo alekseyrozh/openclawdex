@@ -640,6 +640,7 @@ export function ChatView({ thread, onSend, onInterrupt }: ChatViewProps) {
 
   const isClaude = thread.provider === "claude";
   const modelLabel = isClaude ? selectedModel.label : "GPT-5.6";
+  const isStarted = thread.messages.length > 0;
 
   return (
     <div
@@ -796,10 +797,13 @@ export function ChatView({ thread, onSend, onInterrupt }: ChatViewProps) {
             <div className="flex items-center justify-between px-2 pb-2">
               <div className="flex items-center gap-0">
 <div className="relative" ref={modelDropdownRef}>
-                  <ControlButton onClick={() => isClaude && setModelDropdownOpen((v) => !v)}>
+                  <ControlButton
+                    onClick={() => isClaude && !isStarted && setModelDropdownOpen((v) => !v)}
+                    tooltip={isStarted ? "Can't change model after thread has started" : undefined}
+                  >
                     <ClaudeIcon className="w-[14px] h-[14px] shrink-0 text-[#D97757]" />
                     <span>{modelLabel}</span>
-                    <CaretDown size={10} weight="bold" />
+                    {isClaude && <CaretDown size={10} weight="bold" />}
                   </ControlButton>
                   {modelDropdownOpen && isClaude && (
                     <ModelDropdown
@@ -813,7 +817,10 @@ export function ChatView({ thread, onSend, onInterrupt }: ChatViewProps) {
                   )}
                 </div>
                 <div className="relative" ref={effortDropdownRef}>
-                  <ControlButton onClick={() => setEffortDropdownOpen((v) => !v)}>
+                  <ControlButton
+                    onClick={() => !isStarted && setEffortDropdownOpen((v) => !v)}
+                    tooltip={isStarted ? "Can't change effort after thread has started" : undefined}
+                  >
                     <span>{selectedEffort.label}</span>
                     <CaretDown size={10} weight="bold" />
                   </ControlButton>
@@ -914,23 +921,25 @@ function StatusButton({ children }: { children: React.ReactNode }) {
   );
 }
 
-function ControlButton({ children, onClick }: { children: React.ReactNode; onClick?: () => void }) {
+function ControlButton({ children, onClick, tooltip }: { children: React.ReactNode; onClick?: () => void; tooltip?: string }) {
   return (
-    <button
-      onClick={onClick}
-      className="flex items-center gap-1.5 px-2 py-[5px] rounded-xl text-[13px] font-medium transition-colors"
-      style={{ color: "var(--text-muted)" }}
-      onMouseEnter={(e) => {
-        e.currentTarget.style.background = "var(--border-subtle)";
-        e.currentTarget.style.color = "rgba(255,255,255,0.60)";
-      }}
-      onMouseLeave={(e) => {
-        e.currentTarget.style.background = "transparent";
-        e.currentTarget.style.color = "var(--text-muted)";
-      }}
-    >
-      {children}
-    </button>
+    <div className="relative group/ctrl">
+      <button
+        onClick={onClick}
+        className="flex items-center gap-1.5 px-2 py-[5px] rounded-xl text-[13px] font-medium transition-colors hover:bg-[var(--border-subtle)] hover:text-[rgba(255,255,255,0.60)]"
+        style={{ color: "var(--text-muted)" }}
+      >
+        {children}
+      </button>
+      {tooltip && (
+        <div
+          className="absolute bottom-full left-0 mb-1.5 px-2.5 py-1.5 rounded-lg text-[12px] whitespace-nowrap opacity-0 group-hover/ctrl:opacity-100 transition-opacity duration-150 pointer-events-none z-50"
+          style={{ background: "var(--surface-2)", color: "var(--text-secondary)", border: "1px solid var(--border-emphasis)" }}
+        >
+          {tooltip}
+        </div>
+      )}
+    </div>
   );
 }
 

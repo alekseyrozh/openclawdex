@@ -1,5 +1,7 @@
-import { app, BrowserWindow, ipcMain, nativeTheme } from "electron";
+import { app, BrowserWindow, ipcMain, nativeTheme, dialog } from "electron";
 import path from "path";
+import { randomUUID } from "crypto";
+import { eq } from "drizzle-orm";
 import { findClaudeBinary, ClaudeSession } from "./claude";
 import {
   listSessions,
@@ -8,7 +10,7 @@ import {
 import { z } from "zod";
 import type { IpcEvent } from "@openclawdex/shared";
 import { initDb, getDb } from "./db";
-import { knownThreads } from "./db/schema";
+import { knownThreads, projects, projectFolders } from "./db/schema";
 
 const DEV_URL = "http://localhost:3000";
 const IS_DEV = !app.isPackaged;
@@ -20,11 +22,14 @@ let mainWindow: BrowserWindow | null = null;
 const claudePath = findClaudeBinary();
 const sessions = new Map<string, ClaudeSession>();
 
-function getOrCreateSession(threadId: string, resumeSessionId?: string): ClaudeSession | null {
+function getOrCreateSession(
+  threadId: string,
+  opts?: { resumeSessionId?: string; cwd?: string },
+): ClaudeSession | null {
   if (!claudePath) return null;
   let session = sessions.get(threadId);
   if (!session) {
-    session = new ClaudeSession(claudePath, resumeSessionId);
+    session = new ClaudeSession(claudePath, opts);
     sessions.set(threadId, session);
   }
   return session;
@@ -33,6 +38,16 @@ function getOrCreateSession(threadId: string, resumeSessionId?: string): ClaudeS
 /** Send a validated IPC event to the renderer. */
 function emitToRenderer(event: IpcEvent): void {
   mainWindow?.webContents.send("claude:event", event);
+}
+
+/** Resolve the first folder path for a project, or undefined. */
+async function getProjectCwd(projectId: string): Promise<string | undefined> {
+  const rows = await getDb()
+    .select({ folderPath: projectFolders.folderPath })
+    .from(projectFolders)
+    .where(eq(projectFolders.projectId, projectId))
+    .limit(1);
+  return rows[0]?.folderPath;
 }
 
 // ── IPC handlers ──────────────────────────────────────────────
@@ -46,8 +61,14 @@ function setupIpcHandlers(): void {
   /** Send a user message to Claude for a given thread. */
   ipcMain.handle(
     "claude:send",
-    (_event, threadId: string, message: string, resumeSessionId?: string) => {
-      const session = getOrCreateSession(threadId, resumeSessionId);
+    async (_event, threadId: string, message: string, opts?: { resumeSessionId?: string; projectId?: string }) => {
+      // Resolve the project's folder as the session cwd
+      let cwd: string | undefined;
+      if (opts?.projectId) {
+        cwd = await getProjectCwd(opts.projectId);
+      }
+
+      const session = getOrCreateSession(threadId, { resumeSessionId: opts?.resumeSessionId, cwd });
       if (!session) {
         emitToRenderer({
           type: "error",
@@ -66,19 +87,21 @@ function setupIpcHandlers(): void {
             try {
               await getDb()
                 .insert(knownThreads)
-                .values({ sessionId: e.sessionId, createdAt: Date.now() })
+                .values({ sessionId: e.sessionId, createdAt: Date.now(), projectId: opts?.projectId ?? null })
                 .onConflictDoNothing();
             } catch (err) {
               console.error("[db] failed to register session:", err);
               emitToRenderer({ type: "error", threadId, message: "Failed to save session to database — your conversation won't appear in the sidebar after restart." });
               return;
             }
+
             emitToRenderer({
               type: "session_init",
               threadId,
               sessionId: e.sessionId,
               model: e.model,
-              cwd: process.cwd(),
+              cwd,
+              projectId: opts?.projectId,
             });
             break;
           }
@@ -135,18 +158,19 @@ function setupIpcHandlers(): void {
   ipcMain.handle("claude:list-sessions", async () => {
     const [all, known] = await Promise.all([
       listSessions(),
-      getDb().select({ sessionId: knownThreads.sessionId }).from(knownThreads),
+      getDb().select({ sessionId: knownThreads.sessionId, projectId: knownThreads.projectId, customName: knownThreads.customName }).from(knownThreads),
     ]);
-    const knownSet = new Set(known.map((r) => r.sessionId));
+    const knownMap = new Map(known.map((r) => [r.sessionId, { projectId: r.projectId ?? undefined, customName: r.customName ?? undefined }]));
     return all
-      .filter((s) => knownSet.has(s.sessionId))
+      .filter((s) => knownMap.has(s.sessionId))
       .map((s) => ({
         sessionId: s.sessionId,
-        summary: s.summary,
+        summary: knownMap.get(s.sessionId)?.customName ?? s.summary,
         lastModified: s.lastModified,
         cwd: s.cwd,
         firstPrompt: s.firstPrompt,
         gitBranch: s.gitBranch,
+        projectId: knownMap.get(s.sessionId)?.projectId,
       }));
   });
 
@@ -203,6 +227,98 @@ function setupIpcHandlers(): void {
     }
 
     return result;
+  });
+
+  // ── Project CRUD ──────────────────────────────────────────────
+
+  /** Create a project by picking a folder via native dialog. Returns the new project or null if cancelled. */
+  ipcMain.handle("projects:create", async () => {
+    if (!mainWindow) return null;
+    const result = await dialog.showOpenDialog(mainWindow, {
+      properties: ["openDirectory"],
+      message: "Choose a project folder",
+    });
+    if (result.canceled || result.filePaths.length === 0) return null;
+
+    const folderPath = result.filePaths[0];
+    const name = folderPath.split("/").filter(Boolean).at(-1) ?? folderPath;
+    const projectId = randomUUID();
+    const folderId = randomUUID();
+    const now = Date.now();
+
+    const db = getDb();
+    await db.insert(projects).values({ id: projectId, name, createdAt: now });
+    await db.insert(projectFolders).values({ id: folderId, projectId, folderPath, createdAt: now });
+
+    return { id: projectId, name, folders: [{ id: folderId, path: folderPath }] };
+  });
+
+  /** List all projects with their folders. */
+  ipcMain.handle("projects:list", async () => {
+    const db = getDb();
+    const [allProjects, allFolders] = await Promise.all([
+      db.select().from(projects),
+      db.select().from(projectFolders),
+    ]);
+    return allProjects.map((p) => ({
+      id: p.id,
+      name: p.name,
+      folders: allFolders
+        .filter((f) => f.projectId === p.id)
+        .map((f) => ({ id: f.id, path: f.folderPath })),
+    }));
+  });
+
+  /** Rename a project. */
+  ipcMain.handle("projects:rename", async (_event, projectId: string, name: string) => {
+    await getDb().update(projects).set({ name }).where(eq(projects.id, projectId));
+  });
+
+  /** Delete a project and all its threads. */
+  ipcMain.handle("projects:delete", async (_event, projectId: string) => {
+    const db = getDb();
+    // Close any live sessions for threads in this project
+    const threadRows = await db.select({ sessionId: knownThreads.sessionId }).from(knownThreads).where(eq(knownThreads.projectId, projectId));
+    for (const row of threadRows) {
+      const session = sessions.get(row.sessionId);
+      if (session) {
+        session.close();
+        sessions.delete(row.sessionId);
+      }
+    }
+    await db.delete(knownThreads).where(eq(knownThreads.projectId, projectId));
+    await db.delete(projectFolders).where(eq(projectFolders.projectId, projectId));
+    await db.delete(projects).where(eq(projects.id, projectId));
+  });
+
+  /** Add a folder to an existing project. */
+  ipcMain.handle("projects:add-folder", async (_event, projectId: string, folderPath: string) => {
+    const id = randomUUID();
+    await getDb().insert(projectFolders).values({ id, projectId, folderPath, createdAt: Date.now() });
+    return id;
+  });
+
+  /** Remove a folder from a project. */
+  ipcMain.handle("projects:remove-folder", async (_event, folderId: string) => {
+    await getDb().delete(projectFolders).where(eq(projectFolders.id, folderId));
+  });
+
+  // ── Thread CRUD ───────────────────────────────────────────────
+
+  /** Rename a thread (sets a custom name override). */
+  ipcMain.handle("threads:rename", async (_event, sessionId: string, name: string) => {
+    await getDb().update(knownThreads).set({ customName: name }).where(eq(knownThreads.sessionId, sessionId));
+  });
+
+  /** Delete a thread from the sidebar. */
+  ipcMain.handle("threads:delete", async (_event, sessionId: string) => {
+    // Close the live session if running
+    const session = sessions.get(sessionId);
+    if (session) {
+      session.close();
+      sessions.delete(sessionId);
+    }
+    await getDb().delete(knownThreads).where(eq(knownThreads.sessionId, sessionId));
   });
 }
 

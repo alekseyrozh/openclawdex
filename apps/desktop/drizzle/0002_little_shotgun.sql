@@ -1,0 +1,1 @@
+ALTER TABLE `known_threads` ADD `custom_name` text;
