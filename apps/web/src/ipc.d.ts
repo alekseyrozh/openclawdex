@@ -18,6 +18,7 @@ declare global {
     deleteProject: (projectId: string) => Promise<void>;
     addFolder: (projectId: string, folderPath: string) => Promise<string>;
     removeFolder: (folderId: string) => Promise<void>;
+    getGitBranch: (cwd: string) => Promise<string | null>;
     renameThread: (sessionId: string, name: string) => Promise<void>;
     deleteThread: (sessionId: string) => Promise<void>;
     onEvent: (callback: (event: unknown) => void) => () => void;

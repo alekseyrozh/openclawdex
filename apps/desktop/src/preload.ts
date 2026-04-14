@@ -50,6 +50,12 @@ contextBridge.exposeInMainWorld("openclawdex", {
   removeFolder: (folderId: string): Promise<void> =>
     ipcRenderer.invoke("projects:remove-folder", folderId),
 
+  // ── Git ─────────────────────────────────────────────────────
+
+  /** Get the current git branch for a directory. */
+  getGitBranch: (cwd: string): Promise<string | null> =>
+    ipcRenderer.invoke("git:branch", cwd),
+
   // ── Threads ─────────────────────────────────────────────────
 
   /** Rename a thread. */

@@ -3,6 +3,7 @@ import {
   GearSix,
   CaretDown,
   CaretRight,
+  Folder,
   FolderOpen,
   DotsThree,
   PencilSimple,
@@ -84,7 +85,6 @@ export function Sidebar({
       className="flex flex-col shrink-0 select-none spinner-sync"
       style={{
         width: `${width}px`,
-        background: "rgba(24, 24, 24, 0.30)",
       }}
     >
       {/* Traffic light spacer */}
@@ -207,7 +207,7 @@ export function Sidebar({
             className="relative z-10 flex flex-col rounded-2xl"
             style={{
               width: "min(440px, calc(100vw - 80px))",
-              maxHeight: "min(520px, calc(100vh - 120px))",
+              height: "min(520px, calc(100vh - 120px))",
               background: "#1c1c1c",
               border: "1px solid rgba(255,255,255,0.08)",
               boxShadow: "0 24px 80px rgba(0,0,0,0.6), 0 0 0 0.5px rgba(255,255,255,0.06)",
@@ -246,7 +246,7 @@ export function Sidebar({
             </div>
 
             {/* Thread list */}
-            <div className="flex-1 overflow-y-auto px-3 pb-3">
+            <ScrollArea className="flex-1 px-3 pb-3">
               {archivedThreads.map((thread) => (
                 <ThreadRow
                   key={thread.id}
@@ -261,7 +261,7 @@ export function Sidebar({
                   onArchive={() => onArchiveThread(thread.id)}
                 />
               ))}
-            </div>
+            </ScrollArea>
           </div>
         </div>
       )}
@@ -519,6 +519,9 @@ function ProjectGroup({
     <div className="mb-1">
       <div
         className="group flex items-center w-full px-2 py-[5px] mb-[2px] rounded-xl transition-colors"
+        onClick={() => {
+          if (!renaming) setCollapsed(!collapsed);
+        }}
         onMouseEnter={(e) =>
           (e.currentTarget.style.background = "rgba(255,255,255,0.04)")
         }
@@ -527,8 +530,7 @@ function ProjectGroup({
         }}
       >
         {/* Collapse toggle + name */}
-        <button
-          onClick={() => setCollapsed(!collapsed)}
+        <div
           className="flex items-center gap-1.5 flex-1 min-w-0"
         >
           {collapsed ? (
@@ -544,11 +546,19 @@ function ProjectGroup({
               style={{ color: "rgba(255, 255, 255, 0.6)", flexShrink: 0 }}
             />
           )}
-          <FolderOpen
-            size={15}
-            weight="regular"
-            style={{ color: "rgba(255, 255, 255, 0.6)", flexShrink: 0, marginLeft: 8 }}
-          />
+          {collapsed ? (
+            <Folder
+              size={15}
+              weight="regular"
+              style={{ color: "rgba(255, 255, 255, 0.6)", flexShrink: 0, marginLeft: 8 }}
+            />
+          ) : (
+            <FolderOpen
+              size={15}
+              weight="regular"
+              style={{ color: "rgba(255, 255, 255, 0.6)", flexShrink: 0, marginLeft: 8 }}
+            />
+          )}
           {renaming ? (
             <input
               value={renameValue}
@@ -578,7 +588,7 @@ function ProjectGroup({
               {project.name}
             </span>
           )}
-        </button>
+        </div>
 
         {/* Context menu button — shown on hover */}
         <div className="relative shrink-0 flex items-center">
@@ -602,7 +612,7 @@ function ProjectGroup({
             <>
               <div
                 className="fixed inset-0 z-[60]"
-                onClick={() => setMenuOpen(false)}
+                onClick={(e) => { e.stopPropagation(); setMenuOpen(false); }}
               />
               <div
                 ref={menuRef}
