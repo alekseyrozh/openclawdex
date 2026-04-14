@@ -39,8 +39,14 @@ export const SessionInfo = z.object({
 });
 export type SessionInfo = z.infer<typeof SessionInfo>;
 
+export const HistoryImage = z.object({
+  mediaType: z.string(),
+  base64: z.string(),
+});
+export type HistoryImage = z.infer<typeof HistoryImage>;
+
 export const HistoryMessage = z.discriminatedUnion("role", [
-  z.object({ id: z.string(), role: z.literal("user"), content: z.string() }),
+  z.object({ id: z.string(), role: z.literal("user"), content: z.string(), images: z.array(HistoryImage).optional() }),
   z.object({ id: z.string(), role: z.literal("assistant"), content: z.string() }),
   z.object({ id: z.string(), role: z.literal("tool_use"), toolName: z.string(), toolInput: z.record(z.string(), z.unknown()).optional() }),
 ]);

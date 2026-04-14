@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import { Sidebar } from "./components/Sidebar";
 import { ChatView } from "./components/ChatView";
+import type { ImagePayload } from "./components/ChatView";
 import { IpcEvent, SessionInfo, HistoryMessage, ProjectInfo, ContextStats } from "@openclawdex/shared";
 export type { ContextStats };
 
@@ -24,6 +25,11 @@ export interface Thread {
   pendingToolUseId?: string;
 }
 
+export interface MessageImage {
+  name: string;
+  url: string;
+}
+
 export interface Message {
   id: string;
   role: "user" | "assistant" | "tool_use";
@@ -33,6 +39,7 @@ export interface Message {
   collapsed?: number;
   toolName?: string;
   toolInput?: Record<string, unknown>;
+  images?: MessageImage[];
 }
 
 export interface FileChange {
@@ -99,7 +106,14 @@ function historyToMessages(items: HistoryMessage[]): Message[] {
     if (h.role === "tool_use") {
       return { id: h.id, role: "tool_use" as const, content: "", timestamp: new Date(), toolName: h.toolName, toolInput: h.toolInput };
     }
-    return { id: h.id, role: h.role, content: h.content, timestamp: new Date() };
+    const images: MessageImage[] | undefined =
+      h.role === "user" && h.images && h.images.length > 0
+        ? h.images.map((img) => ({
+            name: "image",
+            url: `data:${img.mediaType};base64,${img.base64}`,
+          }))
+        : undefined;
+    return { id: h.id, role: h.role, content: h.content, timestamp: new Date(), ...(images && { images }) };
   });
 }
 
@@ -128,7 +142,6 @@ function applyIpcEvent(thread: Thread, event: IpcEvent): Thread {
     case "error":
       return { ...thread, status: "error" as const, messages: [...thread.messages, { id: msgId(), role: "assistant" as const, content: `Error: ${event.message}`, timestamp: new Date() }] };
     case "result": {
-      console.log("[renderer] result event received:", JSON.stringify(event));
       const contextStats: ContextStats = {
         ...(event.totalTokens != null && { totalTokens: event.totalTokens }),
         ...(event.maxTokens != null && { maxTokens: event.maxTokens }),
@@ -136,15 +149,12 @@ function applyIpcEvent(thread: Thread, event: IpcEvent): Thread {
         costUsd: event.costUsd,
         durationMs: event.durationMs,
       };
-      console.log("[renderer] contextStats set:", JSON.stringify(contextStats));
       return { ...thread, contextStats };
     }
     case "session_init": {
-      console.log(`[thread ${thread.id}] session=${event.sessionId} model=${event.model}`);
       return { ...thread, claudeSessionId: event.sessionId, historyLoaded: true };
     }
     case "deferred_tool_use": {
-      console.log(`[thread ${thread.id}] deferred tool: ${event.toolName} (id=${event.toolUseId})`);
       return { ...thread, pendingToolUseId: event.toolUseId };
     }
   }
@@ -301,12 +311,18 @@ export function App() {
   // ── Send message handler ──────────────────────────────────────
 
   const handleSend = useCallback(
-    (threadId: string, text: string) => {
+    (threadId: string, text: string, images?: ImagePayload[]) => {
+      const msgImages: MessageImage[] | undefined = images?.map((img) => ({
+        name: img.name,
+        url: `data:${img.mediaType};base64,${img.base64}`,
+      }));
+
       const userMsg: Message = {
         id: msgId(),
         role: "user",
         content: text,
         timestamp: new Date(),
+        ...(msgImages && msgImages.length > 0 && { images: msgImages }),
       };
 
       const pending = pendingThreadRef.current;
@@ -314,7 +330,7 @@ export function App() {
         // First message on pending thread — update it, send with projectId
         const name = text.length > 40 ? text.slice(0, 40) + "…" : text;
         setPendingThread((prev) => prev ? { ...prev, name, status: "running", messages: [userMsg] } : prev);
-        window.openclawdex?.send(pending.id, text, { projectId: pending.projectId ?? undefined });
+        window.openclawdex?.send(pending.id, text, { projectId: pending.projectId ?? undefined, images });
       } else {
         setThreads((prev) =>
           prev.map((t) => {
@@ -323,7 +339,7 @@ export function App() {
           }),
         );
         const thread = threadsRef.current.find((t) => t.id === threadId);
-        window.openclawdex?.send(threadId, text, { resumeSessionId: thread?.claudeSessionId, projectId: thread?.projectId ?? undefined });
+        window.openclawdex?.send(threadId, text, { resumeSessionId: thread?.claudeSessionId, projectId: thread?.projectId ?? undefined, images });
       }
     },
     [],
