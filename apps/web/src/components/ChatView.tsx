@@ -282,7 +282,7 @@ function MessageHoverBar({ message, reverse }: { message: Message; reverse?: boo
 
   return (
     <div
-      className={`flex items-center mt-1.5${reverse ? " flex-row-reverse gap-3" : " gap-2"}`}
+      className={`flex items-center mt-3${reverse ? " flex-row-reverse gap-3" : " gap-2"}`}
       style={{ color: "rgba(255,255,255,0.60)" }}
     >
       <button
@@ -440,7 +440,7 @@ function TokenProgressIndicator({ stats }: { stats: ContextStats }) {
   );
 }
 
-function MessageBlock({ message, isStreaming, showHoverBar }: { message: Message; isStreaming: boolean; showHoverBar: boolean }) {
+function MessageBlock({ message, isStreaming, showHoverBar, onImageClick }: { message: Message; isStreaming: boolean; showHoverBar: boolean; onImageClick?: (url: string) => void }) {
   if (message.collapsed) {
     return <CollapsedIndicator count={message.collapsed} />;
   }
@@ -460,9 +460,10 @@ function MessageBlock({ message, isStreaming, showHoverBar }: { message: Message
               <img
                 key={i}
                 src={img.url}
-                alt={img.name || "attachment"}
-                className="max-w-[260px] max-h-[200px] rounded-2xl object-cover"
+                alt="attachment"
+                className="max-w-[260px] max-h-[200px] rounded-2xl object-cover cursor-pointer transition-opacity hover:opacity-80"
                 style={{ border: "1px solid var(--border-default)" }}
+                onClick={() => onImageClick?.(img.url)}
               />
             ))}
           </div>
@@ -909,6 +910,9 @@ export function ChatView({ thread, onSend, onInterrupt, onRespondToTool }: ChatV
   const currentThreadIdRef = useRef<string | undefined>(undefined);
   const prevHistoryLoadedRef = useRef<boolean | undefined>(undefined);
 
+  // ── Image lightbox ──────────────────────────────────────────
+  const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
+
   // ── Image attachments ──────────────────────────────────────
   const [attachments, setAttachments] = useState<ImageAttachment[]>([]);
   const [isDragOver, setIsDragOver] = useState(false);
@@ -1149,6 +1153,7 @@ export function ChatView({ thread, onSend, onInterrupt, onRespondToTool }: ChatV
                       message={msg}
                       isStreaming={false}
                       showHoverBar={msg.role === "user"}
+                      onImageClick={setLightboxUrl}
                     />
                   );
                   i++;
@@ -1198,11 +1203,12 @@ export function ChatView({ thread, onSend, onInterrupt, onRespondToTool }: ChatV
                             message={m}
                             isStreaming={m.id === streamingMsgId}
                             showHoverBar={false}
+                            onImageClick={setLightboxUrl}
                           />
                         );
                       })}
                       {lastAssistantMsg && isTurnComplete && (
-                        <div className="px-1 transition-opacity duration-300 opacity-0 group-hover/turn:opacity-100">
+                        <div className="-mt-4 px-1 transition-opacity duration-300 opacity-0 group-hover/turn:opacity-100">
                           <MessageHoverBar message={lastAssistantMsg} />
                         </div>
                       )}
@@ -1448,6 +1454,28 @@ export function ChatView({ thread, onSend, onInterrupt, onRespondToTool }: ChatV
           </div>
         </div>
       </div>
+
+      {/* Image lightbox */}
+      {lightboxUrl && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center outline-none"
+          style={{ background: "rgba(0, 0, 0, 0.80)" }}
+          onClick={() => setLightboxUrl(null)}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") setLightboxUrl(null);
+          }}
+          tabIndex={-1}
+          ref={(el) => el?.focus()}
+        >
+          <img
+            src={lightboxUrl}
+            alt="Preview"
+            className="max-w-[90vw] max-h-[90vh] rounded-2xl object-contain"
+            style={{ boxShadow: "0 8px 40px rgba(0, 0, 0, 0.5)" }}
+            onClick={(e) => e.stopPropagation()}
+          />
+        </div>
+      )}
     </div>
   );
 }
