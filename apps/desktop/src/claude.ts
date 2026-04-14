@@ -32,11 +32,13 @@ export function findClaudeBinary(): string | null {
 
 export type ContextUsage = { totalTokens: number; maxTokens: number; percentage: number };
 
+export type DeferredToolUse = { id: string; name: string; input: Record<string, unknown> };
+
 export type SessionEvent =
   | { kind: "init"; sessionId: string; model: string }
   | { kind: "text_delta"; text: string }
   | { kind: "tool_use"; toolName: string; toolInput: Record<string, unknown> }
-  | { kind: "result"; costUsd: number; durationMs: number; isError: boolean; contextUsage: ContextUsage | null }
+  | { kind: "result"; costUsd: number; durationMs: number; isError: boolean; contextUsage: ContextUsage | null; deferredToolUse: DeferredToolUse | null }
   | { kind: "error"; message: string }
   | { kind: "done" };
 
@@ -73,8 +75,7 @@ export class ClaudeSession {
     };
   }
 
-  private pushMessage(text: string) {
-    const msg = ClaudeSession.toUserMessage(text);
+  private enqueueMessage(msg: SDKUserMessage) {
     if (this.messageResolve) {
       const resolve = this.messageResolve;
       this.messageResolve = null;
@@ -82,6 +83,10 @@ export class ClaudeSession {
     } else {
       this.messageQueue.push(msg);
     }
+  }
+
+  private pushMessage(text: string) {
+    this.enqueueMessage(ClaudeSession.toUserMessage(text));
   }
 
   private closeQueue() {
@@ -161,12 +166,25 @@ export class ClaudeSession {
           } catch (err) {
             console.error("[claude] getContextUsage failed:", err);
           }
+
+          // Check for deferred tool use (e.g. AskUserQuestion)
+          const msgRecord = msg as Record<string, unknown>;
+          const rawDeferred = msgRecord.deferred_tool_use as { id: string; name: string; input: Record<string, unknown> } | undefined;
+          const deferredToolUse: DeferredToolUse | null = rawDeferred
+            ? { id: rawDeferred.id, name: rawDeferred.name, input: rawDeferred.input }
+            : null;
+
+          if (deferredToolUse) {
+            console.log(`[claude] deferred tool use: ${deferredToolUse.name} (id=${deferredToolUse.id})`);
+          }
+
           onEvent({
             kind: "result",
             costUsd: msg.total_cost_usd,
             durationMs: msg.duration_ms,
             isError: msg.is_error,
             contextUsage,
+            deferredToolUse,
           });
         } else {
           this.handleMessage(msg, onEvent);
@@ -227,6 +245,19 @@ export class ClaudeSession {
 
       // All other message types (rate_limit_event, tool_progress, etc.) — ignore
     }
+  }
+
+  /**
+   * Respond to a deferred tool call (e.g. AskUserQuestion).
+   * Pushes a user message with `parent_tool_use_id` so the SDK
+   * routes it as the tool result, allowing Claude to continue.
+   */
+  respondToTool(toolUseId: string, text: string): void {
+    this.enqueueMessage({
+      type: "user",
+      message: { role: "user", content: text },
+      parent_tool_use_id: toolUseId,
+    });
   }
 
   /** Interrupt the current turn. */

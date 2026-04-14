@@ -148,8 +148,21 @@ function setupIpcHandlers(): void {
             }
 
             emitToRenderer({ type: "result", threadId, ...contextStats });
-            // Turn is complete — mark thread as idle so user can send follow-ups
-            emitToRenderer({ type: "status", threadId, status: "idle" });
+
+            if (e.deferredToolUse) {
+              // Tool is waiting for user input (e.g. AskUserQuestion) — pause and wait
+              emitToRenderer({
+                type: "deferred_tool_use",
+                threadId,
+                toolUseId: e.deferredToolUse.id,
+                toolName: e.deferredToolUse.name,
+                toolInput: e.deferredToolUse.input,
+              });
+              emitToRenderer({ type: "status", threadId, status: "awaiting_input" });
+            } else {
+              // Turn is complete — mark thread as idle so user can send follow-ups
+              emitToRenderer({ type: "status", threadId, status: "idle" });
+            }
             break;
           }
 
@@ -172,6 +185,14 @@ function setupIpcHandlers(): void {
   /** Interrupt the current Claude turn for a thread. */
   ipcMain.handle("claude:interrupt", (_event, threadId: string) => {
     sessions.get(threadId)?.interrupt();
+  });
+
+  /** Respond to a deferred tool call (e.g. AskUserQuestion). */
+  ipcMain.handle("claude:respond-to-tool", (_event, threadId: string, toolUseId: string, responseText: string) => {
+    const session = sessions.get(threadId);
+    if (!session) return;
+    emitToRenderer({ type: "status", threadId, status: "running" });
+    session.respondToTool(toolUseId, responseText);
   });
 
   /** List only sessions started from this UI. */

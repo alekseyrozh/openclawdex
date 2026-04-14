@@ -20,6 +20,8 @@ export interface Thread {
   contextStats?: ContextStats;
   archived?: boolean;
   needsAttention?: boolean;
+  /** ID of a tool call waiting for user input (e.g. AskUserQuestion). */
+  pendingToolUseId?: string;
 }
 
 export interface Message {
@@ -140,6 +142,10 @@ function applyIpcEvent(thread: Thread, event: IpcEvent): Thread {
     case "session_init": {
       console.log(`[thread ${thread.id}] session=${event.sessionId} model=${event.model}`);
       return { ...thread, claudeSessionId: event.sessionId, historyLoaded: true };
+    }
+    case "deferred_tool_use": {
+      console.log(`[thread ${thread.id}] deferred tool: ${event.toolName} (id=${event.toolUseId})`);
+      return { ...thread, pendingToolUseId: event.toolUseId };
     }
   }
 }
@@ -357,6 +363,34 @@ export function App() {
     });
   }, []);
 
+  // ── Respond to deferred tool (e.g. AskUserQuestion) ──────────
+
+  const handleRespondToTool = useCallback(
+    (threadId: string, toolUseId: string, text: string) => {
+      const userMsg: Message = {
+        id: msgId(),
+        role: "user",
+        content: text,
+        timestamp: new Date(),
+      };
+
+      // Update thread: add user message, clear pending, set running
+      const updateThread = (t: Thread): Thread =>
+        t.id === threadId
+          ? { ...t, status: "running" as const, pendingToolUseId: undefined, messages: [...t.messages, userMsg] }
+          : t;
+
+      if (pendingThreadRef.current?.id === threadId) {
+        setPendingThread((prev) => prev ? updateThread(prev) as Thread : prev);
+      } else {
+        setThreads((prev) => prev.map(updateThread));
+      }
+
+      window.openclawdex?.respondToTool(threadId, toolUseId, text);
+    },
+    [],
+  );
+
   // ── Interrupt handler ─────────────────────────────────────────
 
   const handleInterrupt = useCallback((threadId: string) => {
@@ -493,6 +527,7 @@ export function App() {
           thread={activeThread}
           onSend={handleSend}
           onInterrupt={handleInterrupt}
+          onRespondToTool={handleRespondToTool}
         />
       </div>
     </div>
