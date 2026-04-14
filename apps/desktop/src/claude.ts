@@ -30,11 +30,13 @@ export function findClaudeBinary(): string | null {
   }
 }
 
+export type ContextUsage = { totalTokens: number; maxTokens: number; percentage: number };
+
 export type SessionEvent =
   | { kind: "init"; sessionId: string; model: string }
   | { kind: "text_delta"; text: string }
   | { kind: "tool_use"; toolName: string; toolInput: Record<string, unknown> }
-  | { kind: "result"; costUsd: number; durationMs: number; isError: boolean; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number }
+  | { kind: "result"; costUsd: number; durationMs: number; isError: boolean; contextUsage: ContextUsage | null }
   | { kind: "error"; message: string }
   | { kind: "done" };
 
@@ -147,7 +149,28 @@ export class ClaudeSession {
   private async consumeStream(onEvent: (e: SessionEvent) => void): Promise<void> {
     try {
       for await (const msg of this.queryInstance!) {
-        this.handleMessage(msg, onEvent);
+        if (msg.type === "result") {
+          // Call getContextUsage here — queryInstance is provably alive inside the loop.
+          let contextUsage: ContextUsage | null = null;
+          try {
+            const u = await this.queryInstance?.getContextUsage();
+            console.log("[claude] getContextUsage:", u != null ? `totalTokens=${u.totalTokens} maxTokens=${u.maxTokens} pct=${u.percentage}` : "null");
+            if (u != null) {
+              contextUsage = { totalTokens: u.totalTokens, maxTokens: u.maxTokens, percentage: u.percentage };
+            }
+          } catch (err) {
+            console.error("[claude] getContextUsage failed:", err);
+          }
+          onEvent({
+            kind: "result",
+            costUsd: msg.total_cost_usd,
+            durationMs: msg.duration_ms,
+            isError: msg.is_error,
+            contextUsage,
+          });
+        } else {
+          this.handleMessage(msg, onEvent);
+        }
       }
     } catch (err) {
       onEvent({
@@ -202,30 +225,7 @@ export class ClaudeSession {
         break;
       }
 
-      case "result": {
-        onEvent({
-          kind: "result",
-          costUsd: msg.total_cost_usd,
-          durationMs: msg.duration_ms,
-          isError: msg.is_error,
-          inputTokens: msg.usage.input_tokens,
-          outputTokens: msg.usage.output_tokens,
-          cacheReadTokens: msg.usage.cache_read_input_tokens,
-          cacheWriteTokens: msg.usage.cache_creation_input_tokens,
-        });
-        break;
-      }
-
       // All other message types (rate_limit_event, tool_progress, etc.) — ignore
-    }
-  }
-
-  /** Fetch context window usage from the active session. */
-  async getContextUsage() {
-    try {
-      return await this.queryInstance?.getContextUsage() ?? null;
-    } catch {
-      return null;
     }
   }
 

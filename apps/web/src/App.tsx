@@ -11,7 +11,7 @@ export interface Thread {
   name: string;
   provider: Provider;
   projectId: string | null;
-  status: "idle" | "running" | "error";
+  status: "idle" | "running" | "error" | "awaiting_input";
   messages: Message[];
   branch?: string;
   claudeSessionId?: string;
@@ -19,6 +19,7 @@ export interface Thread {
   lastModified: Date;
   contextStats?: ContextStats;
   archived?: boolean;
+  needsAttention?: boolean;
 }
 
 export interface Message {
@@ -125,6 +126,7 @@ function applyIpcEvent(thread: Thread, event: IpcEvent): Thread {
     case "error":
       return { ...thread, status: "error" as const, messages: [...thread.messages, { id: msgId(), role: "assistant" as const, content: `Error: ${event.message}`, timestamp: new Date() }] };
     case "result": {
+      console.log("[renderer] result event received:", JSON.stringify(event));
       const contextStats: ContextStats = {
         ...(event.totalTokens != null && { totalTokens: event.totalTokens }),
         ...(event.maxTokens != null && { maxTokens: event.maxTokens }),
@@ -132,6 +134,7 @@ function applyIpcEvent(thread: Thread, event: IpcEvent): Thread {
         costUsd: event.costUsd,
         durationMs: event.durationMs,
       };
+      console.log("[renderer] contextStats set:", JSON.stringify(contextStats));
       return { ...thread, contextStats };
     }
     case "session_init": {
@@ -155,6 +158,8 @@ export function App() {
   const pendingThreadRef = useRef(pendingThread);
   pendingThreadRef.current = pendingThread;
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
+  const activeThreadIdRef = useRef(activeThreadId);
+  activeThreadIdRef.current = activeThreadId;
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     const saved = localStorage.getItem("sidebarWidth");
     const parsed = saved ? parseInt(saved, 10) : NaN;
@@ -239,7 +244,15 @@ export function App() {
       }
 
       // Events for already-committed threads.
-      setThreads((prev) => prev.map((t) => t.id !== event.threadId ? t : applyIpcEvent(t, event)));
+      setThreads((prev) => prev.map((t) => {
+        if (t.id !== event.threadId) return t;
+        const updated = applyIpcEvent(t, event);
+        // Mark needs-attention when thread goes idle while not being viewed
+        if (event.type === "status" && event.status === "idle" && t.id !== activeThreadIdRef.current) {
+          return { ...updated, needsAttention: true };
+        }
+        return updated;
+      }));
     });
 
     return unsubscribe;
@@ -293,6 +306,13 @@ export function App() {
     },
     [],
   );
+
+  // ── Select thread (clears attention badge) ────────────────────
+
+  const handleSelectThread = useCallback((id: string) => {
+    setActiveThreadId(id);
+    setThreads((prev) => prev.map((t) => t.id === id ? { ...t, needsAttention: false } : t));
+  }, []);
 
   // ── New thread within a project ──────────────────────────────
 
@@ -418,7 +438,7 @@ export function App() {
         threads={threads}
         projects={projects}
         activeThreadId={activeThreadId}
-        onSelectThread={setActiveThreadId}
+        onSelectThread={handleSelectThread}
         onNewThread={handleNewThread}
         onCreateProject={handleCreateProject}
         onRenameProject={handleRenameProject}

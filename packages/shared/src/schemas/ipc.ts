@@ -57,7 +57,7 @@ export const IpcAssistantText = z.object({
 export const IpcStatus = z.object({
   type: z.literal("status"),
   threadId: z.string(),
-  status: z.enum(["running", "idle", "error"]),
+  status: z.enum(["running", "idle", "error", "awaiting_input"]),
 });
 
 export const IpcResult = z.object({

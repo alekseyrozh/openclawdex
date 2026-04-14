@@ -85,6 +85,32 @@ svg {
   animation: token-fade 0.25s ease-out forwards;
 }
 
+/* Spinner sync: animate a custom property on a shared wrapper,
+   all spinners inside inherit the same angle */
+@property --spinner-angle {
+  syntax: "<angle>";
+  initial-value: 0deg;
+  inherits: true;
+}
+
+@keyframes global-spin {
+  to { --spinner-angle: 360deg; }
+}
+
+.spinner-sync {
+  animation: global-spin 1.2s linear infinite;
+}
+
+.thread-spinner {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(255, 255, 255, 0.12);
+  border-top-color: rgba(255, 255, 255, 0.8);
+  transform: rotate(var(--spinner-angle));
+  will-change: transform;
+}
+
 /* Thinking shimmer — a highlight sweeps left-to-right on repeat */
 @keyframes shimmer {
   0% {

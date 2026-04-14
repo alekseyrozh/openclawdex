@@ -362,12 +362,10 @@ function TokenProgressIndicator({ stats }: { stats: ContextStats }) {
   const pct = hasContext ? Math.round(stats.percentage!) : null;
 
   function fmt(n: number) {
-    return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+    if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+    if (n >= 1000) return `${(n / 1000).toFixed(0)}k`;
+    return String(n);
   }
-  const costStr = stats.costUsd < 0.01
-    ? `$${stats.costUsd.toFixed(4)}`
-    : `$${stats.costUsd.toFixed(3)}`;
-  const durationSec = (stats.durationMs / 1000).toFixed(1);
 
   return (
     <div className="relative group/token ml-auto">
@@ -421,16 +419,6 @@ function TokenProgressIndicator({ stats }: { stats: ContextStats }) {
         ) : (
           <div className="mb-2" style={{ color: "var(--text-muted)" }}>Usage unavailable</div>
         )}
-        <div className="pt-2" style={{ borderTop: "1px solid var(--border-subtle)" }}>
-          <div className="flex justify-between gap-4 mt-1.5">
-            <span style={{ color: "var(--text-muted)" }}>cost</span>
-            <span>{costStr}</span>
-          </div>
-          <div className="flex justify-between gap-4">
-            <span style={{ color: "var(--text-muted)" }}>duration</span>
-            <span>{durationSec}s</span>
-          </div>
-        </div>
       </div>
     </div>
   );
@@ -920,6 +908,13 @@ export function ChatView({ thread, onSend, onInterrupt }: ChatViewProps) {
     if (!thread || !input.trim() || thread.status === "running") return;
     onSend(thread.id, input.trim());
     setInput("");
+    // Reset textarea height — onInput doesn't fire for programmatic value changes,
+    // so the expanded inline style would stick until the user types again.
+    const el = textareaRef.current;
+    if (el) {
+      el.style.height = "auto";
+      el.style.overflowY = "hidden";
+    }
   };
 
   useEffect(() => {
@@ -1204,13 +1199,13 @@ export function ChatView({ thread, onSend, onInterrupt }: ChatViewProps) {
             <StatusButton>
               <Monitor size={14} weight="regular" />
               <span>Local</span>
-              <CaretDown size={10} weight="bold" />
+              {/* <CaretDown size={10} weight="bold" /> */}
             </StatusButton>
             {thread.branch && (
               <StatusButton>
                 <GitBranch size={14} weight="regular" />
                 <span>{thread.branch}</span>
-                <CaretDown size={10} weight="bold" />
+                {/* <CaretDown size={10} weight="bold" /> */}
               </StatusButton>
             )}
             {thread.contextStats && (

@@ -127,17 +127,12 @@ function setupIpcHandlers(): void {
             break;
 
           case "result": {
-            // Fetch real context window stats from the SDK
-            const usage = await session.getContextUsage();
             const contextStats = {
-              ...(usage != null && {
-                totalTokens: usage.totalTokens,
-                maxTokens: usage.maxTokens,
-                percentage: usage.percentage,
-              }),
+              ...(e.contextUsage != null && e.contextUsage),
               costUsd: e.costUsd,
               durationMs: e.durationMs,
             };
+            console.log("[main] result — contextStats:", JSON.stringify(contextStats));
 
             // Persist to DB so it survives restarts
             if (currentSessionId) {
