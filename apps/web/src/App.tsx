@@ -276,6 +276,22 @@ export function App() {
     });
   }, [activeThread?.id, activeThread?.historyLoaded]);
 
+  // ── Resolve git branch for the active thread if missing ──────
+
+  useEffect(() => {
+    if (!activeThread || activeThread.branch) return;
+    const project = projects.find((p) => p.id === activeThread.projectId);
+    const cwd = project?.folders[0]?.path;
+    if (!cwd || !window.openclawdex?.getGitBranch) return;
+
+    const threadId = activeThread.id;
+    window.openclawdex.getGitBranch(cwd).then((branch) => {
+      if (!branch) return;
+      setPendingThread((prev) => prev && prev.id === threadId ? { ...prev, branch } : prev);
+      setThreads((prev) => prev.map((t) => t.id === threadId ? { ...t, branch } : t));
+    });
+  }, [activeThread?.id, activeThread?.branch, projects]);
+
   // ── Send message handler ──────────────────────────────────────
 
   const handleSend = useCallback(
@@ -320,6 +336,7 @@ export function App() {
     const thread = newThread(projectId);
     setPendingThread(thread);
     setActiveThreadId(thread.id);
+    // Git branch is resolved by the useEffect above once this thread becomes active.
   }, []);
 
   // ── Create project (folder picker) ───────────────────────────
@@ -335,6 +352,7 @@ export function App() {
         const thread = newThread(parsed.data.id);
         setPendingThread(thread);
         setActiveThreadId(thread.id);
+        // Git branch is resolved by the useEffect once this thread becomes active.
       }
     });
   }, []);
@@ -433,7 +451,7 @@ export function App() {
   }, []);
 
   return (
-    <div className="flex h-full">
+    <div className="flex h-full" style={{ background: "rgba(24, 24, 24, 0.30)" }}>
       <Sidebar
         threads={threads}
         projects={projects}

@@ -1,6 +1,7 @@
 import { app, BrowserWindow, ipcMain, nativeTheme, dialog } from "electron";
 import path from "path";
 import { randomUUID } from "crypto";
+import { execSync } from "child_process";
 import { eq } from "drizzle-orm";
 import { findClaudeBinary, ClaudeSession } from "./claude";
 import {
@@ -326,6 +327,17 @@ function setupIpcHandlers(): void {
   /** Remove a folder from a project. */
   ipcMain.handle("projects:remove-folder", async (_event, folderId: string) => {
     await getDb().delete(projectFolders).where(eq(projectFolders.id, folderId));
+  });
+
+  // ── Git helpers ──────────────────────────────────────────────
+
+  /** Get the current git branch for a directory. */
+  ipcMain.handle("git:branch", (_event, cwd: string): string | null => {
+    try {
+      return execSync("git rev-parse --abbrev-ref HEAD", { cwd, encoding: "utf-8" }).trim();
+    } catch {
+      return null;
+    }
   });
 
   // ── Thread CRUD ───────────────────────────────────────────────

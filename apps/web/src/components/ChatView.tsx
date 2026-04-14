@@ -62,12 +62,13 @@ interface ModeDef {
   id: string;
   label: string;
   subtitle: string;
+  comingSoon?: boolean;
 }
 
 const MODES: ModeDef[] = [
-  { id: "ask", label: "Ask before edits", subtitle: "Confirm each file change before applying" },
+  { id: "plan", label: "Plan mode", subtitle: "Outline a plan without making changes", comingSoon: true },
+  { id: "ask", label: "Ask before edits", subtitle: "Confirm each file change before applying", comingSoon: true },
   { id: "auto", label: "Auto-accept edits", subtitle: "Apply changes without asking" },
-  { id: "plan", label: "Plan mode", subtitle: "Outline a plan without making changes" },
 ];
 
 /* ── File change card ────────────────────────────────────────── */
@@ -398,26 +399,23 @@ function TokenProgressIndicator({ stats }: { stats: ContextStats }) {
       </button>
       {/* Tooltip */}
       <div
-        className="absolute bottom-full right-0 mb-2 rounded-xl text-[13px] font-medium pointer-events-none z-50 opacity-0 group-hover/token:opacity-100 transition-opacity duration-150"
+        className="absolute bottom-full right-0 mb-1.5 px-2.5 py-1.5 rounded-lg text-[12px] whitespace-nowrap pointer-events-none z-50 opacity-0 group-hover/token:opacity-100 transition-opacity duration-150"
         style={{
-          background: "var(--surface-3)",
+          background: "var(--surface-2)",
           border: "1px solid var(--border-emphasis)",
-          boxShadow: "0 8px 24px rgba(0,0,0,0.5)",
-          minWidth: "180px",
-          padding: "10px 12px",
           color: "var(--text-secondary)",
         }}
       >
-        <div className="font-semibold mb-1.5" style={{ color: "var(--text-primary)" }}>
+        <div className="font-semibold mb-1" style={{ color: "var(--text-primary)" }}>
           Context window
         </div>
         {hasContext && pct != null ? (
           <>
             <div className="mb-0.5">{pct}% used ({100 - pct}% left)</div>
-            <div className="mb-2">{fmt(stats.totalTokens!)} / {fmt(stats.maxTokens!)} tokens</div>
+            <div>{fmt(stats.totalTokens!)} / {fmt(stats.maxTokens!)} tokens</div>
           </>
         ) : (
-          <div className="mb-2" style={{ color: "var(--text-muted)" }}>Usage unavailable</div>
+          <div style={{ color: "var(--text-muted)" }}>Usage unavailable</div>
         )}
       </div>
     </div>
@@ -863,7 +861,7 @@ export function ChatView({ thread, onSend, onInterrupt }: ChatViewProps) {
   const [selectedEffort, setSelectedEffort] = useState(EFFORT_LEVELS[1]); // default "high"
   const [effortDropdownOpen, setEffortDropdownOpen] = useState(false);
   const effortDropdownRef = useRef<HTMLDivElement>(null);
-  const [selectedMode, setSelectedMode] = useState(MODES[0]); // default "Ask before edits"
+  const [selectedMode, setSelectedMode] = useState(MODES[2]); // default "Auto-accept edits" (only available mode for now)
   const [modeDropdownOpen, setModeDropdownOpen] = useState(false);
   const modeDropdownRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -1196,13 +1194,13 @@ export function ChatView({ thread, onSend, onInterrupt }: ChatViewProps) {
           </div>
           {/* Status info */}
           <div className="flex items-center gap-1 mt-2 px-0.5">
-            <StatusButton>
+            <StatusButton tooltip="Coming soon">
               <Monitor size={14} weight="regular" />
               <span>Local</span>
               {/* <CaretDown size={10} weight="bold" /> */}
             </StatusButton>
             {thread.branch && (
-              <StatusButton>
+              <StatusButton tooltip="Coming soon" fadeIn>
                 <GitBranch size={14} weight="regular" />
                 <span>{thread.branch}</span>
                 {/* <CaretDown size={10} weight="bold" /> */}
@@ -1218,22 +1216,32 @@ export function ChatView({ thread, onSend, onInterrupt }: ChatViewProps) {
   );
 }
 
-function StatusButton({ children }: { children: React.ReactNode }) {
+function StatusButton({ children, tooltip, fadeIn }: { children: React.ReactNode; tooltip?: string; fadeIn?: boolean }) {
   return (
-    <button
-      className="flex items-center gap-1.5 px-2 py-[3px] rounded-lg text-[12px] font-medium transition-colors"
-      style={{ color: "var(--text-muted)" }}
-      onMouseEnter={(e) => {
-        e.currentTarget.style.background = "var(--border-subtle)";
-        e.currentTarget.style.color = "rgba(255,255,255,0.60)";
-      }}
-      onMouseLeave={(e) => {
-        e.currentTarget.style.background = "transparent";
-        e.currentTarget.style.color = "var(--text-muted)";
-      }}
-    >
-      {children}
-    </button>
+    <div className="relative group/status" style={fadeIn ? { animation: "fadeIn 200ms ease" } : undefined}>
+      <button
+        className="flex items-center gap-1.5 px-2 py-[3px] rounded-lg text-[12px] font-medium transition-colors"
+        style={{ color: "var(--text-muted)" }}
+        onMouseEnter={(e) => {
+          e.currentTarget.style.background = "var(--border-subtle)";
+          e.currentTarget.style.color = "rgba(255,255,255,0.60)";
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.background = "transparent";
+          e.currentTarget.style.color = "var(--text-muted)";
+        }}
+      >
+        {children}
+      </button>
+      {tooltip && (
+        <div
+          className="absolute bottom-full left-0 mb-1.5 px-2.5 py-1.5 rounded-lg text-[12px] whitespace-nowrap opacity-0 group-hover/status:opacity-100 transition-opacity duration-150 pointer-events-none z-50"
+          style={{ background: "var(--surface-2)", color: "var(--text-secondary)", border: "1px solid var(--border-emphasis)" }}
+        >
+          {tooltip}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -1396,23 +1404,43 @@ function ModeDropdown({
     >
       {modes.map((mode) => {
         const isSelected = mode.id === selected.id;
+        const isDisabled = !!mode.comingSoon;
         return (
           <button
             key={mode.id}
-            onClick={() => onSelect(mode)}
+            onClick={() => !isDisabled && onSelect(mode)}
             className="w-full flex items-center gap-2.5 rounded-xl px-2.5 py-2 text-left transition-colors"
             style={{
               background: isSelected ? "rgba(255,255,255,0.06)" : "transparent",
+              cursor: isDisabled ? "default" : "pointer",
+              opacity: isDisabled ? 0.38 : 1,
             }}
-            onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.06)")}
-            onMouseLeave={(e) => (e.currentTarget.style.background = isSelected ? "rgba(255,255,255,0.06)" : "transparent")}
+            onMouseEnter={(e) => {
+              if (!isDisabled) e.currentTarget.style.background = "rgba(255,255,255,0.06)";
+            }}
+            onMouseLeave={(e) => {
+              if (!isDisabled) e.currentTarget.style.background = isSelected ? "rgba(255,255,255,0.06)" : "transparent";
+            }}
           >
             <div className="flex flex-col gap-0.5 flex-1 min-w-0">
-              <span
-                className="text-[13px] font-medium leading-tight"
-                style={{ color: "var(--text-primary)" }}
-              >
-                {mode.label}
+              <span className="flex items-center gap-2">
+                <span
+                  className="text-[13px] font-medium leading-tight"
+                  style={{ color: "var(--text-primary)" }}
+                >
+                  {mode.label}
+                </span>
+                {isDisabled && (
+                  <span
+                    className="text-[10px] font-semibold uppercase tracking-wide leading-none px-1.5 py-0.5 rounded-md"
+                    style={{
+                      color: "var(--text-muted)",
+                      background: "rgba(255,255,255,0.06)",
+                    }}
+                  >
+                    Coming soon
+                  </span>
+                )}
               </span>
               <span
                 className="text-[11px] font-medium leading-tight"
@@ -1430,3 +1458,4 @@ function ModeDropdown({
     </div>
   );
 }
+
