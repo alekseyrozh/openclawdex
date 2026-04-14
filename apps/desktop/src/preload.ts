@@ -9,7 +9,7 @@ contextBridge.exposeInMainWorld("openclawdex", {
     ipcRenderer.invoke("claude:check"),
 
   /** Send a user message to Claude for a given thread. */
-  send: (threadId: string, message: string, opts?: { resumeSessionId?: string; projectId?: string }): Promise<void> =>
+  send: (threadId: string, message: string, opts?: { resumeSessionId?: string; projectId?: string; images?: { name: string; base64: string; mediaType: string }[] }): Promise<void> =>
     ipcRenderer.invoke("claude:send", threadId, message, opts),
 
   /** Interrupt the current Claude turn for a thread. */

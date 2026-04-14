@@ -8,7 +8,7 @@ declare global {
   interface OpenClawdexBridge {
     platform: string;
     checkClaude: () => Promise<{ available: boolean }>;
-    send: (threadId: string, message: string, opts?: { resumeSessionId?: string; projectId?: string }) => Promise<void>;
+    send: (threadId: string, message: string, opts?: { resumeSessionId?: string; projectId?: string; images?: { name: string; base64: string; mediaType: string }[] }) => Promise<void>;
     interrupt: (threadId: string) => Promise<void>;
     respondToTool: (threadId: string, toolUseId: string, responseText: string) => Promise<void>;
     listSessions: () => Promise<SessionInfo[]>;

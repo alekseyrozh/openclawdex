@@ -34,6 +34,8 @@ export type ContextUsage = { totalTokens: number; maxTokens: number; percentage:
 
 export type DeferredToolUse = { id: string; name: string; input: Record<string, unknown> };
 
+export type ImageInput = { name: string; base64: string; mediaType: string };
+
 export type SessionEvent =
   | { kind: "init"; sessionId: string; model: string }
   | { kind: "text_delta"; text: string }
@@ -67,7 +69,36 @@ export class ClaudeSession {
     this.cwd = opts?.cwd;
   }
 
-  private static toUserMessage(text: string): SDKUserMessage {
+  private static toUserMessage(text: string, images?: ImageInput[]): SDKUserMessage {
+    // If there are images, build a content block array (text + image blocks)
+    if (images && images.length > 0) {
+      const content: Array<
+        | { type: "text"; text: string }
+        | { type: "image"; source: { type: "base64"; media_type: string; data: string } }
+      > = [];
+
+      for (const img of images) {
+        content.push({
+          type: "image",
+          source: {
+            type: "base64",
+            media_type: img.mediaType,
+            data: img.base64,
+          },
+        });
+      }
+
+      if (text) {
+        content.push({ type: "text", text });
+      }
+
+      return {
+        type: "user",
+        message: { role: "user", content: content as unknown as string },
+        parent_tool_use_id: null,
+      };
+    }
+
     return {
       type: "user",
       message: { role: "user", content: text },
@@ -85,8 +116,8 @@ export class ClaudeSession {
     }
   }
 
-  private pushMessage(text: string) {
-    this.enqueueMessage(ClaudeSession.toUserMessage(text));
+  private pushMessage(text: string, images?: ImageInput[]) {
+    this.enqueueMessage(ClaudeSession.toUserMessage(text, images));
   }
 
   private closeQueue() {
@@ -128,8 +159,8 @@ export class ClaudeSession {
    * On the first call, starts the SDK query. Follow-up calls push
    * into the same session.
    */
-  send(message: string, onEvent: (e: SessionEvent) => void): void {
-    this.pushMessage(message);
+  send(message: string, images: ImageInput[] | undefined, onEvent: (e: SessionEvent) => void): void {
+    this.pushMessage(message, images);
 
     if (this.streamLoopRunning) return;
     this.streamLoopRunning = true;
@@ -159,7 +190,7 @@ export class ClaudeSession {
           let contextUsage: ContextUsage | null = null;
           try {
             const u = await this.queryInstance?.getContextUsage();
-            console.log("[claude] getContextUsage:", u != null ? `totalTokens=${u.totalTokens} maxTokens=${u.maxTokens} pct=${u.percentage}` : "null");
+
             if (u != null) {
               contextUsage = { totalTokens: u.totalTokens, maxTokens: u.maxTokens, percentage: u.percentage };
             }
@@ -175,7 +206,6 @@ export class ClaudeSession {
             : null;
 
           if (deferredToolUse) {
-            console.log(`[claude] deferred tool use: ${deferredToolUse.name} (id=${deferredToolUse.id})`);
           }
 
           onEvent({

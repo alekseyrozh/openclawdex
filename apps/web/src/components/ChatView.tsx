@@ -14,9 +14,26 @@ import {
   Monitor,
   GitBranch,
   Copy,
+  X,
+  ImageSquare,
 } from "@phosphor-icons/react";
 import { QuestionCard } from "./QuestionCard";
 import type { Thread, Message, FileChange, ContextStats } from "../App";
+
+/* ── Image attachment type ─────────────────────────────────── */
+
+export interface ImageAttachment {
+  id: string;
+  file: File;
+  name: string;
+  previewUrl: string;
+}
+
+export interface ImagePayload {
+  name: string;
+  base64: string;
+  mediaType: string;
+}
 
 /* ── Claude sparkle icon ────────────────────────────────────── */
 
@@ -437,15 +454,30 @@ function MessageBlock({ message, isStreaming, showHoverBar }: { message: Message
   if (isUser) {
     return (
       <div className="my-3 ml-auto w-fit max-w-[85%] min-w-0 group">
-        <div
-          className="rounded-2xl px-5 py-3.5 text-[14px] leading-[1.6] font-medium break-words"
-          style={{
-            background: "var(--surface-3)",
-            color: "var(--text-primary)",
-          }}
-        >
-          {message.content}
-        </div>
+        {message.images && message.images.length > 0 && (
+          <div className="flex flex-wrap gap-1.5 justify-end mb-1.5">
+            {message.images.map((img, i) => (
+              <img
+                key={i}
+                src={img.url}
+                alt={img.name || "attachment"}
+                className="max-w-[260px] max-h-[200px] rounded-2xl object-cover"
+                style={{ border: "1px solid var(--border-default)" }}
+              />
+            ))}
+          </div>
+        )}
+        {message.content && (
+          <div
+            className="rounded-2xl px-5 py-3.5 text-[14px] leading-[1.6] font-medium break-words"
+            style={{
+              background: "var(--surface-3)",
+              color: "var(--text-primary)",
+            }}
+          >
+            {message.content}
+          </div>
+        )}
         {showHoverBar && (
           <div className="flex justify-end px-1 transition-opacity duration-300 opacity-0 group-hover:opacity-100">
             <MessageHoverBar message={message} reverse />
@@ -752,11 +784,13 @@ function TextareaWithScrollbar({
   value,
   onChange,
   onKeyDown,
+  onPaste,
 }: {
   textareaRef: React.RefObject<HTMLTextAreaElement | null>;
   value: string;
   onChange: React.ChangeEventHandler<HTMLTextAreaElement>;
   onKeyDown: React.KeyboardEventHandler<HTMLTextAreaElement>;
+  onPaste?: React.ClipboardEventHandler<HTMLTextAreaElement>;
 }) {
   const [thumb, setThumb] = useState<{ top: number; height: number } | null>(null);
   const [scrolling, setScrolling] = useState(false);
@@ -807,6 +841,7 @@ function TextareaWithScrollbar({
         value={value}
         onChange={onChange}
         onScroll={onScroll}
+        onPaste={onPaste}
         onInput={(e) => {
           const el = e.currentTarget;
           el.style.height = "auto";
@@ -850,7 +885,7 @@ function TextareaWithScrollbar({
 
 interface ChatViewProps {
   thread: Thread | null;
-  onSend: (threadId: string, text: string) => void;
+  onSend: (threadId: string, text: string, images?: ImagePayload[]) => void;
   onInterrupt: (threadId: string) => void;
   onRespondToTool: (threadId: string, toolUseId: string, text: string) => void;
 }
@@ -873,6 +908,89 @@ export function ChatView({ thread, onSend, onInterrupt, onRespondToTool }: ChatV
   const isAtBottomRef = useRef(true);
   const currentThreadIdRef = useRef<string | undefined>(undefined);
   const prevHistoryLoadedRef = useRef<boolean | undefined>(undefined);
+
+  // ── Image attachments ──────────────────────────────────────
+  const [attachments, setAttachments] = useState<ImageAttachment[]>([]);
+  const [isDragOver, setIsDragOver] = useState(false);
+  const dragCounter = useRef(0);
+  const composerRef = useRef<HTMLDivElement>(null);
+
+  // Clear attachments when switching threads
+  useEffect(() => {
+    setAttachments((prev) => {
+      prev.forEach((a) => URL.revokeObjectURL(a.previewUrl));
+      return [];
+    });
+  }, [thread?.id]);
+
+  const addFiles = useCallback((files: FileList | File[]) => {
+    const images = Array.from(files).filter((f) => f.type.startsWith("image/"));
+    if (images.length === 0) return;
+    const newAttachments: ImageAttachment[] = images.map((file) => ({
+      id: crypto.randomUUID(),
+      file,
+      name: file.name,
+      previewUrl: URL.createObjectURL(file),
+    }));
+    setAttachments((prev) => [...prev, ...newAttachments]);
+  }, []);
+
+  const removeAttachment = useCallback((id: string) => {
+    setAttachments((prev) => {
+      const removed = prev.find((a) => a.id === id);
+      if (removed) URL.revokeObjectURL(removed.previewUrl);
+      return prev.filter((a) => a.id !== id);
+    });
+  }, []);
+
+  // Drag handlers
+  const handleDragEnter = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounter.current++;
+    if (e.dataTransfer.types.includes("Files")) {
+      setIsDragOver(true);
+    }
+  }, []);
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+  }, []);
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounter.current--;
+    if (dragCounter.current === 0) {
+      setIsDragOver(false);
+    }
+  }, []);
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounter.current = 0;
+    setIsDragOver(false);
+    if (e.dataTransfer.files.length > 0) {
+      addFiles(e.dataTransfer.files);
+    }
+  }, [addFiles]);
+
+  // Paste handler for images
+  const handlePaste = useCallback((e: React.ClipboardEvent) => {
+    const items = e.clipboardData.items;
+    const imageFiles: File[] = [];
+    for (let i = 0; i < items.length; i++) {
+      if (items[i].type.startsWith("image/")) {
+        const file = items[i].getAsFile();
+        if (file) imageFiles.push(file);
+      }
+    }
+    if (imageFiles.length > 0) {
+      addFiles(imageFiles);
+    }
+  }, [addFiles]);
 
   const handleMessagesScroll = useCallback((el: HTMLDivElement) => {
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
@@ -904,12 +1022,37 @@ export function ChatView({ thread, onSend, onInterrupt, onRespondToTool }: ChatV
     }
   }, [thread?.id]);
 
-  const handleSubmit = () => {
-    if (!thread || !input.trim() || thread.status === "running") return;
-    onSend(thread.id, input.trim());
+  const handleSubmit = async () => {
+    const hasContent = input.trim() || attachments.length > 0;
+    if (!thread || !hasContent || thread.status === "running") return;
+
+    // Convert attachments to base64
+    let images: ImagePayload[] | undefined;
+    if (attachments.length > 0) {
+      images = await Promise.all(
+        attachments.map(
+          (a) =>
+            new Promise<ImagePayload>((resolve) => {
+              const reader = new FileReader();
+              reader.onload = () => {
+                const dataUrl = reader.result as string;
+                // Strip the data:image/xxx;base64, prefix
+                const base64 = dataUrl.split(",")[1];
+                resolve({ name: a.name, base64, mediaType: a.file.type });
+              };
+              reader.readAsDataURL(a.file);
+            }),
+        ),
+      );
+    }
+
+    onSend(thread.id, input.trim(), images);
     setInput("");
-    // Reset textarea height — onInput doesn't fire for programmatic value changes,
-    // so the expanded inline style would stick until the user types again.
+    setAttachments((prev) => {
+      prev.forEach((a) => URL.revokeObjectURL(a.previewUrl));
+      return [];
+    });
+    // Reset textarea height
     const el = textareaRef.current;
     if (el) {
       el.style.height = "auto";
@@ -1109,12 +1252,82 @@ export function ChatView({ thread, onSend, onInterrupt, onRespondToTool }: ChatV
       <div className="shrink-0 px-5 pb-4 pt-1">
         <div className="max-w-[720px] mx-auto">
           <div
-            className="rounded-2xl"
+            ref={composerRef}
+            className="rounded-2xl relative"
             style={{
               background: "var(--surface-2)",
-              border: "1px solid var(--border-default)",
+              border: isDragOver
+                ? "1px solid var(--accent)"
+                : "1px solid var(--border-default)",
+              transition: "border-color 150ms ease",
             }}
+            onDragEnter={handleDragEnter}
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
           >
+            {/* Drag overlay */}
+            {isDragOver && (
+              <div
+                className="absolute inset-0 rounded-2xl z-10 flex items-center justify-center pointer-events-none"
+                style={{
+                  background: "rgba(51, 156, 255, 0.08)",
+                }}
+              >
+                <span
+                  className="text-[13px] font-medium px-3 py-1.5 rounded-lg"
+                  style={{
+                    background: "var(--surface-3)",
+                    color: "var(--text-secondary)",
+                    border: "1px solid var(--border-emphasis)",
+                  }}
+                >
+                  Drop image to attach
+                </span>
+              </div>
+            )}
+            {/* Attachment chips */}
+            {attachments.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 px-4 pt-3 pb-1">
+                {attachments.map((a) => (
+                  <div
+                    key={a.id}
+                    className="flex items-center gap-1.5 pl-1 pr-1 py-0.5 rounded-lg group/chip"
+                    style={{
+                      background: "var(--surface-3)",
+                      border: "1px solid var(--border-default)",
+                    }}
+                  >
+                    <img
+                      src={a.previewUrl}
+                      alt={a.name}
+                      className="w-5 h-5 rounded object-cover"
+                    />
+                    <span
+                      className="text-[12px] font-medium max-w-[140px] truncate"
+                      style={{ color: "var(--text-secondary)" }}
+                    >
+                      {a.name}
+                    </span>
+                    <button
+                      onClick={() => removeAttachment(a.id)}
+                      className="w-4 h-4 flex items-center justify-center rounded transition-colors"
+                      style={{ color: "var(--text-faint)" }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.color = "var(--text-primary)";
+                        e.currentTarget.style.background = "var(--surface-4)";
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.color = "var(--text-faint)";
+                        e.currentTarget.style.background = "transparent";
+                      }}
+                    >
+                      <X size={10} weight="bold" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
             <TextareaWithScrollbar
               textareaRef={textareaRef}
               value={input}
@@ -1125,6 +1338,7 @@ export function ChatView({ thread, onSend, onInterrupt, onRespondToTool }: ChatV
                   handleSubmit();
                 }
               }}
+              onPaste={handlePaste}
             />
             {/* Controls */}
             <div className="flex items-center justify-between px-2 pb-2">
@@ -1199,13 +1413,13 @@ export function ChatView({ thread, onSend, onInterrupt, onRespondToTool }: ChatV
                 ) : (
                   <button
                     onClick={handleSubmit}
-                    disabled={!input.trim()}
+                    disabled={!input.trim() && attachments.length === 0}
                     className="w-[30px] h-[30px] flex items-center justify-center rounded-full transition-colors"
                     style={{
-                      background: input.trim()
+                      background: input.trim() || attachments.length > 0
                         ? "var(--text-primary)"
                         : "var(--surface-3)",
-                      color: input.trim() ? "var(--surface-0)" : "var(--text-faint)",
+                      color: input.trim() || attachments.length > 0 ? "var(--surface-0)" : "var(--text-faint)",
                     }}
                   >
                     <ArrowUp size={16} weight="bold" />

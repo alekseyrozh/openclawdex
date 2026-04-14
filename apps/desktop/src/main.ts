@@ -62,7 +62,7 @@ function setupIpcHandlers(): void {
   /** Send a user message to Claude for a given thread. */
   ipcMain.handle(
     "claude:send",
-    async (_event, threadId: string, message: string, opts?: { resumeSessionId?: string; projectId?: string }) => {
+    async (_event, threadId: string, message: string, opts?: { resumeSessionId?: string; projectId?: string; images?: { name: string; base64: string; mediaType: string }[] }) => {
       // Resolve the project's folder as the session cwd
       let cwd: string | undefined;
       if (opts?.projectId) {
@@ -84,7 +84,7 @@ function setupIpcHandlers(): void {
 
       let currentSessionId: string | null = opts?.resumeSessionId ?? null;
 
-      session.send(message, async (e) => {
+      session.send(message, opts?.images, async (e) => {
         switch (e.kind) {
           case "init": {
             currentSessionId = e.sessionId;
@@ -133,7 +133,6 @@ function setupIpcHandlers(): void {
               costUsd: e.costUsd,
               durationMs: e.durationMs,
             };
-            console.log("[main] result — contextStats:", JSON.stringify(contextStats));
 
             // Persist to DB so it survives restarts
             if (currentSessionId) {
@@ -227,8 +226,16 @@ function setupIpcHandlers(): void {
 
     // Zod schemas for message body shapes
     const TextBlock = z.object({ type: z.literal("text"), text: z.string() });
+    const ImageBlock = z.object({
+      type: z.literal("image"),
+      source: z.object({
+        type: z.literal("base64"),
+        media_type: z.string(),
+        data: z.string(),
+      }),
+    });
     const ToolUseBlock = z.object({ type: z.literal("tool_use"), id: z.string(), name: z.string(), input: z.record(z.string(), z.unknown()).optional() });
-    const AnyBlock = z.union([TextBlock, ToolUseBlock, z.object({ type: z.string() })]);
+    const AnyBlock = z.union([TextBlock, ImageBlock, ToolUseBlock, z.object({ type: z.string() })]);
     const UserBody = z.object({
       role: z.literal("user"),
       content: z.union([z.string(), z.array(AnyBlock)]),
@@ -238,8 +245,9 @@ function setupIpcHandlers(): void {
       content: z.array(AnyBlock),
     });
 
+    type HistoryImage = { mediaType: string; base64: string };
     type HistoryMsg =
-      | { id: string; role: "user"; content: string }
+      | { id: string; role: "user"; content: string; images?: HistoryImage[] }
       | { id: string; role: "assistant"; content: string }
       | { id: string; role: "tool_use"; toolName: string; toolInput?: Record<string, unknown> };
 
@@ -249,14 +257,25 @@ function setupIpcHandlers(): void {
       if (m.type === "user") {
         const parsed = UserBody.safeParse(m.message);
         if (!parsed.success) continue;
-        const content =
-          typeof parsed.data.content === "string"
-            ? parsed.data.content
-            : parsed.data.content
-                .filter((b): b is z.infer<typeof TextBlock> => b.type === "text")
-                .map((b) => b.text)
-                .join("");
-        if (content.trim()) result.push({ id: m.uuid, role: "user", content });
+        let content: string;
+        let images: HistoryImage[] | undefined;
+        if (typeof parsed.data.content === "string") {
+          content = parsed.data.content;
+        } else {
+          content = parsed.data.content
+            .filter((b): b is z.infer<typeof TextBlock> => b.type === "text")
+            .map((b) => b.text)
+            .join("");
+          const imageBlocks = parsed.data.content
+            .filter((b): b is z.infer<typeof ImageBlock> => b.type === "image");
+          if (imageBlocks.length > 0) {
+            images = imageBlocks.map((b) => ({
+              mediaType: b.source.media_type,
+              base64: b.source.data,
+            }));
+          }
+        }
+        if (content.trim() || images) result.push({ id: m.uuid, role: "user", content, ...(images && { images }) });
       } else if (m.type === "assistant") {
         const parsed = AssistantBody.safeParse(m.message);
         if (!parsed.success) continue;
