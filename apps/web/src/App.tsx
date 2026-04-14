@@ -26,7 +26,6 @@ export interface Thread {
 }
 
 export interface MessageImage {
-  name: string;
   url: string;
 }
 
@@ -109,7 +108,6 @@ function historyToMessages(items: HistoryMessage[]): Message[] {
     const images: MessageImage[] | undefined =
       h.role === "user" && h.images && h.images.length > 0
         ? h.images.map((img) => ({
-            name: "image",
             url: `data:${img.mediaType};base64,${img.base64}`,
           }))
         : undefined;
@@ -182,6 +180,7 @@ export function App() {
     return isNaN(parsed) ? SIDEBAR_DEFAULT : Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, parsed));
   });
   const dragging = useRef(false);
+  const sidebarRef = useRef<HTMLDivElement>(null);
 
   // Real thread if selected, pending thread if viewing the new-thread composer, or null
   const activeThread: Thread | null = activeThreadId
@@ -313,7 +312,6 @@ export function App() {
   const handleSend = useCallback(
     (threadId: string, text: string, images?: ImagePayload[]) => {
       const msgImages: MessageImage[] | undefined = images?.map((img) => ({
-        name: img.name,
         url: `data:${img.mediaType};base64,${img.base64}`,
       }));
 
@@ -481,7 +479,10 @@ export function App() {
     const onMove = (ev: MouseEvent) => {
       if (!dragging.current) return;
       const w = Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, ev.clientX));
-      setSidebarWidth(w);
+      // Bypass React — update DOM directly for smooth 60fps resize
+      if (sidebarRef.current) {
+        sidebarRef.current.style.width = `${w}px`;
+      }
     };
 
     const onUp = (ev: MouseEvent) => {
@@ -491,6 +492,7 @@ export function App() {
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
       const w = Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, ev.clientX));
+      setSidebarWidth(w); // Commit final width to React state
       localStorage.setItem("sidebarWidth", String(w));
     };
 
@@ -502,21 +504,22 @@ export function App() {
 
   return (
     <div className="flex h-full" style={{ background: "rgba(24, 24, 24, 0.30)" }}>
-      <Sidebar
-        threads={threads}
-        projects={projects}
-        activeThreadId={activeThreadId}
-        onSelectThread={handleSelectThread}
-        onNewThread={handleNewThread}
-        onCreateProject={handleCreateProject}
-        onRenameProject={handleRenameProject}
-        onDeleteProject={handleDeleteProject}
-        onRenameThread={handleRenameThread}
-        onDeleteThread={handleDeleteThread}
-        onArchiveThread={handleArchiveThread}
-        width={sidebarWidth}
-        isLoading={threadsLoading}
-      />
+      <div ref={sidebarRef} className="shrink-0" style={{ width: `${sidebarWidth}px` }}>
+        <Sidebar
+          threads={threads}
+          projects={projects}
+          activeThreadId={activeThreadId}
+          onSelectThread={handleSelectThread}
+          onNewThread={handleNewThread}
+          onCreateProject={handleCreateProject}
+          onRenameProject={handleRenameProject}
+          onDeleteProject={handleDeleteProject}
+          onRenameThread={handleRenameThread}
+          onDeleteThread={handleDeleteThread}
+          onArchiveThread={handleArchiveThread}
+          isLoading={threadsLoading}
+        />
+      </div>
       {/* Drag handle */}
       <div
         className="w-[2px] shrink-0 cursor-col-resize hover:bg-white/10 active:bg-white/15 transition-colors rounded-full"

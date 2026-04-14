@@ -41,7 +41,6 @@ interface SidebarProps {
   onRenameThread: (threadId: string, name: string) => void;
   onDeleteThread: (threadId: string) => void;
   onArchiveThread: (threadId: string) => void;
-  width: number;
   isLoading?: boolean;
 }
 
@@ -57,7 +56,6 @@ export function Sidebar({
   onRenameThread,
   onDeleteThread,
   onArchiveThread,
-  width,
   isLoading,
 }: SidebarProps) {
   const [archivedOpen, setArchivedOpen] = useState(false);
@@ -82,10 +80,7 @@ export function Sidebar({
 
   return (
     <div
-      className="flex flex-col shrink-0 select-none spinner-sync"
-      style={{
-        width: `${width}px`,
-      }}
+      className="flex flex-col w-full h-full select-none spinner-sync"
     >
       {/* Traffic light spacer */}
       <div
