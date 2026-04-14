@@ -46,6 +46,26 @@ export const HistoryMessage = z.discriminatedUnion("role", [
 ]);
 export type HistoryMessage = z.infer<typeof HistoryMessage>;
 
+// ── AskUserQuestion tool input ───────────────────────────────
+
+export const AskUserOption = z.object({
+  label: z.string(),
+  description: z.string(),
+  preview: z.string().optional(),
+});
+
+export const AskUserQuestionItem = z.object({
+  question: z.string(),
+  header: z.string(),
+  options: z.array(AskUserOption).min(2).max(4),
+  multiSelect: z.boolean(),
+});
+
+export const AskUserInput = z.object({
+  questions: z.array(AskUserQuestionItem).min(1).max(4),
+});
+export type AskUserInput = z.infer<typeof AskUserInput>;
+
 // ── Events flowing from main process → renderer ──────────────
 
 export const IpcAssistantText = z.object({
@@ -92,6 +112,14 @@ export const IpcToolUse = z.object({
   toolInput: z.record(z.string(), z.unknown()).optional(),
 });
 
+export const IpcDeferredToolUse = z.object({
+  type: z.literal("deferred_tool_use"),
+  threadId: z.string(),
+  toolUseId: z.string(),
+  toolName: z.string(),
+  toolInput: z.record(z.string(), z.unknown()).optional(),
+});
+
 export const IpcEvent = z.discriminatedUnion("type", [
   IpcAssistantText,
   IpcStatus,
@@ -99,5 +127,6 @@ export const IpcEvent = z.discriminatedUnion("type", [
   IpcError,
   IpcSessionInit,
   IpcToolUse,
+  IpcDeferredToolUse,
 ]);
 export type IpcEvent = z.infer<typeof IpcEvent>;

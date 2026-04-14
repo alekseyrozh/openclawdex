@@ -15,6 +15,7 @@ import {
   GitBranch,
   Copy,
 } from "@phosphor-icons/react";
+import { QuestionCard } from "./QuestionCard";
 import type { Thread, Message, FileChange, ContextStats } from "../App";
 
 /* ── Claude sparkle icon ────────────────────────────────────── */
@@ -851,9 +852,10 @@ interface ChatViewProps {
   thread: Thread | null;
   onSend: (threadId: string, text: string) => void;
   onInterrupt: (threadId: string) => void;
+  onRespondToTool: (threadId: string, toolUseId: string, text: string) => void;
 }
 
-export function ChatView({ thread, onSend, onInterrupt }: ChatViewProps) {
+export function ChatView({ thread, onSend, onInterrupt, onRespondToTool }: ChatViewProps) {
   const [input, setInput] = useState("");
   const [selectedModel, setSelectedModel] = useState(CLAUDE_MODELS[0]);
   const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
@@ -1028,14 +1030,34 @@ export function ChatView({ thread, onSend, onInterrupt }: ChatViewProps) {
 
                   rendered.push(
                     <div key={`turn-${msg.id}`} className="group/turn">
-                      {turnMsgs.map((m) => (
-                        <MessageBlock
-                          key={m.id}
-                          message={m}
-                          isStreaming={m.id === streamingMsgId}
-                          showHoverBar={false}
-                        />
-                      ))}
+                      {turnMsgs.map((m) => {
+                        // Render AskUserQuestion tool calls as interactive cards
+                        if (m.role === "tool_use" && m.toolName === "AskUserQuestion") {
+                          const hasUserMsgAfter = msgs.slice(i).some((later) => later.role === "user");
+                          return (
+                            <QuestionCard
+                              key={m.id}
+                              toolInput={m.toolInput}
+                              alreadyAnswered={hasUserMsgAfter}
+                              onSubmit={(text) => {
+                                if (thread.pendingToolUseId) {
+                                  onRespondToTool(thread.id, thread.pendingToolUseId, text);
+                                } else {
+                                  onSend(thread.id, text);
+                                }
+                              }}
+                            />
+                          );
+                        }
+                        return (
+                          <MessageBlock
+                            key={m.id}
+                            message={m}
+                            isStreaming={m.id === streamingMsgId}
+                            showHoverBar={false}
+                          />
+                        );
+                      })}
                       {lastAssistantMsg && isTurnComplete && (
                         <div className="px-1 transition-opacity duration-300 opacity-0 group-hover/turn:opacity-100">
                           <MessageHoverBar message={lastAssistantMsg} />

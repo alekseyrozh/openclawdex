@@ -16,6 +16,10 @@ contextBridge.exposeInMainWorld("openclawdex", {
   interrupt: (threadId: string): Promise<void> =>
     ipcRenderer.invoke("claude:interrupt", threadId),
 
+  /** Respond to a deferred tool call (e.g. AskUserQuestion). */
+  respondToTool: (threadId: string, toolUseId: string, responseText: string): Promise<void> =>
+    ipcRenderer.invoke("claude:respond-to-tool", threadId, toolUseId, responseText),
+
   /** List all past Claude sessions across all projects. */
   listSessions: (): Promise<SessionInfo[]> =>
     ipcRenderer.invoke("claude:list-sessions"),

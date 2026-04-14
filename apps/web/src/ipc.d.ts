@@ -10,6 +10,7 @@ declare global {
     checkClaude: () => Promise<{ available: boolean }>;
     send: (threadId: string, message: string, opts?: { resumeSessionId?: string; projectId?: string }) => Promise<void>;
     interrupt: (threadId: string) => Promise<void>;
+    respondToTool: (threadId: string, toolUseId: string, responseText: string) => Promise<void>;
     listSessions: () => Promise<SessionInfo[]>;
     loadHistory: (sessionId: string) => Promise<HistoryMessage[]>;
     createProject: () => Promise<ProjectInfo | null>;
