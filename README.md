@@ -4,14 +4,7 @@ Desktop UI for orchestrating Claude and Codex coding agents through their CLIs. 
 
 ## Install
 
-Download the latest release for your platform from the [Releases](https://github.com/alekseyrozh/openclawdex/releases) page:
-
-| Platform | Download |
-|---|---|
-| macOS (Apple Silicon) | `.dmg` |
-| macOS (Intel) | `.dmg` |
-| Windows | `.exe` installer |
-| Linux | `.AppImage` or `.deb` |
+Download the latest `.dmg` from the [Releases](https://github.com/alekseyrozh/openclawdex/releases) page.
 
 ### Prerequisites
 
@@ -55,12 +48,6 @@ pnpm dist
 ```
 
 Platform-specific builds:
-
-```bash
-pnpm dist:mac      # macOS .dmg + .zip
-pnpm dist:win      # Windows .exe (NSIS installer)
-pnpm dist:linux    # Linux .AppImage + .deb
-```
 
 Output goes to `apps/desktop/release/`.
 

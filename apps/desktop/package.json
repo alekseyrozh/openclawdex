@@ -6,10 +6,7 @@
   "scripts": {
     "dev": "tsc && electron .",
     "build": "tsc",
-    "dist": "electron-builder",
-    "dist:mac": "electron-builder --mac",
-    "dist:win": "electron-builder --win",
-    "dist:linux": "electron-builder --linux",
+    "dist": "electron-builder --mac",
     "db:studio": "drizzle-kit studio",
     "db:generate": "drizzle-kit generate"
   },
@@ -52,24 +49,6 @@
     },
     "dmg": {
       "title": "${productName} ${version}"
-    },
-    "win": {
-      "target": [
-        "nsis"
-      ],
-      "icon": "resources/icon.png"
-    },
-    "linux": {
-      "target": [
-        "AppImage",
-        "deb"
-      ],
-      "icon": "resources/icon.png",
-      "category": "Development"
-    },
-    "nsis": {
-      "oneClick": true,
-      "perMachine": false
     }
   }
 }
