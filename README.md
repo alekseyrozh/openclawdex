@@ -1,27 +1,34 @@
-# OpenClawdex
+<p align="center">
+  <img src="assets/icon.png" width="128" height="128" alt="OpenClawdex icon">
+</p>
 
-Desktop UI for orchestrating Claude and Codex coding agents through their CLIs, with a native Mac feel.
+<h1 align="center">OpenClawdex</h1>
 
-> **Status:** Early alpha. The chat UI is functional with real Claude integration (via Agent SDK). Codex integration is planned.
+<p align="center">
+  Desktop UI for orchestrating Claude (and in the future Codex) coding agents through their CLIs, with a native Mac feel.
+</p>
+
+<p align="center">
+  <img src="assets/screenshot.png" width="720" alt="OpenClawdex screenshot">
+</p>
 
 ## Install
 
-Download the latest `.dmg` from the [Releases](https://github.com/alekseyrozh/openclawdex/releases) page.
+1. Download the latest `.dmg` from the [Releases](https://github.com/alekseyrozh/openclawdex/releases) page
+2. Double-click the downloaded `.dmg` and drag the OpenClawdex app into the Applications folder
+3. Remove the quarantine attribute (the app is unsigned for this early release):
+   ```bash
+   xattr -c /Applications/OpenClawdex.app
+   ```
+4. Launch OpenClawdex from the Applications folder or Launchpad
 
 ### Prerequisites
 
 OpenClawdex spawns CLI agents as subprocesses, so you need at least one installed and authenticated:
 
 - **Claude Code** &mdash; `npm install -g @anthropic-ai/claude-code` then `claude auth login`
-- **Codex CLI** &mdash; install and run `codex login`
 
 No API keys needed &mdash; the app uses your existing CLI logins.
-
-### macOS note
-
-The app is not code-signed yet. On first launch macOS may block it. To open it:
-1. Right-click the app and choose **Open**
-2. Or go to **System Settings > Privacy & Security** and click **Open Anyway**
 
 ## Build from source
 
