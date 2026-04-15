@@ -237,10 +237,10 @@ export function Sidebar({
             </div>
 
             {/* Thread list */}
-            <ScrollArea className="flex-1">
-              <div className="px-3 pb-3">
-                {archivedThreads.length > 0 ? (
-                  archivedThreads.map((thread) => (
+            {archivedThreads.length > 0 ? (
+              <ScrollArea className="flex-1">
+                <div className="px-3 pb-3">
+                  {archivedThreads.map((thread) => (
                     <ThreadRow
                       key={thread.id}
                       thread={thread}
@@ -253,16 +253,16 @@ export function Sidebar({
                       onDelete={() => onDeleteThread(thread.id)}
                       onArchive={() => onArchiveThread(thread.id)}
                     />
-                  ))
-                ) : (
-                  <div className="flex items-center justify-center h-full pb-12">
-                    <span className="text-[13px]" style={{ color: "rgba(255,255,255,0.3)" }}>
-                      No archived threads
-                    </span>
-                  </div>
-                )}
+                  ))}
+                </div>
+              </ScrollArea>
+            ) : (
+              <div className="flex-1 flex items-center justify-center pb-12">
+                <span className="text-[13px]" style={{ color: "rgba(255,255,255,0.3)" }}>
+                  No archived threads
+                </span>
               </div>
-            </ScrollArea>
+            )}
           </div>
         </div>
       )}
