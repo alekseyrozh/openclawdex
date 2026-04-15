@@ -444,7 +444,7 @@ function createWindow() {
 // ── App lifecycle ─────────────────────────────────────────────
 
 app.whenReady().then(async () => {
-  app.dock?.setIcon(path.join(__dirname, "../resources/icon.png"));
+  // app.dock?.setIcon(path.join(__dirname, "../resources/icon.png"));
   await initDb();
   setupIpcHandlers();
   createWindow();

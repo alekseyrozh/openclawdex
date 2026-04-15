@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "tsc && electron .",
     "build": "tsc",
-    "dist": "electron-builder --mac",
+    "dist": "npx electron-builder --mac",
     "db:studio": "drizzle-kit studio",
     "db:generate": "drizzle-kit generate"
   },
@@ -43,6 +43,7 @@
         "dmg",
         "zip"
       ],
+      "identity": null,
       "icon": "resources/icon.icns",
       "category": "public.app-category.developer-tools",
       "darkModeSupport": true
