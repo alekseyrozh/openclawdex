@@ -1,0 +1,57 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            platform: mac
+          - os: ubuntu-latest
+            platform: linux
+          - os: windows-latest
+            platform: win
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Build shared package
+        run: pnpm --filter @openclawdex/shared build
+
+      - name: Build web app
+        run: pnpm --filter @openclawdex/web build
+
+      - name: Copy web build into desktop
+        shell: bash
+        run: mkdir -p apps/desktop/web && cp -r apps/web/dist apps/desktop/web/
+
+      - name: Build desktop (tsc)
+        run: pnpm --filter @openclawdex/desktop build
+
+      - name: Package & publish
+        run: pnpm --filter @openclawdex/desktop dist:${{ matrix.platform }} -- --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
