@@ -1,6 +1,5 @@
 import { useState, useRef } from "react";
 import {
-  GearSix,
   CaretDown,
   CaretRight,
   Folder,
@@ -175,17 +174,14 @@ export function Sidebar({
         </div>
       </ScrollArea>
 
-      {/* Archived + Settings pinned to bottom */}
+      {/* Archived pinned to bottom */}
       <div className="shrink-0 px-3 py-2" style={{ borderTop: "1px solid rgba(255,255,255,0.06)" }}>
-        {archivedThreads.length > 0 && (
-          <NavItem
-            icon={<Archive size={17} weight="regular" />}
-            label="Archived"
-            badge={archivedThreads.length}
-            onClick={() => setArchivedOpen(true)}
-          />
-        )}
-        <NavItem icon={<GearSix size={17} weight="regular" />} label="Settings" />
+        <NavItem
+          icon={<Archive size={17} weight="regular" />}
+          label="Archived"
+          badge={archivedThreads.length > 0 ? archivedThreads.length : undefined}
+          onClick={() => setArchivedOpen(true)}
+        />
       </div>
 
       {/* Archived threads modal */}
@@ -241,21 +237,31 @@ export function Sidebar({
             </div>
 
             {/* Thread list */}
-            <ScrollArea className="flex-1 px-3 pb-3">
-              {archivedThreads.map((thread) => (
-                <ThreadRow
-                  key={thread.id}
-                  thread={thread}
-                  active={thread.id === activeThreadId}
-                  onSelect={(id) => {
-                    onSelectThread(id);
-                    setArchivedOpen(false);
-                  }}
-                  onRename={(name) => onRenameThread(thread.id, name)}
-                  onDelete={() => onDeleteThread(thread.id)}
-                  onArchive={() => onArchiveThread(thread.id)}
-                />
-              ))}
+            <ScrollArea className="flex-1">
+              <div className="px-3 pb-3">
+                {archivedThreads.length > 0 ? (
+                  archivedThreads.map((thread) => (
+                    <ThreadRow
+                      key={thread.id}
+                      thread={thread}
+                      active={thread.id === activeThreadId}
+                      onSelect={(id) => {
+                        onSelectThread(id);
+                        setArchivedOpen(false);
+                      }}
+                      onRename={(name) => onRenameThread(thread.id, name)}
+                      onDelete={() => onDeleteThread(thread.id)}
+                      onArchive={() => onArchiveThread(thread.id)}
+                    />
+                  ))
+                ) : (
+                  <div className="flex items-center justify-center h-full pb-12">
+                    <span className="text-[13px]" style={{ color: "rgba(255,255,255,0.3)" }}>
+                      No archived threads
+                    </span>
+                  </div>
+                )}
+              </div>
             </ScrollArea>
           </div>
         </div>
@@ -352,7 +358,7 @@ function ThreadRow({
         if (!active && !menuOpen) e.currentTarget.style.background = "transparent";
       }}
     >
-      <ThreadStatusIndicator thread={thread} />
+      {thread.archived ? <span className="w-2 shrink-0" /> : <ThreadStatusIndicator thread={thread} />}
       {renaming ? (
         <input
           value={renameValue}
