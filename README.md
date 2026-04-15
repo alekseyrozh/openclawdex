@@ -2,6 +2,8 @@
 
 Desktop UI for orchestrating Claude and Codex coding agents through their CLIs., with a native Mac feel.
 
+> **Status:** Early alpha. The chat UI is functional with real Claude integration (via Agent SDK). Codex integration is planned.
+
 ## Install
 
 Download the latest `.dmg` from the [Releases](https://github.com/alekseyrozh/openclawdex/releases) page.
@@ -43,11 +45,9 @@ The Electron window loads from `http://localhost:3000`. Hot reload works for the
 ### Production build
 
 ```bash
-# Build everything and package the Electron app
+# Build everything and package the macOS .dmg
 pnpm dist
 ```
-
-Platform-specific builds:
 
 Output goes to `apps/desktop/release/`.
 

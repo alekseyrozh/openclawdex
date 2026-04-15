@@ -9,3 +9,23 @@ release/
 
 # web build copied into desktop for packaging
 apps/desktop/web/
+
+# environment
+.env
+.env.*
+
+# OS
+.DS_Store
+
+# build cache
+*.tsbuildinfo
+
+# editor / IDE
+.claude/
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# logs
+*.log
