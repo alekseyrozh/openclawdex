@@ -6,6 +6,10 @@
   "scripts": {
     "dev": "tsc && electron .",
     "build": "tsc",
+    "dist": "electron-builder",
+    "dist:mac": "electron-builder --mac",
+    "dist:win": "electron-builder --win",
+    "dist:linux": "electron-builder --linux",
     "db:studio": "drizzle-kit studio",
     "db:generate": "drizzle-kit generate"
   },
@@ -21,6 +25,51 @@
     "@types/node": "^24.0.0",
     "drizzle-kit": "^0.30.4",
     "electron": "41.2.0",
+    "electron-builder": "^25.1.8",
     "typescript": "^6.0.2"
+  },
+  "build": {
+    "appId": "com.openclawdex.app",
+    "productName": "OpenClawdex",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "web/**/*",
+      "drizzle/**/*",
+      "resources/**/*",
+      "package.json"
+    ],
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "icon": "resources/icon.icns",
+      "category": "public.app-category.developer-tools",
+      "darkModeSupport": true
+    },
+    "dmg": {
+      "title": "${productName} ${version}"
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "resources/icon.png"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "icon": "resources/icon.png",
+      "category": "Development"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false
+    }
   }
 }

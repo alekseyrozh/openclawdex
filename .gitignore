@@ -3,3 +3,9 @@ dist
 dist-electron
 .vite
 *.local
+
+# electron-builder output
+release/
+
+# web build copied into desktop for packaging
+apps/desktop/web/
