@@ -9,9 +9,6 @@
     "build": "pnpm --filter @openclawdex/web build",
     "build:dist": "pnpm --filter @openclawdex/shared build && pnpm --filter @openclawdex/web build && mkdir -p apps/desktop/web && cp -r apps/web/dist apps/desktop/web/ && pnpm --filter @openclawdex/desktop build",
     "dist": "pnpm run build:dist && pnpm --filter @openclawdex/desktop dist",
-    "dist:mac": "pnpm run build:dist && pnpm --filter @openclawdex/desktop dist:mac",
-    "dist:win": "pnpm run build:dist && pnpm --filter @openclawdex/desktop dist:win",
-    "dist:linux": "pnpm run build:dist && pnpm --filter @openclawdex/desktop dist:linux",
     "db:studio": "pnpm --filter @openclawdex/desktop db:studio",
     "db:generate": "pnpm --filter @openclawdex/desktop db:generate"
   }
