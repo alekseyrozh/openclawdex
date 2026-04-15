@@ -17,6 +17,7 @@ export function findClaudeBinary(): string | null {
     const candidates = [
       `${process.env.HOME}/.claude/local/claude`,
       "/usr/local/bin/claude",
+      "/opt/homebrew/bin/claude",
     ];
     for (const p of candidates) {
       try {
