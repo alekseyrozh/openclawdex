@@ -1,4 +1,6 @@
 import { app, BrowserWindow, ipcMain, nativeTheme, dialog } from "electron";
+import { autoUpdater } from "electron-updater";
+import { shell } from "electron";
 import path from "path";
 import { randomUUID } from "crypto";
 import { execSync } from "child_process";
@@ -441,13 +443,45 @@ function createWindow() {
   }
 }
 
+// ── Auto-update ──────────────────────────────────────────────
+
+function checkForUpdates(): void {
+  autoUpdater.logger = console;
+  autoUpdater.autoDownload = false;
+  autoUpdater.on("update-available", (info) => {
+    if (!mainWindow) return;
+    dialog
+      .showMessageBox(mainWindow, {
+        type: "info",
+        title: "Update Available",
+        message: `Version ${info.version} is available.`,
+        detail: "Would you like to open the download page?",
+        buttons: ["Download", "Later"],
+        defaultId: 0,
+      })
+      .then(({ response }) => {
+        if (response === 0) {
+          shell.openExternal("https://github.com/alekseyrozh/openclawdex/releases/latest");
+        }
+      });
+  });
+  autoUpdater.checkForUpdates();
+
+  // TODO: Once the app is code-signed, replace this manual dialog flow with
+  // autoUpdater.checkForUpdatesAndNotify() which downloads and installs
+  // updates automatically. Unsigned apps can't self-update on macOS.
+}
+
 // ── App lifecycle ─────────────────────────────────────────────
 
 app.whenReady().then(async () => {
-  // app.dock?.setIcon(path.join(__dirname, "../resources/icon.png"));
   await initDb();
   setupIpcHandlers();
   createWindow();
+
+  if (app.isPackaged) {
+    checkForUpdates();
+  }
 });
 
 app.on("activate", () => {
