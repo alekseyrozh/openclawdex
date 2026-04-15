@@ -1,9 +1,12 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release (e.g. 0.1.0)"
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -14,6 +17,11 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Create and push tag
+        run: |
+          git tag "v${{ inputs.version }}"
+          git push origin "v${{ inputs.version }}"
 
       - uses: pnpm/action-setup@v4
         with:
