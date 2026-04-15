@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version to release (e.g. 0.1.0)"
+        description: "Version tag to release (e.g. v0.1.0)"
         required: true
         type: string
 
@@ -20,8 +20,8 @@ jobs:
 
       - name: Create and push tag
         run: |
-          git tag "v${{ inputs.version }}"
-          git push origin "v${{ inputs.version }}"
+          git tag "${{ inputs.version }}"
+          git push origin "${{ inputs.version }}"
 
       - uses: pnpm/action-setup@v4
         with:
