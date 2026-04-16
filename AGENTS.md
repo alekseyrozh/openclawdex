@@ -8,6 +8,19 @@ An Electron app that spawns `claude` and `codex` CLI processes as backends, pres
 
 ## Architecture
 
+### How Electron works
+
+Electron apps have two processes inside one app:
+
+- **Main process** (Node.js) — has system access: filesystem, child processes, SQLite. This is `apps/desktop/`.
+- **Renderer process** (Chromium) — runs the React UI in a sandboxed browser window. This is `apps/web/`.
+
+**IPC** is Electron's built-in message passing between these two processes — not HTTP, not a server, just cross-process function calls within the same app. The renderer calls `ipcRenderer.invoke("threads:pin", ...)`, the main process handles it via `ipcMain.handle("threads:pin", ...)`.
+
+The **preload script** (`preload.ts`) bridges the two: it exposes a `window.openclawdex` object to the renderer with specific allowed methods. The renderer can't access Node.js directly (security sandbox).
+
+### Monorepo layout
+
 pnpm monorepo with two apps and a shared package:
 
 - **`apps/web`** — React + Vite + Tailwind v4 frontend. This is the UI that gets loaded inside Electron (via `http://localhost:3000` in dev).
