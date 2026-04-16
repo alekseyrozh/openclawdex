@@ -66,25 +66,6 @@ function newThread(projectId: string | null): Thread {
   };
 }
 
-const ARCHIVED_LS_PREFIX = "thread-archived:";
-
-function saveArchivedToStorage(threadId: string, archived: boolean) {
-  try {
-    if (archived) {
-      localStorage.setItem(ARCHIVED_LS_PREFIX + threadId, "1");
-    } else {
-      localStorage.removeItem(ARCHIVED_LS_PREFIX + threadId);
-    }
-  } catch { /* ignore quota errors */ }
-}
-
-function loadArchivedFromStorage(threadId: string): boolean {
-  try {
-    return localStorage.getItem(ARCHIVED_LS_PREFIX + threadId) === "1";
-  } catch { return false; }
-}
-
-
 function sessionToThread(s: SessionInfo): Thread {
   return {
     id: s.sessionId,
@@ -98,7 +79,7 @@ function sessionToThread(s: SessionInfo): Thread {
     historyLoaded: false,
     lastModified: new Date(s.lastModified),
     contextStats: s.contextStats,
-    archived: loadArchivedFromStorage(s.sessionId),
+    archived: s.archived ?? false,
     pinned: s.pinned ?? false,
   };
 }
@@ -459,7 +440,9 @@ export function App() {
       prev.map((t) => {
         if (t.id !== threadId) return t;
         const archived = !t.archived;
-        saveArchivedToStorage(t.claudeSessionId ?? t.id, archived);
+        if (t.claudeSessionId) {
+          window.openclawdex?.archiveThread(t.claudeSessionId, archived);
+        }
         return { ...t, archived };
       }),
     );

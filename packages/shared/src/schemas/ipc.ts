@@ -37,6 +37,7 @@ export const SessionInfo = z.object({
   projectId: z.string().optional(),
   contextStats: ContextStats.optional(),
   pinned: z.boolean().optional(),
+  archived: z.boolean().optional(),
 });
 export type SessionInfo = z.infer<typeof SessionInfo>;
 

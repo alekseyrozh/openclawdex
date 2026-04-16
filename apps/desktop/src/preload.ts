@@ -70,6 +70,10 @@ contextBridge.exposeInMainWorld("openclawdex", {
   pinThread: (sessionId: string, pinned: boolean): Promise<void> =>
     ipcRenderer.invoke("threads:pin", sessionId, pinned),
 
+  /** Archive or unarchive a thread. */
+  archiveThread: (sessionId: string, archived: boolean): Promise<void> =>
+    ipcRenderer.invoke("threads:archive", sessionId, archived),
+
   /** Delete a thread from the sidebar. */
   deleteThread: (sessionId: string): Promise<void> =>
     ipcRenderer.invoke("threads:delete", sessionId),
