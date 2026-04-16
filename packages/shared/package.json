@@ -1,7 +1,6 @@
 {
   "name": "@openclawdex/shared",
   "private": true,
-  "version": "0.1.0",
   "main": "dist/index.js",
   "types": "src/index.ts",
   "exports": {
