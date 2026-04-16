@@ -51,7 +51,11 @@ Tables:
 - `project_folders` — folder paths per project
 - `known_threads` — threads started from this UI (session ID, project association, custom name, context stats, pinned/archived state)
 
-Migrations live in `apps/desktop/drizzle/` and run automatically on startup via `initDb()`. To generate a new migration after changing the schema: `cd apps/desktop && npx drizzle-kit generate`.
+Migrations run automatically on app startup via `initDb()`. To change the schema:
+
+1. Edit `apps/desktop/src/db/schema.ts`
+2. Run `cd apps/desktop && pnpm db:generate` — this auto-generates the migration SQL and snapshot files
+3. **Never** create migration files by hand
 
 ### CLI integration
 
