@@ -552,29 +552,24 @@ function createWindow() {
 
 function checkForUpdates(): void {
   autoUpdater.logger = console;
-  autoUpdater.autoDownload = false;
-  autoUpdater.on("update-available", (info) => {
+  autoUpdater.on("update-downloaded", (info) => {
     if (!mainWindow) return;
     dialog
       .showMessageBox(mainWindow, {
         type: "info",
-        title: "Update Available",
-        message: `Version ${info.version} is available.`,
-        detail: "Would you like to open the download page?",
-        buttons: ["Download", "Later"],
+        title: "Update Ready",
+        message: `Version ${info.version} has been downloaded.`,
+        detail: "Restart the app to apply the update.",
+        buttons: ["Restart Now", "Later"],
         defaultId: 0,
       })
       .then(({ response }) => {
         if (response === 0) {
-          shell.openExternal("https://github.com/alekseyrozh/openclawdex/releases/latest");
+          autoUpdater.quitAndInstall();
         }
       });
   });
-  autoUpdater.checkForUpdates();
-
-  // TODO: Once the app is code-signed, replace this manual dialog flow with
-  // autoUpdater.checkForUpdatesAndNotify() which downloads and installs
-  // updates automatically. Unsigned apps can't self-update on macOS.
+  autoUpdater.checkForUpdatesAndNotify();
 }
 
 // ── App lifecycle ─────────────────────────────────────────────

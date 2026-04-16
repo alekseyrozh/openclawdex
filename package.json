@@ -1,7 +1,7 @@
 {
   "name": "openclawdex",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Desktop UI for orchestrating Claude and Codex agents",
   "scripts": {
     "dev": "pnpm --filter @openclawdex/web dev",
