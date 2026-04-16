@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  Desktop UI for orchestrating Claude (and in the future Codex) coding agents through their CLIs, with a native Mac feel.
+  Lightweight desktop UI for orchestrating Claude (and in the future Codex) coding agents through their CLIs, with a native Mac feel.
 </p>
 
 <p align="center">
