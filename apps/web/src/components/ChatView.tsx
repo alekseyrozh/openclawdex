@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useLayoutEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useLayoutEffect, useCallback, createContext, useContext } from "react";
 import { ScrollArea, type ScrollAreaHandle } from "./ScrollArea";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -20,6 +20,29 @@ import {
 } from "@phosphor-icons/react";
 import { QuestionCard } from "./QuestionCard";
 import type { Thread, Message, FileChange, ContextStats } from "../App";
+
+/* ── Open-in-editor context ─────────────────────────────────── */
+
+/** Provides an "open file in VSCode" handler to nested markdown content. */
+const OpenFileContext = createContext<((path: string, line?: number) => void) | null>(null);
+
+/**
+ * Parse a file reference like `path/to/file.tsx`, `file.tsx:42`, or
+ * `file.tsx (line 42)` / `file.tsx (lines 42-50)` into path + optional line.
+ */
+function parseFileRef(text: string): { path: string; line?: number } | null {
+  const trimmed = text.trim();
+  // "file (line 42)" or "file (lines 42-50)"
+  const parenMatch = trimmed.match(/^(.+?)\s*\(lines?\s+(\d+)(?:-\d+)?\)$/i);
+  if (parenMatch) return { path: parenMatch[1], line: Number(parenMatch[2]) };
+  // "file:42" or "file:42:5" — only treat trailing :N as a line number
+  const colonMatch = trimmed.match(/^(.+?):(\d+)(?::\d+)?$/);
+  if (colonMatch && colonMatch[1].includes("/")) {
+    return { path: colonMatch[1], line: Number(colonMatch[2]) };
+  }
+  if (trimmed.includes("/")) return { path: trimmed };
+  return null;
+}
 
 /* ── Image attachment type ─────────────────────────────────── */
 
@@ -709,6 +732,36 @@ function CodeBlock({ language, children }: { language: string | undefined; child
   );
 }
 
+function FileRefCode({ inner }: { inner: string }) {
+  const onOpen = useContext(OpenFileContext);
+  const ref = parseFileRef(inner);
+  if (!onOpen || !ref) {
+    return (
+      <code className="font-mono text-[12.5px] font-semibold" style={{ color: "#6DC6FF" }}>
+        {inner}
+      </code>
+    );
+  }
+  return (
+    <code
+      role="button"
+      tabIndex={0}
+      onClick={() => onOpen(ref.path, ref.line)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onOpen(ref.path, ref.line);
+        }
+      }}
+      title="Open in VSCode"
+      className="font-mono text-[12.5px] font-semibold cursor-pointer hover:underline"
+      style={{ color: "#6DC6FF" }}
+    >
+      {inner}
+    </code>
+  );
+}
+
 function MarkdownContent({ text }: { text: string }) {
   return (
     <ReactMarkdown
@@ -753,11 +806,7 @@ function MarkdownContent({ text }: { text: string }) {
           const inner = String(children);
           const isFileRef = inner.includes("/") || inner.includes("(line");
           if (isFileRef) {
-            return (
-              <code className="font-mono text-[12.5px] font-semibold" style={{ color: "#6DC6FF" }}>
-                {inner}
-              </code>
-            );
+            return <FileRefCode inner={inner} />;
           }
           return (
             <code
@@ -1103,8 +1152,8 @@ export function ChatView({ thread, projectCwd, onSend, onInterrupt, onRespondToT
   };
 
   const handleOpenInEditor = useCallback(
-    (target: string) => {
-      window.openclawdex?.openInEditor(target, projectCwd).then((res) => {
+    (target: string, line?: number) => {
+      window.openclawdex?.openInEditor(target, projectCwd, line).then((res) => {
         if (!res.ok && res.message) {
           // Fall back to a native alert; no toast infra yet.
           alert(res.message);
@@ -1147,6 +1196,7 @@ export function ChatView({ thread, projectCwd, onSend, onInterrupt, onRespondToT
   const isStarted = thread.messages.length > 0;
 
   return (
+    <OpenFileContext.Provider value={handleOpenInEditor}>
     <div
       className="flex-1 flex flex-col min-w-0 min-h-0"
     >
@@ -1555,6 +1605,7 @@ export function ChatView({ thread, projectCwd, onSend, onInterrupt, onRespondToT
         </div>
       )}
     </div>
+    </OpenFileContext.Provider>
   );
 }
 

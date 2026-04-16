@@ -397,14 +397,16 @@ function setupIpcHandlers(): void {
 
   /**
    * Open a file or folder in VSCode. Relative paths are resolved against `cwd`.
+   * If `line` is given, opens the file at that line via `code -g`.
    * Resolves once the `code` CLI has either launched or failed (e.g. not on PATH).
    */
-  ipcMain.handle("editor:open", (_event, targetPath: string, cwd?: string): Promise<{ ok: boolean; message?: string }> => {
+  ipcMain.handle("editor:open", (_event, targetPath: string, cwd?: string, line?: number): Promise<{ ok: boolean; message?: string }> => {
     const resolved = path.isAbsolute(targetPath) || !cwd
       ? targetPath
       : path.resolve(cwd, targetPath);
+    const args = line != null ? ["-g", `${resolved}:${line}`] : [resolved];
     return new Promise((resolve) => {
-      const child = spawn("code", [resolved], { detached: true, stdio: "ignore" });
+      const child = spawn("code", args, { detached: true, stdio: "ignore" });
       child.once("error", (err) => {
         console.error("[editor:open] spawn error:", err);
         resolve({

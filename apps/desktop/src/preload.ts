@@ -63,8 +63,8 @@ contextBridge.exposeInMainWorld("openclawdex", {
   // ── Editor ──────────────────────────────────────────────────
 
   /** Open a file or folder in VSCode. Relative paths resolve against `cwd`. */
-  openInEditor: (targetPath: string, cwd?: string): Promise<{ ok: boolean; message?: string }> =>
-    ipcRenderer.invoke("editor:open", targetPath, cwd),
+  openInEditor: (targetPath: string, cwd?: string, line?: number): Promise<{ ok: boolean; message?: string }> =>
+    ipcRenderer.invoke("editor:open", targetPath, cwd, line),
 
   // ── Threads ─────────────────────────────────────────────────
 
