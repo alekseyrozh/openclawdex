@@ -1,5 +1,10 @@
 import { z } from "zod";
 
+// ── Editor target (for the open-in-editor menu) ──────────────
+
+export const EditorTarget = z.enum(["vscode", "cursor", "finder", "terminal", "iterm", "ghostty"]);
+export type EditorTarget = z.infer<typeof EditorTarget>;
+
 // ── Project types ─────────────────────────────────────────────
 
 export const ProjectFolder = z.object({

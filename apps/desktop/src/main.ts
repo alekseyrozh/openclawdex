@@ -4,6 +4,7 @@ import { shell } from "electron";
 import path from "path";
 import { randomUUID } from "crypto";
 import { execSync, spawn } from "child_process";
+import fs from "fs";
 import { eq } from "drizzle-orm";
 import { findClaudeBinary, ClaudeSession } from "./claude";
 import {
@@ -11,7 +12,7 @@ import {
   getSessionMessages,
 } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
-import type { IpcEvent } from "@openclawdex/shared";
+import type { IpcEvent, EditorTarget } from "@openclawdex/shared";
 import { initDb, getDb } from "./db";
 import { knownThreads, projects, projectFolders } from "./db/schema";
 
@@ -396,22 +397,77 @@ function setupIpcHandlers(): void {
   // ── Editor integration ──────────────────────────────────────
 
   /**
-   * Open a file or folder in VSCode. Relative paths are resolved against `cwd`.
-   * If `line` is given, opens the file at that line via `code -g`.
-   * Resolves once the `code` CLI has either launched or failed (e.g. not on PATH).
+   * Open a file or folder in a chosen editor/tool. Relative paths resolve against `cwd`.
+   * `editor` selects the target: "vscode" (default), "cursor", "finder",
+   * "terminal", "iterm", or "ghostty". For vscode/cursor, a `line` opens
+   * the file at that line via `-g path:line`.
    */
-  ipcMain.handle("editor:open", (_event, targetPath: string, cwd?: string, line?: number): Promise<{ ok: boolean; message?: string }> => {
+  ipcMain.handle("editor:open", (_event, targetPath: string, cwd?: string, line?: number, editor?: EditorTarget): Promise<{ ok: boolean; message?: string }> => {
     const resolved = path.isAbsolute(targetPath) || !cwd
       ? targetPath
       : path.resolve(cwd, targetPath);
+    const target = editor ?? "vscode";
+
+    // Detect whether the path is a file (used to give non-editor targets
+    // sensible per-file behavior). A line number implies file.
+    const isFile: boolean = line != null || (() => {
+      try { return fs.statSync(resolved).isFile(); } catch { return false; }
+    })();
+
+    if (target === "finder") {
+      // For files, reveal-in-Finder; for folders, open the folder.
+      if (isFile) {
+        try {
+          shell.showItemInFolder(resolved);
+          return Promise.resolve({ ok: true });
+        } catch (err) {
+          console.error("[editor:open] finder reveal error:", err);
+          return Promise.resolve({ ok: false, message: `Couldn't reveal in Finder: ${err}` });
+        }
+      }
+      return shell.openPath(resolved).then((err) => {
+        if (err) {
+          console.error("[editor:open] finder error:", err);
+          return { ok: false, message: `Couldn't open in Finder: ${err}` };
+        }
+        return { ok: true };
+      });
+    }
+
+    // macOS terminal apps — launch via `open -a <AppName> <path>`
+    if (target === "terminal" || target === "iterm" || target === "ghostty") {
+      // Terminals take a working directory; for files, open the parent dir.
+      const openDir = isFile ? path.dirname(resolved) : resolved;
+      const appName =
+        target === "terminal" ? "Terminal" :
+        target === "iterm" ? "iTerm" :
+        "Ghostty";
+      return new Promise((resolve) => {
+        const child = spawn("open", ["-a", appName, openDir], { detached: true, stdio: "ignore" });
+        child.once("error", (err) => {
+          console.error("[editor:open] terminal spawn error:", err);
+          resolve({ ok: false, message: `Couldn't launch ${appName}. Make sure it's installed.` });
+        });
+        child.once("spawn", () => {
+          child.unref();
+          resolve({ ok: true });
+        });
+      });
+    }
+
+    const { bin, label } = target === "cursor"
+      ? { bin: "cursor", label: "Cursor" }
+      : { bin: "code", label: "VSCode" };
+    const installHint = `Install the \`${bin}\` command from ${label}'s command palette: "Shell Command: Install '${bin}' command in PATH".`;
+
     const args = line != null ? ["-g", `${resolved}:${line}`] : [resolved];
     return new Promise((resolve) => {
-      const child = spawn("code", args, { detached: true, stdio: "ignore" });
+      const child = spawn(bin, args, { detached: true, stdio: "ignore" });
       child.once("error", (err) => {
         console.error("[editor:open] spawn error:", err);
         resolve({
           ok: false,
-          message: "Couldn't launch VSCode. Install the `code` command from VSCode's command palette: \"Shell Command: Install 'code' command in PATH\".",
+          message: `Couldn't launch ${label}. ${installHint}`,
         });
       });
       child.once("spawn", () => {
