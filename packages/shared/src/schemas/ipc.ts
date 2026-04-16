@@ -36,6 +36,8 @@ export const SessionInfo = z.object({
   gitBranch: z.string().optional(),
   projectId: z.string().optional(),
   contextStats: ContextStats.optional(),
+  pinned: z.boolean().optional(),
+  archived: z.boolean().optional(),
 });
 export type SessionInfo = z.infer<typeof SessionInfo>;
 
