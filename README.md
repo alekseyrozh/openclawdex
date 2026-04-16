@@ -5,7 +5,11 @@
 <h1 align="center">OpenClawdex</h1>
 
 <p align="center">
-  Desktop UI for orchestrating Claude (and in the future Codex) coding agents through their CLIs, with a native Mac feel.
+  The open source AI coding agent orchestrator.
+</p>
+
+<p align="center">
+  Lightweight desktop UI for orchestrating Claude (and in the future Codex) coding agents through their CLIs, with a native Mac feel. No separate login &mdash; it uses your existing Claude Code auth.
 </p>
 
 <p align="center">
@@ -16,11 +20,7 @@
 
 1. Download the latest `.dmg` from the [Releases](https://github.com/alekseyrozh/openclawdex/releases) page
 2. Double-click the downloaded `.dmg` and drag the OpenClawdex app into the Applications folder
-3. Remove the quarantine attribute (the app is unsigned for this early release):
-   ```bash
-   xattr -c /Applications/OpenClawdex.app
-   ```
-4. Launch OpenClawdex from the Applications folder or Launchpad
+3. Launch OpenClawdex from the Applications folder or Launchpad
 
 ### Prerequisites
 
