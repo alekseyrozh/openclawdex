@@ -33,22 +33,8 @@
     {
       "idx": 4,
       "version": "6",
-      "when": 1776343873985,
-      "tag": "0004_calm_famine",
-      "breakpoints": true
-    },
-    {
-      "idx": 5,
-      "version": "6",
-      "when": 1776344040272,
-      "tag": "0005_tiny_nicolaos",
-      "breakpoints": true
-    },
-    {
-      "idx": 6,
-      "version": "6",
-      "when": 1776357281229,
-      "tag": "0006_aromatic_thunderbolt",
+      "when": 1776357444471,
+      "tag": "0004_wooden_gressill",
       "breakpoints": true
     }
   ]

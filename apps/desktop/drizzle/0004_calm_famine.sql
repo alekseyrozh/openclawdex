@@ -1,1 +1,0 @@
-ALTER TABLE `known_threads` ADD `pinned` integer DEFAULT 0;
