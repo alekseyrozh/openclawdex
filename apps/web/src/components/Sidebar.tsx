@@ -10,6 +10,7 @@ import {
   Plus,
   FolderPlus,
   Archive,
+  PushPin,
   X,
 } from "@phosphor-icons/react";
 import type { Thread } from "../App";
@@ -40,6 +41,7 @@ interface SidebarProps {
   onRenameThread: (threadId: string, name: string) => void;
   onDeleteThread: (threadId: string) => void;
   onArchiveThread: (threadId: string) => void;
+  onPinThread: (threadId: string) => void;
   isLoading?: boolean;
 }
 
@@ -55,6 +57,7 @@ export function Sidebar({
   onRenameThread,
   onDeleteThread,
   onArchiveThread,
+  onPinThread,
   isLoading,
 }: SidebarProps) {
   const [archivedOpen, setArchivedOpen] = useState(false);
@@ -63,19 +66,23 @@ export function Sidebar({
   const activeThreads = threads.filter((t) => !t.archived);
   const archivedThreads = threads.filter((t) => t.archived);
 
-  // Threads per project (active only)
+  // Pinned threads (non-archived only)
+  const pinnedThreads = activeThreads.filter((t) => t.pinned);
+  const unpinnedThreads = activeThreads.filter((t) => !t.pinned);
+
+  // Threads per project (active, unpinned only — pinned ones show in their own section)
   const threadsByProject = new Map<string, Thread[]>();
   for (const p of projects) {
     threadsByProject.set(p.id, []);
   }
-  for (const t of activeThreads) {
+  for (const t of unpinnedThreads) {
     if (t.projectId && threadsByProject.has(t.projectId)) {
       threadsByProject.get(t.projectId)!.push(t);
     }
   }
 
   // Ungrouped threads (orphaned — project was deleted)
-  const ungrouped = activeThreads.filter((t) => !t.projectId);
+  const ungrouped = unpinnedThreads.filter((t) => !t.projectId);
 
   return (
     <div
@@ -122,6 +129,38 @@ export function Sidebar({
             <ThreadSkeleton />
           ) : (
             <>
+              {/* Pinned threads */}
+              {pinnedThreads.length > 0 && (
+                <div className="mb-1">
+                  <div className="flex items-center gap-1.5 px-2 py-[5px] mb-[2px]">
+                    <PushPin
+                      size={13}
+                      weight="fill"
+                      style={{ color: "rgba(255, 255, 255, 0.35)", flexShrink: 0 }}
+                    />
+                    <span
+                      className="text-[12px] font-medium"
+                      style={{ color: "rgba(255, 255, 255, 0.35)" }}
+                    >
+                      Pinned
+                    </span>
+                  </div>
+                  {pinnedThreads.map((thread) => (
+                    <ThreadRow
+                      key={thread.id}
+                      thread={thread}
+                      active={thread.id === activeThreadId}
+                      onSelect={onSelectThread}
+                      onRename={(name) => onRenameThread(thread.id, name)}
+                      onDelete={() => onDeleteThread(thread.id)}
+                      onArchive={() => onArchiveThread(thread.id)}
+                      onPin={() => onPinThread(thread.id)}
+                      indent
+                    />
+                  ))}
+                </div>
+              )}
+
               {/* Project groups */}
               {projects.map((project) => {
                 const projectThreads = threadsByProject.get(project.id) ?? [];
@@ -138,6 +177,7 @@ export function Sidebar({
                     onRenameThread={onRenameThread}
                     onDeleteThread={onDeleteThread}
                     onArchiveThread={onArchiveThread}
+                    onPinThread={onPinThread}
                   />
                 );
               })}
@@ -152,6 +192,7 @@ export function Sidebar({
                   onRename={(name) => onRenameThread(thread.id, name)}
                   onDelete={() => onDeleteThread(thread.id)}
                   onArchive={() => onArchiveThread(thread.id)}
+                  onPin={() => onPinThread(thread.id)}
                 />
               ))}
 
@@ -315,6 +356,7 @@ function ThreadRow({
   onRename,
   onDelete,
   onArchive,
+  onPin,
   indent = false,
 }: {
   thread: Thread;
@@ -323,6 +365,7 @@ function ThreadRow({
   onRename: (name: string) => void;
   onDelete: () => void;
   onArchive: () => void;
+  onPin?: () => void;
   indent?: boolean;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
@@ -439,6 +482,21 @@ function ThreadRow({
                     <PencilSimple size={16} weight="regular" />
                     Rename
                   </button>
+                  {onPin && (
+                    <button
+                      onClick={() => {
+                        setMenuOpen(false);
+                        onPin();
+                      }}
+                      className="flex items-center gap-2.5 w-full px-3 py-[8px] text-[13px] text-left rounded-lg transition-colors"
+                      style={{ color: "rgba(255,255,255,0.85)" }}
+                      onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.07)")}
+                      onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                    >
+                      <PushPin size={15} weight={thread.pinned ? "fill" : "regular"} />
+                      {thread.pinned ? "Unpin" : "Pin to top"}
+                    </button>
+                  )}
                   <button
                     onClick={() => {
                       setMenuOpen(false);
@@ -486,6 +544,7 @@ function ProjectGroup({
   onRenameThread,
   onDeleteThread,
   onArchiveThread,
+  onPinThread,
 }: {
   project: ProjectInfo;
   threads: Thread[];
@@ -497,6 +556,7 @@ function ProjectGroup({
   onRenameThread: (threadId: string, name: string) => void;
   onDeleteThread: (threadId: string) => void;
   onArchiveThread: (threadId: string) => void;
+  onPinThread: (threadId: string) => void;
 }) {
   const [collapsed, setCollapsed] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -685,6 +745,7 @@ function ProjectGroup({
               onRename={(name) => onRenameThread(thread.id, name)}
               onDelete={() => onDeleteThread(thread.id)}
               onArchive={() => onArchiveThread(thread.id)}
+              onPin={() => onPinThread(thread.id)}
               indent
             />
           ))

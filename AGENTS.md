@@ -6,23 +6,67 @@ Desktop UI for orchestrating Claude and Codex coding agents through their CLIs.
 
 An Electron app that spawns `claude` and `codex` CLI processes as backends, presenting a unified chat UI to manage multiple agent threads in parallel.
 
-The UI is currently a **static mockup** — no CLI integration yet. The goal is a native Mac feel.
-
 ## Architecture
 
-pnpm monorepo with two apps:
+### How Electron works
+
+Electron apps have two processes inside one app:
+
+- **Main process** (Node.js) — has system access: filesystem, child processes, SQLite. This is `apps/desktop/`.
+- **Renderer process** (Chromium) — runs the React UI in a sandboxed browser window. This is `apps/web/`.
+
+**IPC** is Electron's built-in message passing between these two processes — not HTTP, not a server, just cross-process function calls within the same app. The renderer calls `ipcRenderer.invoke("threads:pin", ...)`, the main process handles it via `ipcMain.handle("threads:pin", ...)`.
+
+The **preload script** (`preload.ts`) bridges the two: it exposes a `window.openclawdex` object to the renderer with specific allowed methods. The renderer can't access Node.js directly (security sandbox).
+
+### Monorepo layout
+
+pnpm monorepo with two apps and a shared package:
 
 - **`apps/web`** — React + Vite + Tailwind v4 frontend. This is the UI that gets loaded inside Electron (via `http://localhost:3000` in dev).
-- **`apps/desktop`** — Electron shell. Provides native macOS window chrome (hiddenInset title bar, vibrancy sidebar, traffic lights). Compiles with `tsc` to `dist/`.
+- **`apps/desktop`** — Electron shell. Provides native macOS window chrome (hiddenInset title bar, vibrancy sidebar, traffic lights), SQLite database (Drizzle ORM), and IPC handlers for CLI integration. Compiles with `tsc` to `dist/`.
+- **`packages/shared`** — Zod schemas shared between web and desktop (IPC events, session types, project types).
 
 ### Key files
 
-- `apps/web/src/App.tsx` — Root layout, mock thread data, draggable sidebar resize
-- `apps/web/src/components/Sidebar.tsx` — Thread list with collapsible project groups
+- `apps/web/src/App.tsx` — Root layout, thread state management, IPC event handling, draggable sidebar resize
+- `apps/web/src/components/Sidebar.tsx` — Thread list with collapsible project groups, pinned threads section
 - `apps/web/src/components/ChatView.tsx` — Message display, file change cards, composer with model/effort pickers
 - `apps/web/src/index.css` — Theme tokens (`#181818` surface, `#339CFF` accent, `#FFFFFF` ink)
-- `apps/desktop/src/main.ts` — Electron BrowserWindow config
-- `apps/desktop/src/preload.ts` — Context bridge (minimal, ready to expand for CLI spawning)
+- `apps/web/src/ipc.d.ts` — TypeScript declarations for the preload bridge (`window.openclawdex`)
+- `apps/desktop/src/main.ts` — Electron BrowserWindow config, IPC handlers, Claude CLI session management
+- `apps/desktop/src/preload.ts` — Context bridge exposing IPC methods to the renderer
+- `apps/desktop/src/claude.ts` — Claude CLI binary detection and session wrapper
+- `apps/desktop/src/db/schema.ts` — Drizzle ORM schema (projects, projectFolders, knownThreads)
+- `apps/desktop/src/db/index.ts` — Database initialization and migration runner
+- `apps/desktop/drizzle/` — SQL migration files
+- `packages/shared/src/schemas/ipc.ts` — Zod schemas for IPC events and session data
+
+### Database
+
+SQLite via **Drizzle ORM** + **@libsql/client**, stored at `~/Library/Application Support/@openclawdex/desktop/openclawdex.db`.
+
+Tables:
+- `projects` — project metadata (id, name)
+- `project_folders` — folder paths per project
+- `known_threads` — threads started from this UI (session ID, project association, custom name, context stats, pinned/archived state)
+
+Migrations run automatically on app startup via `initDb()`. To change the schema:
+
+1. Edit `apps/desktop/src/db/schema.ts`
+2. Run `cd apps/desktop && pnpm db:generate` — this auto-generates the migration SQL and snapshot files
+3. **Never** create migration files by hand
+
+### CLI integration
+
+The Electron main process spawns Claude as a subprocess:
+
+| Agent | Method | Auth |
+|---|---|---|
+| Claude | `claude -p` with `--output-format stream-json` | User's existing `claude auth login` (Max plan works) |
+| Codex | `codex app-server` (JSON-RPC over stdout) — planned | User's existing `codex login` |
+
+No OAuth, no API keys to manage — relies entirely on existing CLI logins.
 
 ## Running
 
@@ -56,17 +100,6 @@ All tokens are CSS custom properties in `index.css`.
 ## Icons
 
 Using **Phosphor Icons** (`@phosphor-icons/react`) with `weight="light"` for a soft, rounded feel. Carets use `weight="bold"`, send/stop buttons use `weight="bold"`/`weight="fill"`.
-
-## Planned CLI integration
-
-The plan is to spawn both agents as subprocesses from the Electron main process:
-
-| Agent | Method | Auth |
-|---|---|---|
-| Claude | `claude -p` with `--output-format stream-json` | User's existing `claude auth login` (Max plan works) |
-| Codex | `codex app-server` (JSON-RPC over stdout) | User's existing `codex login` |
-
-No OAuth, no API keys to manage — relies entirely on existing CLI logins.
 
 ## Code rules
 

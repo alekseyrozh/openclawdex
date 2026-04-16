@@ -209,9 +209,9 @@ function setupIpcHandlers(): void {
   ipcMain.handle("claude:list-sessions", async () => {
     const [all, known] = await Promise.all([
       listSessions(),
-      getDb().select({ sessionId: knownThreads.sessionId, projectId: knownThreads.projectId, customName: knownThreads.customName, contextStats: knownThreads.contextStats }).from(knownThreads),
+      getDb().select({ sessionId: knownThreads.sessionId, projectId: knownThreads.projectId, customName: knownThreads.customName, contextStats: knownThreads.contextStats, pinned: knownThreads.pinned, archived: knownThreads.archived }).from(knownThreads),
     ]);
-    const knownMap = new Map(known.map((r) => [r.sessionId, { projectId: r.projectId ?? undefined, customName: r.customName ?? undefined, contextStats: r.contextStats ?? undefined }]));
+    const knownMap = new Map(known.map((r) => [r.sessionId, { projectId: r.projectId ?? undefined, customName: r.customName ?? undefined, contextStats: r.contextStats ?? undefined, pinned: r.pinned ?? false, archived: r.archived ?? false }]));
     return all
       .filter((s) => knownMap.has(s.sessionId))
       .map((s) => {
@@ -227,6 +227,8 @@ function setupIpcHandlers(): void {
           gitBranch: s.gitBranch,
           projectId: row.projectId,
           contextStats,
+          pinned: row.pinned,
+          archived: row.archived,
         };
       });
   });
@@ -422,6 +424,16 @@ function setupIpcHandlers(): void {
   /** Rename a thread (sets a custom name override). */
   ipcMain.handle("threads:rename", async (_event, sessionId: string, name: string) => {
     await getDb().update(knownThreads).set({ customName: name }).where(eq(knownThreads.sessionId, sessionId));
+  });
+
+  /** Pin or unpin a thread. */
+  ipcMain.handle("threads:pin", async (_event, sessionId: string, pinned: boolean) => {
+    await getDb().update(knownThreads).set({ pinned }).where(eq(knownThreads.sessionId, sessionId));
+  });
+
+  /** Archive or unarchive a thread. */
+  ipcMain.handle("threads:archive", async (_event, sessionId: string, archived: boolean) => {
+    await getDb().update(knownThreads).set({ archived }).where(eq(knownThreads.sessionId, sessionId));
   });
 
   /** Delete a thread from the sidebar. */

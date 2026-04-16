@@ -22,6 +22,8 @@ declare global {
     getGitBranch: (cwd: string) => Promise<string | null>;
     openInEditor: (targetPath: string, cwd?: string) => Promise<{ ok: boolean; message?: string }>;
     renameThread: (sessionId: string, name: string) => Promise<void>;
+    pinThread: (sessionId: string, pinned: boolean) => Promise<void>;
+    archiveThread: (sessionId: string, archived: boolean) => Promise<void>;
     deleteThread: (sessionId: string) => Promise<void>;
     onEvent: (callback: (event: unknown) => void) => () => void;
   }
