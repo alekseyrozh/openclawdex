@@ -1,6 +1,6 @@
 /** Type declarations for the preload bridge exposed on `window.openclawdex`. */
 
-import type { SessionInfo, HistoryMessage, ProjectInfo } from "@openclawdex/shared";
+import type { SessionInfo, HistoryMessage, ProjectInfo, EditorTarget } from "@openclawdex/shared";
 
 export {};
 
@@ -20,6 +20,7 @@ declare global {
     addFolder: (projectId: string, folderPath: string) => Promise<string>;
     removeFolder: (folderId: string) => Promise<void>;
     getGitBranch: (cwd: string) => Promise<string | null>;
+    openInEditor: (targetPath: string, cwd?: string, line?: number, editor?: EditorTarget) => Promise<{ ok: boolean; message?: string }>;
     renameThread: (sessionId: string, name: string) => Promise<void>;
     pinThread: (sessionId: string, pinned: boolean) => Promise<void>;
     archiveThread: (sessionId: string, archived: boolean) => Promise<void>;

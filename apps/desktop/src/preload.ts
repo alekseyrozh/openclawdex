@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { SessionInfo, HistoryMessage, ProjectInfo } from "@openclawdex/shared";
+import type { SessionInfo, HistoryMessage, ProjectInfo, EditorTarget } from "@openclawdex/shared";
 
 contextBridge.exposeInMainWorld("openclawdex", {
   platform: process.platform,
@@ -59,6 +59,12 @@ contextBridge.exposeInMainWorld("openclawdex", {
   /** Get the current git branch for a directory. */
   getGitBranch: (cwd: string): Promise<string | null> =>
     ipcRenderer.invoke("git:branch", cwd),
+
+  // ── Editor ──────────────────────────────────────────────────
+
+  /** Open a file or folder in an editor. Relative paths resolve against `cwd`. */
+  openInEditor: (targetPath: string, cwd?: string, line?: number, editor?: EditorTarget): Promise<{ ok: boolean; message?: string }> =>
+    ipcRenderer.invoke("editor:open", targetPath, cwd, line, editor),
 
   // ── Threads ─────────────────────────────────────────────────
 

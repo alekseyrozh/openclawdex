@@ -1,4 +1,8 @@
-import { useState, useRef, useEffect, useLayoutEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useLayoutEffect, useCallback, createContext, useContext } from "react";
+import { createPortal } from "react-dom";
+import finderIconUrl from "../assets/finder.png";
+import terminalIconUrl from "../assets/apple-terminal.png";
+import ghosttyIconUrl from "../assets/ghostty.png";
 import { ScrollArea, type ScrollAreaHandle } from "./ScrollArea";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -19,6 +23,133 @@ import {
 } from "@phosphor-icons/react";
 import { QuestionCard } from "./QuestionCard";
 import type { Thread, Message, FileChange, ContextStats } from "../App";
+import { EditorTarget } from "@openclawdex/shared";
+
+/* ── Editor logos ────────────────────────────────────────────── */
+
+function VSCodeIcon({ size = 14 }: { size?: number }) {
+  // simple-icons VSCode glyph (stylized blue ribbon)
+  return (
+    <svg viewBox="0 0 24 24" width={size} height={size} fill="#3DA0E2" aria-hidden>
+      <path d="M23.15 2.587 18.21.21a1.494 1.494 0 0 0-1.705.29l-9.46 8.63-4.12-3.128a.999.999 0 0 0-1.276.057L.327 7.261A1 1 0 0 0 .326 8.74L3.899 12 .326 15.26a1 1 0 0 0 .001 1.479L1.65 17.94a.999.999 0 0 0 1.276.057l4.12-3.128 9.46 8.63a1.492 1.492 0 0 0 1.704.29l4.942-2.377A1.5 1.5 0 0 0 24 20.06V3.939a1.5 1.5 0 0 0-.85-1.352zm-5.146 14.861L10.826 12l7.178-5.448z" />
+    </svg>
+  );
+}
+
+function CursorIcon({ size = 14 }: { size?: number }) {
+  // Official Cursor light logo (outlined hex)
+  return (
+    <svg viewBox="0 0 466.73 532.09" width={size} height={size} fill="currentColor" aria-hidden>
+      <path d="M457.43,125.94L244.42,2.96c-6.84-3.95-15.28-3.95-22.12,0L9.3,125.94c-5.75,3.32-9.3,9.46-9.3,16.11v247.99c0,6.65,3.55,12.79,9.3,16.11l213.01,122.98c6.84,3.95,15.28,3.95,22.12,0l213.01-122.98c5.75-3.32,9.3-9.46,9.3-16.11v-247.99c0-6.65-3.55-12.79-9.3-16.11h-.01ZM444.05,151.99l-205.63,356.16c-1.39,2.4-5.06,1.42-5.06-1.36v-233.21c0-4.66-2.49-8.97-6.53-11.31L24.87,145.67c-2.4-1.39-1.42-5.06,1.36-5.06h411.26c5.84,0,9.49,6.33,6.57,11.39h-.01Z" />
+    </svg>
+  );
+}
+
+function FinderIcon({ size = 14 }: { size?: number }) {
+  return <img src={finderIconUrl} width={size} height={size} alt="" aria-hidden draggable={false} />;
+}
+
+function TerminalIcon({ size = 14 }: { size?: number }) {
+  return (
+    <img
+      src={terminalIconUrl}
+      width={size}
+      height={size}
+      alt=""
+      aria-hidden
+      draggable={false}
+      style={{ transform: "scale(1.3)", transformOrigin: "center" }}
+    />
+  );
+}
+
+function GhosttyIcon({ size = 14 }: { size?: number }) {
+  return (
+    <img
+      src={ghosttyIconUrl}
+      width={size}
+      height={size}
+      alt=""
+      aria-hidden
+      draggable={false}
+      style={{ transform: "scale(1.3)", transformOrigin: "center" }}
+    />
+  );
+}
+
+function ITermIcon({ size = 14 }: { size?: number }) {
+  // Official iTerm2 glyph
+  return (
+    <svg viewBox="100 100 824 824" width={size} height={size} aria-hidden>
+      <defs>
+        <linearGradient id="iterm-grad" x1="512" y1="100" x2="512" y2="924" gradientUnits="userSpaceOnUse">
+          <stop stopColor="#D4E6E8" />
+          <stop offset="1" stopColor="#767573" />
+        </linearGradient>
+      </defs>
+      <rect x="100" y="100" width="824" height="824" rx="179" fill="url(#iterm-grad)" />
+      <rect x="121.788" y="121.789" width="780.423" height="780.423" rx="156" fill="black" />
+      <rect x="183.192" y="183.192" width="657.615" height="657.615" rx="94" fill="#202A2F" />
+      <rect x="367.404" y="226.769" width="89.1346" height="178.269" fill="#0EE827" fillOpacity="0.35" />
+      <path fill="#0EE827" d="M274.468 374.622C269.807 374.227 265.438 373.568 261.36 372.645C257.427 371.59 253.786 370.47 250.436 369.284C247.232 368.097 244.392 366.977 241.916 365.922C239.586 364.736 237.838 363.813 236.673 363.154L246.067 345.754C247.086 346.413 248.834 347.335 251.31 348.522C253.786 349.708 256.553 350.96 259.612 352.279C262.816 353.465 266.093 354.52 269.443 355.442C272.793 356.365 275.924 356.827 278.837 356.827C293.402 356.827 300.684 351.356 300.684 340.415C300.684 337.778 300.174 335.603 299.154 333.89C298.281 332.176 296.897 330.726 295.004 329.54C293.256 328.221 291.071 327.101 288.45 326.178C285.974 325.124 283.134 324.069 279.929 323.015C273.812 320.905 268.351 318.73 263.544 316.489C258.884 314.117 254.878 311.48 251.529 308.58C248.179 305.68 245.63 302.385 243.882 298.694C242.135 295.003 241.261 290.784 241.261 286.039C241.261 282.348 242.062 278.789 243.664 275.361C245.266 271.934 247.523 268.902 250.436 266.266C253.349 263.498 256.845 261.191 260.923 259.345C265.001 257.368 269.516 255.984 274.468 255.193V226.769H292.382V254.797C296.169 255.193 299.81 255.786 303.305 256.577C306.801 257.368 309.932 258.225 312.699 259.147C315.467 260.07 317.797 260.993 319.69 261.916C321.729 262.707 323.186 263.3 324.06 263.695L315.321 279.909C314.156 279.382 312.481 278.723 310.296 277.932C308.257 277.009 305.927 276.086 303.305 275.164C300.684 274.241 297.844 273.45 294.785 272.791C291.727 272.132 288.668 271.802 285.61 271.802C280.658 271.802 276.215 272.725 272.283 274.57C268.496 276.284 266.603 279.25 266.603 283.468C266.603 286.105 267.113 288.478 268.132 290.587C269.297 292.564 270.899 294.344 272.938 295.925C275.123 297.507 277.745 299.023 280.803 300.473C284.007 301.791 287.649 303.11 291.727 304.428C297.115 306.405 301.922 308.448 306.145 310.558C310.369 312.667 313.937 315.039 316.85 317.676C319.763 320.312 321.948 323.344 323.404 326.771C325.006 330.199 325.807 334.219 325.807 338.833C325.807 342.788 325.079 346.61 323.623 350.301C322.312 353.992 320.2 357.42 317.287 360.583C314.52 363.747 311.025 366.515 306.801 368.888C302.723 371.129 297.916 372.777 292.382 373.831V403.058H274.468V374.622Z" />
+    </svg>
+  );
+}
+
+/* ── Editor target helpers ───────────────────────────────────── */
+
+function isEditorTarget(v: string): v is EditorTarget {
+  return EditorTarget.safeParse(v).success;
+}
+
+function editorLabel(t: EditorTarget): string {
+  switch (t) {
+    case "vscode": return "VSCode";
+    case "cursor": return "Cursor";
+    case "finder": return "Finder";
+    case "terminal": return "Terminal";
+    case "iterm": return "iTerm2";
+    case "ghostty": return "Ghostty";
+  }
+}
+
+function EditorTargetIcon({ target, size = 16 }: { target: EditorTarget; size?: number }) {
+  switch (target) {
+    case "vscode": return <VSCodeIcon size={size} />;
+    case "cursor": return <span style={{ color: "var(--text-primary)", display: "inline-flex" }}><CursorIcon size={size} /></span>;
+    case "finder": return <FinderIcon size={size} />;
+    case "terminal": return <TerminalIcon size={size} />;
+    case "iterm": return <ITermIcon size={size} />;
+    case "ghostty": return <GhosttyIcon size={size} />;
+  }
+}
+
+/* ── Open-in-editor context ─────────────────────────────────── */
+
+/** Provides an "open file in the user's preferred editor" handler to nested content. */
+interface OpenFileCtx {
+  open: (path: string, line?: number) => void;
+  editorLabel: string;
+}
+const OpenFileContext = createContext<OpenFileCtx | null>(null);
+
+/**
+ * Parse a file reference like `path/to/file.tsx`, `file.tsx:42`, or
+ * `file.tsx (line 42)` / `file.tsx (lines 42-50)` into path + optional line.
+ */
+function parseFileRef(text: string): { path: string; line?: number } | null {
+  const trimmed = text.trim();
+  // "file (line 42)" or "file (lines 42-50)"
+  const parenMatch = trimmed.match(/^(.+?)\s*\(lines?\s+(\d+)(?:-\d+)?\)$/i);
+  if (parenMatch) return { path: parenMatch[1], line: Number(parenMatch[2]) };
+  // "file:42" or "file:42:5" — only treat trailing :N as a line number
+  const colonMatch = trimmed.match(/^(.+?):(\d+)(?::\d+)?$/);
+  if (colonMatch && colonMatch[1].includes("/")) {
+    return { path: colonMatch[1], line: Number(colonMatch[2]) };
+  }
+  if (trimmed.includes("/")) return { path: trimmed };
+  return null;
+}
 
 /* ── Image attachment type ─────────────────────────────────── */
 
@@ -91,7 +222,8 @@ const MODES: ModeDef[] = [
 
 /* ── File change card ────────────────────────────────────────── */
 
-function FileChangeCard({ changes }: { changes: FileChange[] }) {
+function FileChangeCard({ changes, onOpenFile }: { changes: FileChange[]; onOpenFile?: (path: string) => void }) {
+  const ctx = useContext(OpenFileContext);
   const total = changes.length;
   return (
     <div
@@ -123,10 +255,12 @@ function FileChangeCard({ changes }: { changes: FileChange[] }) {
         </button>
       </div>
       {changes.map((fc, i) => (
-        <div
+        <button
           key={i}
-          className="flex items-center gap-2 px-3 py-[7px] transition-colors"
-          style={{ cursor: "default" }}
+          onClick={() => onOpenFile?.(fc.path)}
+          className="w-full flex items-center gap-2 px-3 py-[7px] transition-colors text-left"
+          style={{ cursor: onOpenFile ? "pointer" : "default" }}
+          title={onOpenFile ? `Open in ${ctx?.editorLabel ?? "editor"}` : undefined}
           onMouseEnter={(e) =>
             (e.currentTarget.style.background = "rgba(255,255,255,0.02)")
           }
@@ -153,7 +287,7 @@ function FileChangeCard({ changes }: { changes: FileChange[] }) {
           >
             −{fc.deletions}
           </span>
-        </div>
+        </button>
       ))}
     </div>
   );
@@ -352,10 +486,45 @@ function toolSummary(name: string, input?: Record<string, unknown>): string {
   }
 }
 
-function ToolUseIndicator({ toolName, toolInput }: { toolName: string; toolInput?: Record<string, unknown> }) {
+/** Return the file path this tool targets, if any (Read/Edit/Write). */
+function toolFilePath(toolName: string, toolInput?: Record<string, unknown>): string | null {
+  if (!toolInput) return null;
+  if (toolName === "Read" || toolName === "Edit" || toolName === "Write") {
+    const fp = toolInput.file_path;
+    return typeof fp === "string" && fp.length > 0 ? fp : null;
+  }
+  return null;
+}
+
+function ToolUseIndicator({ toolName, toolInput, onOpenFile }: { toolName: string; toolInput?: Record<string, unknown>; onOpenFile?: (path: string) => void }) {
+  const ctx = useContext(OpenFileContext);
   const summary = toolSummary(toolName, toolInput);
   const maxLen = 120;
   const display = summary.length > maxLen ? summary.slice(0, maxLen) + "…" : summary;
+  const filePath = toolFilePath(toolName, toolInput);
+  const clickable = filePath && onOpenFile;
+
+  if (clickable) {
+    return (
+      <button
+        onClick={() => onOpenFile(filePath)}
+        title={`Open in ${ctx?.editorLabel ?? "editor"}`}
+        className="w-full flex items-center gap-2 py-1.5 px-1 text-[13px] text-left rounded-md transition-colors"
+        style={{
+          color: "var(--text-muted)",
+          fontFamily: "var(--font-code)",
+        }}
+        onMouseEnter={(e) => {
+          e.currentTarget.style.color = "var(--text-secondary)";
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.color = "var(--text-muted)";
+        }}
+      >
+        <span className="truncate">{display}</span>
+      </button>
+    );
+  }
 
   return (
     <div
@@ -440,13 +609,13 @@ function TokenProgressIndicator({ stats }: { stats: ContextStats }) {
   );
 }
 
-function MessageBlock({ message, isStreaming, showHoverBar, onImageClick }: { message: Message; isStreaming: boolean; showHoverBar: boolean; onImageClick?: (url: string) => void }) {
+function MessageBlock({ message, isStreaming, showHoverBar, onImageClick, onOpenFile }: { message: Message; isStreaming: boolean; showHoverBar: boolean; onImageClick?: (url: string) => void; onOpenFile?: (path: string) => void }) {
   if (message.collapsed) {
     return <CollapsedIndicator count={message.collapsed} />;
   }
 
   if (message.role === "tool_use") {
-    return <ToolUseIndicator toolName={message.toolName ?? "unknown"} toolInput={message.toolInput} />;
+    return <ToolUseIndicator toolName={message.toolName ?? "unknown"} toolInput={message.toolInput} onOpenFile={onOpenFile} />;
   }
 
   const isUser = message.role === "user";
@@ -497,7 +666,7 @@ function MessageBlock({ message, isStreaming, showHoverBar, onImageClick }: { me
         <StreamingText text={message.content} isStreaming={isStreaming} />
       </div>
       {message.fileChanges && message.fileChanges.length > 0 && (
-        <FileChangeCard changes={message.fileChanges} />
+        <FileChangeCard changes={message.fileChanges} onOpenFile={onOpenFile} />
       )}
     </div>
   );
@@ -672,6 +841,36 @@ function CodeBlock({ language, children }: { language: string | undefined; child
   );
 }
 
+function FileRefCode({ inner }: { inner: string }) {
+  const ctx = useContext(OpenFileContext);
+  const ref = parseFileRef(inner);
+  if (!ctx || !ref) {
+    return (
+      <code className="font-mono text-[12.5px] font-semibold" style={{ color: "#6DC6FF" }}>
+        {inner}
+      </code>
+    );
+  }
+  return (
+    <code
+      role="button"
+      tabIndex={0}
+      onClick={() => ctx.open(ref.path, ref.line)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          ctx.open(ref.path, ref.line);
+        }
+      }}
+      title={`Open in ${ctx.editorLabel}`}
+      className="font-mono text-[12.5px] font-semibold cursor-pointer hover:underline"
+      style={{ color: "#6DC6FF" }}
+    >
+      {inner}
+    </code>
+  );
+}
+
 function MarkdownContent({ text }: { text: string }) {
   return (
     <ReactMarkdown
@@ -716,11 +915,7 @@ function MarkdownContent({ text }: { text: string }) {
           const inner = String(children);
           const isFileRef = inner.includes("/") || inner.includes("(line");
           if (isFileRef) {
-            return (
-              <code className="font-mono text-[12.5px] font-semibold" style={{ color: "#6DC6FF" }}>
-                {inner}
-              </code>
-            );
+            return <FileRefCode inner={inner} />;
           }
           return (
             <code
@@ -886,12 +1081,13 @@ function TextareaWithScrollbar({
 
 interface ChatViewProps {
   thread: Thread | null;
+  projectCwd?: string;
   onSend: (threadId: string, text: string, images?: ImagePayload[]) => void;
   onInterrupt: (threadId: string) => void;
   onRespondToTool: (threadId: string, toolUseId: string, text: string) => void;
 }
 
-export function ChatView({ thread, onSend, onInterrupt, onRespondToTool }: ChatViewProps) {
+export function ChatView({ thread, projectCwd, onSend, onInterrupt, onRespondToTool }: ChatViewProps) {
   const [input, setInput] = useState("");
   const [selectedModel, setSelectedModel] = useState(CLAUDE_MODELS[0]);
   const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
@@ -902,6 +1098,14 @@ export function ChatView({ thread, onSend, onInterrupt, onRespondToTool }: ChatV
   const [selectedMode, setSelectedMode] = useState(MODES[2]); // default "Auto-accept edits" (only available mode for now)
   const [modeDropdownOpen, setModeDropdownOpen] = useState(false);
   const modeDropdownRef = useRef<HTMLDivElement>(null);
+  const [editorDropdownOpen, setEditorDropdownOpen] = useState(false);
+  const [editorDropdownPos, setEditorDropdownPos] = useState<{ top: number; right: number } | null>(null);
+  const editorCaretRef = useRef<HTMLButtonElement>(null);
+  const [preferredEditor, setPreferredEditor] = useState<EditorTarget>(() => {
+    const stored = localStorage.getItem("preferredEditor");
+    if (stored && isEditorTarget(stored)) return stored;
+    return "vscode";
+  });
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollAreaRef = useRef<ScrollAreaHandle>(null);
@@ -1064,6 +1268,19 @@ export function ChatView({ thread, onSend, onInterrupt, onRespondToTool }: ChatV
     }
   };
 
+  const handleOpenInEditor = useCallback(
+    (target: string, line?: number, editor?: EditorTarget) => {
+      const effective = editor ?? preferredEditor;
+      window.openclawdex?.openInEditor(target, projectCwd, line, effective).then((res) => {
+        if (!res.ok && res.message) {
+          // Fall back to a native alert; no toast infra yet.
+          alert(res.message);
+        }
+      });
+    },
+    [projectCwd, preferredEditor],
+  );
+
   useEffect(() => {
     if (!modelDropdownOpen && !effortDropdownOpen && !modeDropdownOpen) return;
     const handleClick = (e: MouseEvent) => {
@@ -1097,12 +1314,13 @@ export function ChatView({ thread, onSend, onInterrupt, onRespondToTool }: ChatV
   const isStarted = thread.messages.length > 0;
 
   return (
+    <OpenFileContext.Provider value={{ open: handleOpenInEditor, editorLabel: editorLabel(preferredEditor) }}>
     <div
       className="flex-1 flex flex-col min-w-0 min-h-0"
     >
       {/* Title bar area */}
       <div
-        className="h-[38px] shrink-0 flex items-center justify-center"
+        className="h-[38px] shrink-0 flex items-center justify-center relative"
         style={{
           borderBottom: "1px solid var(--border-subtle)",
           // @ts-expect-error -- webkit
@@ -1115,6 +1333,75 @@ export function ChatView({ thread, onSend, onInterrupt, onRespondToTool }: ChatV
         >
           {thread.name}
         </span>
+        {projectCwd && (
+          <div
+            className="absolute right-3 top-1/2 -translate-y-1/2"
+            style={{
+              // @ts-expect-error -- webkit
+              WebkitAppRegion: "no-drag",
+            }}
+          >
+            <div
+              className="inline-flex items-stretch h-[26px] rounded-xl overflow-hidden"
+              style={{
+                background: "var(--surface-2)",
+                border: "1px solid var(--border-default)",
+              }}
+            >
+              <button
+                onClick={() => handleOpenInEditor(projectCwd, undefined, preferredEditor)}
+                title={`Open project in ${editorLabel(preferredEditor)}`}
+                className="flex items-center justify-center pl-2.5 pr-1 transition-colors"
+                onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.06)")}
+                onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+              >
+                <EditorTargetIcon target={preferredEditor} size={16} />
+              </button>
+              <button
+                ref={editorCaretRef}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (!editorDropdownOpen && editorCaretRef.current) {
+                    const rect = editorCaretRef.current.getBoundingClientRect();
+                    setEditorDropdownPos({
+                      top: rect.bottom + 4,
+                      right: window.innerWidth - rect.right,
+                    });
+                  }
+                  setEditorDropdownOpen((v) => !v);
+                }}
+                title="Open project in…"
+                className="flex items-center justify-center pl-1 pr-2 transition-colors"
+                onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.06)")}
+                onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+              >
+                <CaretDown size={12} weight="bold" style={{ color: "var(--text-muted)" }} />
+              </button>
+            </div>
+            {editorDropdownOpen && editorDropdownPos && createPortal(
+              <>
+                <div
+                  className="fixed inset-0 z-[60]"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setEditorDropdownOpen(false);
+                  }}
+                />
+                <OpenInEditorDropdown
+                  top={editorDropdownPos.top}
+                  right={editorDropdownPos.right}
+                  onSelect={(editor) => {
+                    setEditorDropdownOpen(false);
+                    setPreferredEditor(editor);
+                    localStorage.setItem("preferredEditor", editor);
+                    handleOpenInEditor(projectCwd, undefined, editor);
+                  }}
+                />
+              </>,
+              document.body,
+            )}
+          </div>
+        )}
       </div>
 
       {/* Messages */}
@@ -1154,6 +1441,7 @@ export function ChatView({ thread, onSend, onInterrupt, onRespondToTool }: ChatV
                       isStreaming={false}
                       showHoverBar={msg.role === "user"}
                       onImageClick={setLightboxUrl}
+                      onOpenFile={handleOpenInEditor}
                     />
                   );
                   i++;
@@ -1204,6 +1492,7 @@ export function ChatView({ thread, onSend, onInterrupt, onRespondToTool }: ChatV
                             isStreaming={m.id === streamingMsgId}
                             showHoverBar={false}
                             onImageClick={setLightboxUrl}
+                            onOpenFile={handleOpenInEditor}
                           />
                         );
                       })}
@@ -1477,6 +1766,7 @@ export function ChatView({ thread, onSend, onInterrupt, onRespondToTool }: ChatV
         </div>
       )}
     </div>
+    </OpenFileContext.Provider>
   );
 }
 
@@ -1527,6 +1817,70 @@ function ControlButton({ children, onClick, tooltip }: { children: React.ReactNo
           {tooltip}
         </div>
       )}
+    </div>
+  );
+}
+
+/* ── Open-in-editor dropdown ────────────────────────────────── */
+
+function OpenInEditorDropdown({
+  top,
+  right,
+  onSelect,
+}: {
+  top: number;
+  right: number;
+  onSelect: (editor: EditorTarget) => void;
+}) {
+  type Item = { id: EditorTarget; label: string; icon: React.ReactNode };
+  const groups: Item[][] = [
+    [
+      { id: "vscode", label: "VSCode", icon: <VSCodeIcon size={14} /> },
+      { id: "cursor", label: "Cursor", icon: <span style={{ color: "var(--text-primary)" }}><CursorIcon size={14} /></span> },
+    ],
+    [
+      { id: "terminal", label: "Terminal", icon: <TerminalIcon size={14} /> },
+      { id: "iterm", label: "iTerm2", icon: <ITermIcon size={14} /> },
+      { id: "ghostty", label: "Ghostty", icon: <GhosttyIcon size={14} /> },
+    ],
+    [
+      { id: "finder", label: "Finder", icon: <FinderIcon size={14} /> },
+    ],
+  ];
+  return (
+    <div
+      className="fixed z-[70] rounded-2xl overflow-hidden p-1.5"
+      onClick={(e) => e.stopPropagation()}
+      style={{
+        top,
+        right,
+        minWidth: "160px",
+        background: "rgba(32,32,32,0.98)",
+        border: "1px solid rgba(255,255,255,0.08)",
+        boxShadow: "0 8px 30px rgba(0,0,0,0.55), 0 0 0 0.5px rgba(255,255,255,0.06)",
+        backdropFilter: "blur(20px)",
+      }}
+    >
+      {groups.map((group, gi) => (
+        <div key={gi}>
+          {gi > 0 && (
+            <div className="my-1 mx-1.5" style={{ height: 1, background: "rgba(255,255,255,0.08)" }} />
+          )}
+          {group.map((it) => (
+            <button
+              key={it.id}
+              onClick={() => onSelect(it.id)}
+              className="flex items-center gap-2.5 w-full px-3 py-[8px] text-[13px] font-medium text-left rounded-lg transition-colors"
+              style={{ color: "rgba(255,255,255,0.85)" }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.07)")}
+              onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+            >
+              <span className="flex items-center justify-center w-[16px] h-[16px] shrink-0">{it.icon}</span>
+              {it.label}
+            </button>
+          ))}
+        </div>
+      ))}
     </div>
   );
 }

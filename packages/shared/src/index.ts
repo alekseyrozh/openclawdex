@@ -9,6 +9,7 @@ export {
 } from "./schemas/claude-events";
 
 export {
+  EditorTarget,
   ProjectFolder,
   ProjectInfo,
   ContextStats,
