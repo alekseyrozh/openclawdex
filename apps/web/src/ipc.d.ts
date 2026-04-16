@@ -21,6 +21,7 @@ declare global {
     removeFolder: (folderId: string) => Promise<void>;
     getGitBranch: (cwd: string) => Promise<string | null>;
     renameThread: (sessionId: string, name: string) => Promise<void>;
+    pinThread: (sessionId: string, pinned: boolean) => Promise<void>;
     deleteThread: (sessionId: string) => Promise<void>;
     onEvent: (callback: (event: unknown) => void) => () => void;
   }

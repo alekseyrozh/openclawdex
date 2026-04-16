@@ -66,6 +66,10 @@ contextBridge.exposeInMainWorld("openclawdex", {
   renameThread: (sessionId: string, name: string): Promise<void> =>
     ipcRenderer.invoke("threads:rename", sessionId, name),
 
+  /** Pin or unpin a thread. */
+  pinThread: (sessionId: string, pinned: boolean): Promise<void> =>
+    ipcRenderer.invoke("threads:pin", sessionId, pinned),
+
   /** Delete a thread from the sidebar. */
   deleteThread: (sessionId: string): Promise<void> =>
     ipcRenderer.invoke("threads:delete", sessionId),

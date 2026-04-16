@@ -67,7 +67,6 @@ function newThread(projectId: string | null): Thread {
 }
 
 const ARCHIVED_LS_PREFIX = "thread-archived:";
-const PINNED_LS_PREFIX = "thread-pinned:";
 
 function saveArchivedToStorage(threadId: string, archived: boolean) {
   try {
@@ -85,21 +84,6 @@ function loadArchivedFromStorage(threadId: string): boolean {
   } catch { return false; }
 }
 
-function savePinnedToStorage(threadId: string, pinned: boolean) {
-  try {
-    if (pinned) {
-      localStorage.setItem(PINNED_LS_PREFIX + threadId, "1");
-    } else {
-      localStorage.removeItem(PINNED_LS_PREFIX + threadId);
-    }
-  } catch { /* ignore quota errors */ }
-}
-
-function loadPinnedFromStorage(threadId: string): boolean {
-  try {
-    return localStorage.getItem(PINNED_LS_PREFIX + threadId) === "1";
-  } catch { return false; }
-}
 
 function sessionToThread(s: SessionInfo): Thread {
   return {
@@ -115,7 +99,7 @@ function sessionToThread(s: SessionInfo): Thread {
     lastModified: new Date(s.lastModified),
     contextStats: s.contextStats,
     archived: loadArchivedFromStorage(s.sessionId),
-    pinned: loadPinnedFromStorage(s.sessionId),
+    pinned: s.pinned ?? false,
   };
 }
 
@@ -494,7 +478,9 @@ export function App() {
       prev.map((t) => {
         if (t.id !== threadId) return t;
         const pinned = !t.pinned;
-        savePinnedToStorage(t.claudeSessionId ?? t.id, pinned);
+        if (t.claudeSessionId) {
+          window.openclawdex?.pinThread(t.claudeSessionId, pinned);
+        }
         return { ...t, pinned };
       }),
     );
