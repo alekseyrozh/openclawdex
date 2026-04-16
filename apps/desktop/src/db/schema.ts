@@ -19,6 +19,6 @@ export const knownThreads = sqliteTable("known_threads", {
   projectId: text("project_id"),
   customName: text("custom_name"),
   contextStats: text("context_stats"),
-  pinned: integer("pinned").default(0),
-  archived: integer("archived").default(0),
+  pinned: integer("pinned", { mode: "boolean" }).default(false),
+  archived: integer("archived", { mode: "boolean" }).default(false),
 });

@@ -211,7 +211,7 @@ function setupIpcHandlers(): void {
       listSessions(),
       getDb().select({ sessionId: knownThreads.sessionId, projectId: knownThreads.projectId, customName: knownThreads.customName, contextStats: knownThreads.contextStats, pinned: knownThreads.pinned, archived: knownThreads.archived }).from(knownThreads),
     ]);
-    const knownMap = new Map(known.map((r) => [r.sessionId, { projectId: r.projectId ?? undefined, customName: r.customName ?? undefined, contextStats: r.contextStats ?? undefined, pinned: r.pinned === 1, archived: r.archived === 1 }]));
+    const knownMap = new Map(known.map((r) => [r.sessionId, { projectId: r.projectId ?? undefined, customName: r.customName ?? undefined, contextStats: r.contextStats ?? undefined, pinned: r.pinned ?? false, archived: r.archived ?? false }]));
     return all
       .filter((s) => knownMap.has(s.sessionId))
       .map((s) => {
@@ -402,12 +402,12 @@ function setupIpcHandlers(): void {
 
   /** Pin or unpin a thread. */
   ipcMain.handle("threads:pin", async (_event, sessionId: string, pinned: boolean) => {
-    await getDb().update(knownThreads).set({ pinned: pinned ? 1 : 0 }).where(eq(knownThreads.sessionId, sessionId));
+    await getDb().update(knownThreads).set({ pinned }).where(eq(knownThreads.sessionId, sessionId));
   });
 
   /** Archive or unarchive a thread. */
   ipcMain.handle("threads:archive", async (_event, sessionId: string, archived: boolean) => {
-    await getDb().update(knownThreads).set({ archived: archived ? 1 : 0 }).where(eq(knownThreads.sessionId, sessionId));
+    await getDb().update(knownThreads).set({ archived }).where(eq(knownThreads.sessionId, sessionId));
   });
 
   /** Delete a thread from the sidebar. */
