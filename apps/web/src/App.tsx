@@ -20,6 +20,7 @@ export interface Thread {
   lastModified: Date;
   contextStats?: ContextStats;
   archived?: boolean;
+  pinned?: boolean;
   needsAttention?: boolean;
   /** ID of a tool call waiting for user input (e.g. AskUserQuestion). */
   pendingToolUseId?: string;
@@ -66,6 +67,7 @@ function newThread(projectId: string | null): Thread {
 }
 
 const ARCHIVED_LS_PREFIX = "thread-archived:";
+const PINNED_LS_PREFIX = "thread-pinned:";
 
 function saveArchivedToStorage(threadId: string, archived: boolean) {
   try {
@@ -83,6 +85,22 @@ function loadArchivedFromStorage(threadId: string): boolean {
   } catch { return false; }
 }
 
+function savePinnedToStorage(threadId: string, pinned: boolean) {
+  try {
+    if (pinned) {
+      localStorage.setItem(PINNED_LS_PREFIX + threadId, "1");
+    } else {
+      localStorage.removeItem(PINNED_LS_PREFIX + threadId);
+    }
+  } catch { /* ignore quota errors */ }
+}
+
+function loadPinnedFromStorage(threadId: string): boolean {
+  try {
+    return localStorage.getItem(PINNED_LS_PREFIX + threadId) === "1";
+  } catch { return false; }
+}
+
 function sessionToThread(s: SessionInfo): Thread {
   return {
     id: s.sessionId,
@@ -97,6 +115,7 @@ function sessionToThread(s: SessionInfo): Thread {
     lastModified: new Date(s.lastModified),
     contextStats: s.contextStats,
     archived: loadArchivedFromStorage(s.sessionId),
+    pinned: loadPinnedFromStorage(s.sessionId),
   };
 }
 
@@ -470,6 +489,17 @@ export function App() {
     }
   }, [activeThreadId]);
 
+  const handlePinThread = useCallback((threadId: string) => {
+    setThreads((prev) =>
+      prev.map((t) => {
+        if (t.id !== threadId) return t;
+        const pinned = !t.pinned;
+        savePinnedToStorage(t.claudeSessionId ?? t.id, pinned);
+        return { ...t, pinned };
+      }),
+    );
+  }, []);
+
   // ── Sidebar drag ──────────────────────────────────────────────
 
   const onDragStart = useCallback((e: React.MouseEvent) => {
@@ -517,6 +547,7 @@ export function App() {
           onRenameThread={handleRenameThread}
           onDeleteThread={handleDeleteThread}
           onArchiveThread={handleArchiveThread}
+          onPinThread={handlePinThread}
           isLoading={threadsLoading}
         />
       </div>
