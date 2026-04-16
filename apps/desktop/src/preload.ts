@@ -60,6 +60,12 @@ contextBridge.exposeInMainWorld("openclawdex", {
   getGitBranch: (cwd: string): Promise<string | null> =>
     ipcRenderer.invoke("git:branch", cwd),
 
+  // ── Editor ──────────────────────────────────────────────────
+
+  /** Open a file or folder in VSCode. Relative paths resolve against `cwd`. */
+  openInEditor: (targetPath: string, cwd?: string): Promise<{ ok: boolean; message?: string }> =>
+    ipcRenderer.invoke("editor:open", targetPath, cwd),
+
   // ── Threads ─────────────────────────────────────────────────
 
   /** Rename a thread. */

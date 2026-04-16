@@ -3,7 +3,7 @@ import { autoUpdater } from "electron-updater";
 import { shell } from "electron";
 import path from "path";
 import { randomUUID } from "crypto";
-import { execSync } from "child_process";
+import { execSync, spawn } from "child_process";
 import { eq } from "drizzle-orm";
 import { findClaudeBinary, ClaudeSession } from "./claude";
 import {
@@ -389,6 +389,32 @@ function setupIpcHandlers(): void {
     } catch {
       return null;
     }
+  });
+
+  // ── Editor integration ──────────────────────────────────────
+
+  /**
+   * Open a file or folder in VSCode. Relative paths are resolved against `cwd`.
+   * Resolves once the `code` CLI has either launched or failed (e.g. not on PATH).
+   */
+  ipcMain.handle("editor:open", (_event, targetPath: string, cwd?: string): Promise<{ ok: boolean; message?: string }> => {
+    const resolved = path.isAbsolute(targetPath) || !cwd
+      ? targetPath
+      : path.resolve(cwd, targetPath);
+    return new Promise((resolve) => {
+      const child = spawn("code", [resolved], { detached: true, stdio: "ignore" });
+      child.once("error", (err) => {
+        console.error("[editor:open] spawn error:", err);
+        resolve({
+          ok: false,
+          message: "Couldn't launch VSCode. Install the `code` command from VSCode's command palette: \"Shell Command: Install 'code' command in PATH\".",
+        });
+      });
+      child.once("spawn", () => {
+        child.unref();
+        resolve({ ok: true });
+      });
+    });
   });
 
   // ── Thread CRUD ───────────────────────────────────────────────

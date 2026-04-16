@@ -20,6 +20,7 @@ declare global {
     addFolder: (projectId: string, folderPath: string) => Promise<string>;
     removeFolder: (folderId: string) => Promise<void>;
     getGitBranch: (cwd: string) => Promise<string | null>;
+    openInEditor: (targetPath: string, cwd?: string) => Promise<{ ok: boolean; message?: string }>;
     renameThread: (sessionId: string, name: string) => Promise<void>;
     deleteThread: (sessionId: string) => Promise<void>;
     onEvent: (callback: (event: unknown) => void) => () => void;

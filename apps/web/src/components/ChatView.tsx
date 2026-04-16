@@ -16,6 +16,7 @@ import {
   Copy,
   X,
   ImageSquare,
+  Code as CodeIcon,
 } from "@phosphor-icons/react";
 import { QuestionCard } from "./QuestionCard";
 import type { Thread, Message, FileChange, ContextStats } from "../App";
@@ -91,7 +92,7 @@ const MODES: ModeDef[] = [
 
 /* ── File change card ────────────────────────────────────────── */
 
-function FileChangeCard({ changes }: { changes: FileChange[] }) {
+function FileChangeCard({ changes, onOpenFile }: { changes: FileChange[]; onOpenFile?: (path: string) => void }) {
   const total = changes.length;
   return (
     <div
@@ -123,10 +124,12 @@ function FileChangeCard({ changes }: { changes: FileChange[] }) {
         </button>
       </div>
       {changes.map((fc, i) => (
-        <div
+        <button
           key={i}
-          className="flex items-center gap-2 px-3 py-[7px] transition-colors"
-          style={{ cursor: "default" }}
+          onClick={() => onOpenFile?.(fc.path)}
+          className="w-full flex items-center gap-2 px-3 py-[7px] transition-colors text-left"
+          style={{ cursor: onOpenFile ? "pointer" : "default" }}
+          title={onOpenFile ? "Open in VSCode" : undefined}
           onMouseEnter={(e) =>
             (e.currentTarget.style.background = "rgba(255,255,255,0.02)")
           }
@@ -153,7 +156,7 @@ function FileChangeCard({ changes }: { changes: FileChange[] }) {
           >
             −{fc.deletions}
           </span>
-        </div>
+        </button>
       ))}
     </div>
   );
@@ -352,10 +355,44 @@ function toolSummary(name: string, input?: Record<string, unknown>): string {
   }
 }
 
-function ToolUseIndicator({ toolName, toolInput }: { toolName: string; toolInput?: Record<string, unknown> }) {
+/** Return the file path this tool targets, if any (Read/Edit/Write). */
+function toolFilePath(toolName: string, toolInput?: Record<string, unknown>): string | null {
+  if (!toolInput) return null;
+  if (toolName === "Read" || toolName === "Edit" || toolName === "Write") {
+    const fp = toolInput.file_path;
+    return typeof fp === "string" && fp.length > 0 ? fp : null;
+  }
+  return null;
+}
+
+function ToolUseIndicator({ toolName, toolInput, onOpenFile }: { toolName: string; toolInput?: Record<string, unknown>; onOpenFile?: (path: string) => void }) {
   const summary = toolSummary(toolName, toolInput);
   const maxLen = 120;
   const display = summary.length > maxLen ? summary.slice(0, maxLen) + "…" : summary;
+  const filePath = toolFilePath(toolName, toolInput);
+  const clickable = filePath && onOpenFile;
+
+  if (clickable) {
+    return (
+      <button
+        onClick={() => onOpenFile(filePath)}
+        title="Open in VSCode"
+        className="w-full flex items-center gap-2 py-1.5 px-1 text-[13px] text-left rounded-md transition-colors"
+        style={{
+          color: "var(--text-muted)",
+          fontFamily: "var(--font-code)",
+        }}
+        onMouseEnter={(e) => {
+          e.currentTarget.style.color = "var(--text-secondary)";
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.color = "var(--text-muted)";
+        }}
+      >
+        <span className="truncate">{display}</span>
+      </button>
+    );
+  }
 
   return (
     <div
@@ -440,13 +477,13 @@ function TokenProgressIndicator({ stats }: { stats: ContextStats }) {
   );
 }
 
-function MessageBlock({ message, isStreaming, showHoverBar, onImageClick }: { message: Message; isStreaming: boolean; showHoverBar: boolean; onImageClick?: (url: string) => void }) {
+function MessageBlock({ message, isStreaming, showHoverBar, onImageClick, onOpenFile }: { message: Message; isStreaming: boolean; showHoverBar: boolean; onImageClick?: (url: string) => void; onOpenFile?: (path: string) => void }) {
   if (message.collapsed) {
     return <CollapsedIndicator count={message.collapsed} />;
   }
 
   if (message.role === "tool_use") {
-    return <ToolUseIndicator toolName={message.toolName ?? "unknown"} toolInput={message.toolInput} />;
+    return <ToolUseIndicator toolName={message.toolName ?? "unknown"} toolInput={message.toolInput} onOpenFile={onOpenFile} />;
   }
 
   const isUser = message.role === "user";
@@ -497,7 +534,7 @@ function MessageBlock({ message, isStreaming, showHoverBar, onImageClick }: { me
         <StreamingText text={message.content} isStreaming={isStreaming} />
       </div>
       {message.fileChanges && message.fileChanges.length > 0 && (
-        <FileChangeCard changes={message.fileChanges} />
+        <FileChangeCard changes={message.fileChanges} onOpenFile={onOpenFile} />
       )}
     </div>
   );
@@ -886,12 +923,13 @@ function TextareaWithScrollbar({
 
 interface ChatViewProps {
   thread: Thread | null;
+  projectCwd?: string;
   onSend: (threadId: string, text: string, images?: ImagePayload[]) => void;
   onInterrupt: (threadId: string) => void;
   onRespondToTool: (threadId: string, toolUseId: string, text: string) => void;
 }
 
-export function ChatView({ thread, onSend, onInterrupt, onRespondToTool }: ChatViewProps) {
+export function ChatView({ thread, projectCwd, onSend, onInterrupt, onRespondToTool }: ChatViewProps) {
   const [input, setInput] = useState("");
   const [selectedModel, setSelectedModel] = useState(CLAUDE_MODELS[0]);
   const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
@@ -1064,6 +1102,18 @@ export function ChatView({ thread, onSend, onInterrupt, onRespondToTool }: ChatV
     }
   };
 
+  const handleOpenInEditor = useCallback(
+    (target: string) => {
+      window.openclawdex?.openInEditor(target, projectCwd).then((res) => {
+        if (!res.ok && res.message) {
+          // Fall back to a native alert; no toast infra yet.
+          alert(res.message);
+        }
+      });
+    },
+    [projectCwd],
+  );
+
   useEffect(() => {
     if (!modelDropdownOpen && !effortDropdownOpen && !modeDropdownOpen) return;
     const handleClick = (e: MouseEvent) => {
@@ -1102,7 +1152,7 @@ export function ChatView({ thread, onSend, onInterrupt, onRespondToTool }: ChatV
     >
       {/* Title bar area */}
       <div
-        className="h-[38px] shrink-0 flex items-center justify-center"
+        className="h-[38px] shrink-0 flex items-center justify-center relative"
         style={{
           borderBottom: "1px solid var(--border-subtle)",
           // @ts-expect-error -- webkit
@@ -1115,6 +1165,32 @@ export function ChatView({ thread, onSend, onInterrupt, onRespondToTool }: ChatV
         >
           {thread.name}
         </span>
+        {projectCwd && (
+          <div
+            className="absolute right-3 top-1/2 -translate-y-1/2"
+            style={{
+              // @ts-expect-error -- webkit
+              WebkitAppRegion: "no-drag",
+            }}
+          >
+            <button
+              onClick={() => handleOpenInEditor(projectCwd)}
+              title="Open project in VSCode"
+              className="flex items-center justify-center w-[26px] h-[26px] rounded-lg transition-colors"
+              style={{ color: "var(--text-muted)" }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = "var(--border-subtle)";
+                e.currentTarget.style.color = "rgba(255,255,255,0.85)";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = "transparent";
+                e.currentTarget.style.color = "var(--text-muted)";
+              }}
+            >
+              <CodeIcon size={16} weight="light" />
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Messages */}
@@ -1154,6 +1230,7 @@ export function ChatView({ thread, onSend, onInterrupt, onRespondToTool }: ChatV
                       isStreaming={false}
                       showHoverBar={msg.role === "user"}
                       onImageClick={setLightboxUrl}
+                      onOpenFile={handleOpenInEditor}
                     />
                   );
                   i++;
@@ -1204,6 +1281,7 @@ export function ChatView({ thread, onSend, onInterrupt, onRespondToTool }: ChatV
                             isStreaming={m.id === streamingMsgId}
                             showHoverBar={false}
                             onImageClick={setLightboxUrl}
+                            onOpenFile={handleOpenInEditor}
                           />
                         );
                       })}

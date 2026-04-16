@@ -544,6 +544,7 @@ export function App() {
       >
         <ChatView
           thread={activeThread}
+          projectCwd={projects.find((p) => p.id === activeThread?.projectId)?.folders[0]?.path}
           onSend={handleSend}
           onInterrupt={handleInterrupt}
           onRespondToTool={handleRespondToTool}
