@@ -2,10 +2,8 @@ import { useState, useCallback, useRef, useEffect } from "react";
 import { Sidebar } from "./components/Sidebar";
 import { ChatView } from "./components/ChatView";
 import type { ImagePayload } from "./components/ChatView";
-import { IpcEvent, SessionInfo, HistoryMessage, ProjectInfo, ContextStats } from "@openclawdex/shared";
-export type { ContextStats };
-
-export type Provider = "claude" | "codex";
+import { IpcEvent, SessionInfo, HistoryMessage, ProjectInfo, ContextStats, type Provider } from "@openclawdex/shared";
+export type { ContextStats, Provider };
 
 export interface Thread {
   id: string;
@@ -15,14 +13,22 @@ export interface Thread {
   status: "idle" | "running" | "error" | "awaiting_input";
   messages: Message[];
   branch?: string;
-  claudeSessionId?: string;
+  // Populated once the backend assigns a session/thread id (post first turn).
+  // The column name is provider-neutral because both Claude and Codex use
+  // a single "session id" / "thread id" string that resumes the conversation.
+  sessionId?: string;
+  // Currently-selected model for this thread (from the unified model
+  // picker). Carried on the thread so resumes remember the choice.
+  model?: string;
+  // Reasoning effort, with provider-specific vocabulary (see ChatView).
+  effort?: string;
   historyLoaded?: boolean;
   lastModified: Date;
   contextStats?: ContextStats;
   archived?: boolean;
   pinned?: boolean;
   needsAttention?: boolean;
-  /** ID of a tool call waiting for user input (e.g. AskUserQuestion). */
+  /** ID of a tool call waiting for user input (e.g. AskUserQuestion). Claude-only. */
   pendingToolUseId?: string;
 }
 
@@ -53,11 +59,11 @@ function msgId() {
   return `msg-${nextMsgId++}`;
 }
 
-function newThread(projectId: string | null): Thread {
+function newThread(projectId: string | null, provider: Provider = "claude"): Thread {
   return {
     id: crypto.randomUUID(),
     name: "New conversation",
-    provider: "claude",
+    provider,
     projectId,
     status: "idle",
     messages: [],
@@ -70,12 +76,12 @@ function sessionToThread(s: SessionInfo): Thread {
   return {
     id: s.sessionId,
     name: s.summary,
-    provider: "claude",
+    provider: s.provider,
     projectId: s.projectId ?? null,
     status: "idle",
     messages: [],
     branch: s.gitBranch,
-    claudeSessionId: s.sessionId,
+    sessionId: s.sessionId,
     historyLoaded: false,
     lastModified: new Date(s.lastModified),
     contextStats: s.contextStats,
@@ -124,17 +130,21 @@ function applyIpcEvent(thread: Thread, event: IpcEvent): Thread {
     case "error":
       return { ...thread, status: "error" as const, messages: [...thread.messages, { id: msgId(), role: "assistant" as const, content: `Error: ${event.message}`, timestamp: new Date() }] };
     case "result": {
+      // GOTCHA: costUsd and durationMs are optional in the IPC schema
+      // because Codex's turn.completed event does not report them.
+      // Must spread conditionally or downstream consumers get `undefined`
+      // where they expected a number.
       const contextStats: ContextStats = {
         ...(event.totalTokens != null && { totalTokens: event.totalTokens }),
         ...(event.maxTokens != null && { maxTokens: event.maxTokens }),
         ...(event.percentage != null && { percentage: event.percentage }),
-        costUsd: event.costUsd,
-        durationMs: event.durationMs,
+        ...(event.costUsd != null && { costUsd: event.costUsd }),
+        ...(event.durationMs != null && { durationMs: event.durationMs }),
       };
       return { ...thread, contextStats };
     }
     case "session_init": {
-      return { ...thread, claudeSessionId: event.sessionId, historyLoaded: true };
+      return { ...thread, sessionId: event.sessionId, provider: event.provider, historyLoaded: true };
     }
     case "deferred_tool_use": {
       return { ...thread, pendingToolUseId: event.toolUseId };
@@ -199,7 +209,7 @@ export function App() {
           .sort((a, b) => b.lastModified - a.lastModified)
           .map(sessionToThread);
         setThreads((prev) => {
-          const inProgress = prev.filter((t) => !t.claudeSessionId);
+          const inProgress = prev.filter((t) => !t.sessionId);
           return [...inProgress, ...historyThreads];
         });
         setActiveThreadId((prev) => prev ?? historyThreads[0]?.id ?? null);
@@ -230,7 +240,7 @@ export function App() {
           // Commit the pending thread to the sidebar.
           const committed = {
             ...pendingThreadRef.current,
-            claudeSessionId: event.sessionId,
+            sessionId: event.sessionId,
             historyLoaded: true,
           };
           setThreads((prev) => [committed, ...prev]);
@@ -260,11 +270,11 @@ export function App() {
   // ── Lazy-load history when switching to a history thread ──
 
   useEffect(() => {
-    if (!activeThread || activeThread.historyLoaded || !activeThread.claudeSessionId) return;
+    if (!activeThread || activeThread.historyLoaded || !activeThread.sessionId) return;
     if (!window.openclawdex?.loadHistory) return;
 
-    const { claudeSessionId } = activeThread;
-    window.openclawdex.loadHistory(claudeSessionId).then((items) => {
+    const { sessionId } = activeThread;
+    window.openclawdex.loadHistory(sessionId).then((items) => {
       setThreads((prev) =>
         prev.map((t) =>
           t.id === activeThread.id
@@ -294,7 +304,7 @@ export function App() {
   // ── Send message handler ──────────────────────────────────────
 
   const handleSend = useCallback(
-    (threadId: string, text: string, images?: ImagePayload[]) => {
+    (threadId: string, text: string, images?: ImagePayload[], opts?: { model?: string; effort?: string }) => {
       const msgImages: MessageImage[] | undefined = images?.map((img) => ({
         url: `data:${img.mediaType};base64,${img.base64}`,
       }));
@@ -309,23 +319,44 @@ export function App() {
 
       const pending = pendingThreadRef.current;
       if (pending && threadId === pending.id) {
-        // First message on pending thread — update it, send with projectId
+        // First message on pending thread — update it, send with provider/model/effort
         const name = text.length > 40 ? text.slice(0, 40) + "…" : text;
-        setPendingThread((prev) => prev ? { ...prev, name, status: "running", messages: [userMsg] } : prev);
-        window.openclawdex?.send(pending.id, text, { projectId: pending.projectId ?? undefined, images });
+        setPendingThread((prev) => prev ? { ...prev, name, status: "running", messages: [userMsg], ...(opts?.model && { model: opts.model }), ...(opts?.effort && { effort: opts.effort }) } : prev);
+        window.openclawdex?.send(pending.id, text, {
+          provider: pending.provider,
+          projectId: pending.projectId ?? undefined,
+          images,
+          model: opts?.model,
+          effort: opts?.effort,
+        });
       } else {
         setThreads((prev) =>
           prev.map((t) => {
             if (t.id !== threadId) return t;
-            return { ...t, status: "running" as const, messages: [...t.messages, userMsg] };
+            return { ...t, status: "running" as const, messages: [...t.messages, userMsg], ...(opts?.model && { model: opts.model }), ...(opts?.effort && { effort: opts.effort }) };
           }),
         );
         const thread = threadsRef.current.find((t) => t.id === threadId);
-        window.openclawdex?.send(threadId, text, { resumeSessionId: thread?.claudeSessionId, projectId: thread?.projectId ?? undefined, images });
+        window.openclawdex?.send(threadId, text, {
+          provider: thread?.provider,
+          resumeSessionId: thread?.sessionId,
+          projectId: thread?.projectId ?? undefined,
+          images,
+          model: opts?.model,
+          effort: opts?.effort,
+        });
       }
     },
     [],
   );
+
+  // ── Change provider on pending thread (before first turn commits) ──
+  //
+  // Once the first turn lands and session_init fires, `provider` becomes
+  // authoritative in the DB and we no longer allow flipping it here.
+  const handleUpdateThreadProvider = useCallback((threadId: string, provider: Provider) => {
+    setPendingThread((prev) => prev && prev.id === threadId ? { ...prev, provider } : prev);
+  }, []);
 
   // ── Select thread (clears attention badge) ────────────────────
 
@@ -419,8 +450,8 @@ export function App() {
   const handleRenameThread = useCallback((threadId: string, name: string) => {
     setThreads((prev) => prev.map((t) => t.id === threadId ? { ...t, name } : t));
     const thread = threadsRef.current.find((t) => t.id === threadId);
-    if (thread?.claudeSessionId) {
-      window.openclawdex?.renameThread(thread.claudeSessionId, name);
+    if (thread?.sessionId) {
+      window.openclawdex?.renameThread(thread.sessionId, name);
     }
   }, []);
 
@@ -430,8 +461,8 @@ export function App() {
     if (activeThreadId === threadId) {
       setActiveThreadId(null);
     }
-    if (thread?.claudeSessionId) {
-      window.openclawdex?.deleteThread(thread.claudeSessionId);
+    if (thread?.sessionId) {
+      window.openclawdex?.deleteThread(thread.sessionId);
     }
   }, [activeThreadId]);
 
@@ -440,8 +471,8 @@ export function App() {
       prev.map((t) => {
         if (t.id !== threadId) return t;
         const archived = !t.archived;
-        if (t.claudeSessionId) {
-          window.openclawdex?.archiveThread(t.claudeSessionId, archived);
+        if (t.sessionId) {
+          window.openclawdex?.archiveThread(t.sessionId, archived);
         }
         return { ...t, archived };
       }),
@@ -461,8 +492,8 @@ export function App() {
       prev.map((t) => {
         if (t.id !== threadId) return t;
         const pinned = !t.pinned;
-        if (t.claudeSessionId) {
-          window.openclawdex?.pinThread(t.claudeSessionId, pinned);
+        if (t.sessionId) {
+          window.openclawdex?.pinThread(t.sessionId, pinned);
         }
         return { ...t, pinned };
       }),
@@ -548,6 +579,7 @@ export function App() {
           onSend={handleSend}
           onInterrupt={handleInterrupt}
           onRespondToTool={handleRespondToTool}
+          onUpdateThreadProvider={handleUpdateThreadProvider}
         />
       </div>
     </div>

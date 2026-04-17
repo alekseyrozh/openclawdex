@@ -1,14 +1,25 @@
 /** Type declarations for the preload bridge exposed on `window.openclawdex`. */
 
-import type { SessionInfo, HistoryMessage, ProjectInfo, EditorTarget } from "@openclawdex/shared";
+import type { SessionInfo, HistoryMessage, ProjectInfo, EditorTarget, Provider } from "@openclawdex/shared";
 
 export {};
 
 declare global {
   interface OpenClawdexBridge {
     platform: string;
-    checkClaude: () => Promise<{ available: boolean }>;
-    send: (threadId: string, message: string, opts?: { resumeSessionId?: string; projectId?: string; images?: { name: string; base64: string; mediaType: string }[] }) => Promise<void>;
+    checkProviders: () => Promise<{ claude: boolean; codex: boolean }>;
+    send: (
+      threadId: string,
+      message: string,
+      opts?: {
+        provider?: Provider;
+        resumeSessionId?: string;
+        projectId?: string;
+        images?: { name: string; base64: string; mediaType: string }[];
+        model?: string;
+        effort?: string;
+      },
+    ) => Promise<void>;
     interrupt: (threadId: string) => Promise<void>;
     respondToTool: (threadId: string, toolUseId: string, responseText: string) => Promise<void>;
     listSessions: () => Promise<SessionInfo[]>;

@@ -7,12 +7,14 @@ import { execSync, spawn } from "child_process";
 import fs from "fs";
 import { eq } from "drizzle-orm";
 import { findClaudeBinary, ClaudeSession } from "./claude";
+import { findCodexBinary, CodexSession, type CodexEffort } from "./codex";
+import type { AgentSession } from "./agent-session";
 import {
   listSessions,
   getSessionMessages,
 } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
-import type { IpcEvent, EditorTarget } from "@openclawdex/shared";
+import type { IpcEvent, EditorTarget, Provider, SessionInfo } from "@openclawdex/shared";
 import { initDb, getDb } from "./db";
 import { knownThreads, projects, projectFolders } from "./db/schema";
 
@@ -30,27 +32,58 @@ if (app.isPackaged && process.platform === "darwin") {
 
 let mainWindow: BrowserWindow | null = null;
 
-// ── Claude state ──────────────────────────────────────────────
+// ── Agent state ───────────────────────────────────────────────
+//
+// Both Claude and Codex sessions share one map keyed by threadId, typed
+// as the provider-neutral AgentSession. The handler looks up the thread's
+// `provider` column to decide which backend to instantiate on first send.
 
 const claudePath = findClaudeBinary();
-const sessions = new Map<string, ClaudeSession>();
+const codexPath = findCodexBinary();
+const sessions = new Map<string, AgentSession>();
 
 function getOrCreateSession(
   threadId: string,
-  opts?: { resumeSessionId?: string; cwd?: string },
-): ClaudeSession | null {
-  if (!claudePath) return null;
-  let session = sessions.get(threadId);
-  if (!session) {
-    session = new ClaudeSession(claudePath, opts);
+  provider: Provider,
+  opts?: {
+    resumeSessionId?: string;
+    cwd?: string;
+    model?: string;
+    // GOTCHA: `effort` is typed as a string here because Claude and Codex
+    // use incompatible effort vocabularies. We pass it through verbatim
+    // and let each SDK reject it if invalid. Renderer enforces the right
+    // list per provider in the model picker UI.
+    effort?: string;
+  },
+): AgentSession | null {
+  const existing = sessions.get(threadId);
+  if (existing) return existing;
+
+  if (provider === "claude") {
+    if (!claudePath) return null;
+    const session = new ClaudeSession(claudePath, {
+      resumeSessionId: opts?.resumeSessionId,
+      cwd: opts?.cwd,
+    });
     sessions.set(threadId, session);
+    return session;
   }
+
+  // provider === "codex"
+  if (!codexPath) return null;
+  const session = new CodexSession({
+    resumeThreadId: opts?.resumeSessionId,
+    cwd: opts?.cwd,
+    model: opts?.model,
+    effort: opts?.effort as CodexEffort | undefined,
+  });
+  sessions.set(threadId, session);
   return session;
 }
 
 /** Send a validated IPC event to the renderer. */
 function emitToRenderer(event: IpcEvent): void {
-  mainWindow?.webContents.send("claude:event", event);
+  mainWindow?.webContents.send("session:event", event);
 }
 
 /** Resolve the first folder path for a project, or undefined. */
@@ -66,29 +99,56 @@ async function getProjectCwd(projectId: string): Promise<string | undefined> {
 // ── IPC handlers ──────────────────────────────────────────────
 
 function setupIpcHandlers(): void {
-  /** Check if the claude binary was found. */
-  ipcMain.handle("claude:check", () => {
-    return { available: claudePath !== null };
+  /**
+   * Report which provider backends are available on this machine.
+   *
+   * GOTCHA: returns {claude, codex} not {available}; renderer must check
+   * the right field based on the thread's provider. Missing one doesn't
+   * mean the app is broken — users may only have one CLI installed.
+   */
+  ipcMain.handle("session:check", () => {
+    return {
+      claude: claudePath !== null,
+      codex: codexPath !== null,
+    };
   });
 
-  /** Send a user message to Claude for a given thread. */
+  /** Send a user message to the selected agent for a given thread. */
   ipcMain.handle(
-    "claude:send",
-    async (_event, threadId: string, message: string, opts?: { resumeSessionId?: string; projectId?: string; images?: { name: string; base64: string; mediaType: string }[] }) => {
+    "session:send",
+    async (
+      _event,
+      threadId: string,
+      message: string,
+      opts?: {
+        provider?: Provider;
+        resumeSessionId?: string;
+        projectId?: string;
+        images?: { name: string; base64: string; mediaType: string }[];
+        model?: string;
+        effort?: string;
+      },
+    ) => {
+      // Default to claude to match the pre-multi-provider behavior.
+      const provider: Provider = opts?.provider ?? "claude";
+
       // Resolve the project's folder as the session cwd
       let cwd: string | undefined;
       if (opts?.projectId) {
         cwd = await getProjectCwd(opts.projectId);
       }
 
-      const session = getOrCreateSession(threadId, { resumeSessionId: opts?.resumeSessionId, cwd });
+      const session = getOrCreateSession(threadId, provider, {
+        resumeSessionId: opts?.resumeSessionId,
+        cwd,
+        model: opts?.model,
+        effort: opts?.effort,
+      });
       if (!session) {
-        emitToRenderer({
-          type: "error",
-          threadId,
-          message:
-            "Claude CLI not found. Install it with: npm install -g @anthropic-ai/claude-code",
-        });
+        const installHint = provider === "claude"
+          ? "Claude CLI not found. Install it with: npm install -g @anthropic-ai/claude-code"
+          : "Codex CLI not found. Install it with: npm install -g @openai/codex";
+        emitToRenderer({ type: "error", threadId, message: installHint });
         return;
       }
 
@@ -103,7 +163,12 @@ function setupIpcHandlers(): void {
             try {
               await getDb()
                 .insert(knownThreads)
-                .values({ sessionId: e.sessionId, createdAt: Date.now(), projectId: opts?.projectId ?? null })
+                .values({
+                  sessionId: e.sessionId,
+                  createdAt: Date.now(),
+                  projectId: opts?.projectId ?? null,
+                  provider,
+                })
                 .onConflictDoNothing();
             } catch (err) {
               console.error("[db] failed to register session:", err);
@@ -115,6 +180,7 @@ function setupIpcHandlers(): void {
               type: "session_init",
               threadId,
               sessionId: e.sessionId,
+              provider,
               model: e.model,
               cwd,
               projectId: opts?.projectId,
@@ -140,10 +206,13 @@ function setupIpcHandlers(): void {
             break;
 
           case "result": {
+            // GOTCHA: costUsd/durationMs are null for Codex (no cost
+            // reporting, no duration surfaced). Spread conditionally so
+            // the downstream Zod schema's optional() check passes.
             const contextStats = {
               ...(e.contextUsage != null && e.contextUsage),
-              costUsd: e.costUsd,
-              durationMs: e.durationMs,
+              ...(e.costUsd != null && { costUsd: e.costUsd }),
+              ...(e.durationMs != null && { durationMs: e.durationMs }),
             };
 
             // Persist to DB so it survives restarts
@@ -193,49 +262,108 @@ function setupIpcHandlers(): void {
     },
   );
 
-  /** Interrupt the current Claude turn for a thread. */
-  ipcMain.handle("claude:interrupt", (_event, threadId: string) => {
+  /** Interrupt the current turn for a thread. */
+  ipcMain.handle("session:interrupt", (_event, threadId: string) => {
     sessions.get(threadId)?.interrupt();
   });
 
-  /** Respond to a deferred tool call (e.g. AskUserQuestion). */
-  ipcMain.handle("claude:respond-to-tool", (_event, threadId: string, toolUseId: string, responseText: string) => {
+  /** Respond to a deferred tool call (e.g. AskUserQuestion). Claude-only. */
+  ipcMain.handle("session:respond-to-tool", (_event, threadId: string, toolUseId: string, responseText: string) => {
     const session = sessions.get(threadId);
     if (!session) return;
     emitToRenderer({ type: "status", threadId, status: "running" });
     session.respondToTool(toolUseId, responseText);
   });
 
-  /** List only sessions started from this UI. */
-  ipcMain.handle("claude:list-sessions", async () => {
-    const [all, known] = await Promise.all([
+  /**
+   * List sessions started from this UI. Unions Claude's on-disk session
+   * history with Codex threads persisted only in our DB.
+   *
+   * GOTCHA: listSessions() from the Claude SDK only returns Claude
+   * threads. Codex stores threads in `~/.codex/sessions` (JSONL) but its
+   * SDK does NOT expose a listing API as of 0.121.0. So for Codex we
+   * rely entirely on our own `known_threads` rows — if the DB is reset,
+   * Codex sidebar entries disappear (but the underlying Codex threads
+   * remain resumable if the user knows the thread id).
+   */
+  ipcMain.handle("session:list-sessions", async (): Promise<SessionInfo[]> => {
+    const [claudeSessions, known] = await Promise.all([
       listSessions(),
-      getDb().select({ sessionId: knownThreads.sessionId, projectId: knownThreads.projectId, customName: knownThreads.customName, contextStats: knownThreads.contextStats, pinned: knownThreads.pinned, archived: knownThreads.archived }).from(knownThreads),
+      getDb().select({
+        sessionId: knownThreads.sessionId,
+        projectId: knownThreads.projectId,
+        customName: knownThreads.customName,
+        contextStats: knownThreads.contextStats,
+        pinned: knownThreads.pinned,
+        archived: knownThreads.archived,
+        provider: knownThreads.provider,
+        createdAt: knownThreads.createdAt,
+      }).from(knownThreads),
     ]);
-    const knownMap = new Map(known.map((r) => [r.sessionId, { projectId: r.projectId ?? undefined, customName: r.customName ?? undefined, contextStats: r.contextStats ?? undefined, pinned: r.pinned ?? false, archived: r.archived ?? false }]));
-    return all
-      .filter((s) => knownMap.has(s.sessionId))
-      .map((s) => {
-        const row = knownMap.get(s.sessionId)!;
-        let contextStats: object | undefined;
-        try { contextStats = row.contextStats ? JSON.parse(row.contextStats) : undefined; } catch { /* ignore */ }
-        return {
+
+    const claudeMap = new Map(claudeSessions.map((s) => [s.sessionId, s]));
+    const results: SessionInfo[] = [];
+
+    for (const row of known) {
+      const provider = (row.provider ?? "claude") as Provider;
+      let contextStats: Record<string, unknown> | undefined;
+      try { contextStats = row.contextStats ? JSON.parse(row.contextStats) : undefined; } catch { /* ignore */ }
+
+      if (provider === "claude") {
+        // Intersect with on-disk Claude sessions; if the JSONL is gone
+        // we skip the row so we don't surface a thread with no history.
+        const s = claudeMap.get(row.sessionId);
+        if (!s) continue;
+        results.push({
           sessionId: s.sessionId,
+          provider: "claude",
           summary: row.customName ?? s.summary,
           lastModified: s.lastModified,
           cwd: s.cwd,
           firstPrompt: s.firstPrompt,
           gitBranch: s.gitBranch,
-          projectId: row.projectId,
+          projectId: row.projectId ?? undefined,
           contextStats,
-          pinned: row.pinned,
-          archived: row.archived,
-        };
-      });
+          pinned: row.pinned ?? false,
+          archived: row.archived ?? false,
+        });
+      } else {
+        // Codex: we don't have on-disk enrichment, so emit from DB only.
+        results.push({
+          sessionId: row.sessionId,
+          provider: "codex",
+          summary: row.customName ?? "Codex thread",
+          lastModified: row.createdAt,
+          projectId: row.projectId ?? undefined,
+          contextStats,
+          pinned: row.pinned ?? false,
+          archived: row.archived ?? false,
+        });
+      }
+    }
+
+    return results;
   });
 
-  /** Load message history for a past session. */
-  ipcMain.handle("claude:load-history", async (_event, sessionId: string) => {
+  /**
+   * Load message history for a past session.
+   *
+   * GOTCHA: Codex's SDK doesn't expose a way to read historical
+   * thread items programmatically as of 0.121.0, so we return `[]`
+   * for Codex threads. The resume flow still works (the Codex CLI
+   * itself reads the JSONL) — the user just won't see prior turns
+   * in the UI when they reopen the thread.
+   */
+  ipcMain.handle("session:load-history", async (_event, sessionId: string) => {
+    // Determine provider from DB. Default to claude for legacy rows.
+    const row = await getDb()
+      .select({ provider: knownThreads.provider })
+      .from(knownThreads)
+      .where(eq(knownThreads.sessionId, sessionId))
+      .limit(1);
+    const provider = (row[0]?.provider ?? "claude") as Provider;
+    if (provider === "codex") return [];
+
     const msgs = await getSessionMessages(sessionId);
 
     // Zod schemas for message body shapes

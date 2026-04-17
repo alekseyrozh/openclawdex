@@ -1,5 +1,10 @@
 import { z } from "zod";
 
+// ── Provider (which agent backend a thread is running against) ────
+
+export const Provider = z.enum(["claude", "codex"]);
+export type Provider = z.infer<typeof Provider>;
+
 // ── Editor target (for the open-in-editor menu) ──────────────
 
 export const EditorTarget = z.enum(["vscode", "cursor", "finder", "terminal", "iterm", "ghostty"]);
@@ -21,12 +26,15 @@ export type ProjectInfo = z.infer<typeof ProjectInfo>;
 
 // ── Context stats (persisted per session) ─────────────────────
 
+// GOTCHA: costUsd and durationMs are optional because Codex's `turn.completed`
+// event does not report a dollar cost (billing happens against the user's
+// ChatGPT plan) and may not surface a duration. Renderers must null-check.
 export const ContextStats = z.object({
   totalTokens: z.number().optional(),
   maxTokens: z.number().optional(),
   percentage: z.number().optional(),
-  costUsd: z.number(),
-  durationMs: z.number(),
+  costUsd: z.number().optional(),
+  durationMs: z.number().optional(),
 });
 export type ContextStats = z.infer<typeof ContextStats>;
 
@@ -34,6 +42,7 @@ export type ContextStats = z.infer<typeof ContextStats>;
 
 export const SessionInfo = z.object({
   sessionId: z.string(),
+  provider: Provider,
   summary: z.string(),
   lastModified: z.number(),
   cwd: z.string().optional(),
@@ -93,11 +102,12 @@ export const IpcStatus = z.object({
   status: z.enum(["running", "idle", "error", "awaiting_input"]),
 });
 
+// GOTCHA: costUsd/durationMs optional because Codex doesn't report cost.
 export const IpcResult = z.object({
   type: z.literal("result"),
   threadId: z.string(),
-  costUsd: z.number(),
-  durationMs: z.number(),
+  costUsd: z.number().optional(),
+  durationMs: z.number().optional(),
   totalTokens: z.number().optional(),
   maxTokens: z.number().optional(),
   percentage: z.number().optional(),
@@ -113,6 +123,7 @@ export const IpcSessionInit = z.object({
   type: z.literal("session_init"),
   threadId: z.string(),
   sessionId: z.string(),
+  provider: Provider,
   model: z.string(),
   cwd: z.string().optional(),
   projectId: z.string().optional(),
@@ -125,6 +136,8 @@ export const IpcToolUse = z.object({
   toolInput: z.record(z.string(), z.unknown()).optional(),
 });
 
+// GOTCHA: Codex has no equivalent of Claude's AskUserQuestion pause-for-input
+// protocol, so deferred_tool_use events are emitted only for Claude threads.
 export const IpcDeferredToolUse = z.object({
   type: z.literal("deferred_tool_use"),
   threadId: z.string(),

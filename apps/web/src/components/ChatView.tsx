@@ -182,17 +182,31 @@ function ClaudeIcon({ className }: { className?: string }) {
 
 /* ── Model definitions ──────────────────────────────────────── */
 
+import type { Provider } from "@openclawdex/shared";
+
 interface ModelDef {
   id: string;
   label: string;
   subtitle: string;
+  provider: Provider;
 }
 
 const CLAUDE_MODELS: ModelDef[] = [
-  { id: "opus", label: "Claude Opus 4.6", subtitle: "Most capable" },
-  { id: "sonnet", label: "Claude Sonnet 4.6", subtitle: "Fast & capable" },
-  { id: "haiku", label: "Claude Haiku 4.5", subtitle: "Fastest" },
+  { id: "opus", label: "Claude Opus 4.6", subtitle: "Most capable", provider: "claude" },
+  { id: "sonnet", label: "Claude Sonnet 4.6", subtitle: "Fast & capable", provider: "claude" },
+  { id: "haiku", label: "Claude Haiku 4.5", subtitle: "Fastest", provider: "claude" },
 ];
+
+// GOTCHA: the `id` MUST be what the Codex SDK's `ThreadOptions.model`
+// accepts. The SDK passes it through to the `codex` CLI's `--model` flag.
+// Keep these in sync with whichever models the user's Codex CLI knows
+// about (as of 0.121.0, gpt-5.1-codex is the primary option).
+const CODEX_MODELS: ModelDef[] = [
+  { id: "gpt-5.1-codex", label: "GPT-5.1 Codex", subtitle: "Most capable", provider: "codex" },
+  { id: "gpt-5.1-codex-mini", label: "GPT-5.1 Codex Mini", subtitle: "Fastest", provider: "codex" },
+];
+
+const ALL_MODELS: ModelDef[] = [...CLAUDE_MODELS, ...CODEX_MODELS];
 
 /* ── Effort levels ──────────────────────────────────────────── */
 
@@ -202,11 +216,24 @@ interface EffortDef {
   subtitle: string;
 }
 
-const EFFORT_LEVELS: EffortDef[] = [
+// GOTCHA: Claude and Codex have DIFFERENT effort vocabularies — do NOT
+// merge these lists. Claude supports 4 levels (max/high/medium/low) while
+// the Codex SDK's `modelReasoningEffort` accepts 5
+// (minimal/low/medium/high/xhigh). The picker renders the right one based
+// on the thread's provider.
+const CLAUDE_EFFORT: EffortDef[] = [
   { id: "max", label: "Max", subtitle: "Extended thinking, highest quality" },
   { id: "high", label: "High", subtitle: "Thorough reasoning" },
   { id: "medium", label: "Medium", subtitle: "Balanced speed and quality" },
   { id: "low", label: "Low", subtitle: "Fast, minimal reasoning" },
+];
+
+const CODEX_EFFORT: EffortDef[] = [
+  { id: "xhigh", label: "XHigh", subtitle: "Deepest reasoning, slowest" },
+  { id: "high", label: "High", subtitle: "Thorough reasoning" },
+  { id: "medium", label: "Medium", subtitle: "Balanced speed and quality" },
+  { id: "low", label: "Low", subtitle: "Fast, minimal reasoning" },
+  { id: "minimal", label: "Minimal", subtitle: "Fastest, barely any reasoning" },
 ];
 
 /* ── Modes ──────────────────────────────────────────────────── */
@@ -485,17 +512,49 @@ function toolSummary(name: string, input?: Record<string, unknown>): string {
       const q = String(input.query ?? "");
       return q ? `Search "${q}"` : "WebSearch";
     }
+    // ── Codex-specific tool names (emitted by CodexSession) ─────
+    case "shell": {
+      // Codex command_execution: run a shell command. Renders alongside
+      // Claude's Bash tool.
+      const cmd = String(input.command ?? "");
+      return cmd ? `$ ${cmd}` : "shell";
+    }
+    case "apply_patch": {
+      // Codex file_change: {changes: [{path, kind}], status}
+      const changes = Array.isArray(input.changes) ? input.changes : [];
+      if (changes.length === 0) return "apply_patch";
+      const first = changes[0] as { path?: string; kind?: string };
+      const base = first?.path ? first.path.split("/").at(-1) : null;
+      const more = changes.length > 1 ? ` +${changes.length - 1}` : "";
+      return base ? `${first.kind ?? "edit"} ${base}${more}` : "apply_patch";
+    }
+    case "update_plan": {
+      // Codex todo_list: rendered as a plan update
+      const items = Array.isArray(input.items) ? input.items : [];
+      return items.length > 0 ? `Plan (${items.length} steps)` : "update_plan";
+    }
+    case "web_search": {
+      // Codex web_search (lowercase; distinct from Claude's "WebSearch")
+      const q = String(input.query ?? "");
+      return q ? `Search "${q}"` : "web_search";
+    }
     default:
       return name;
   }
 }
 
-/** Return the file path this tool targets, if any (Read/Edit/Write). */
+/** Return the file path this tool targets, if any (Read/Edit/Write/apply_patch). */
 function toolFilePath(toolName: string, toolInput?: Record<string, unknown>): string | null {
   if (!toolInput) return null;
   if (toolName === "Read" || toolName === "Edit" || toolName === "Write") {
     const fp = toolInput.file_path;
     return typeof fp === "string" && fp.length > 0 ? fp : null;
+  }
+  if (toolName === "apply_patch") {
+    // Codex file_change: return the first changed file's path
+    const changes = Array.isArray(toolInput.changes) ? toolInput.changes : [];
+    const first = changes[0] as { path?: string } | undefined;
+    return typeof first?.path === "string" && first.path.length > 0 ? first.path : null;
   }
   return null;
 }
@@ -1086,17 +1145,30 @@ function TextareaWithScrollbar({
 interface ChatViewProps {
   thread: Thread | null;
   projectCwd?: string;
-  onSend: (threadId: string, text: string, images?: ImagePayload[]) => void;
+  onSend: (threadId: string, text: string, images?: ImagePayload[], opts?: { model?: string; effort?: string }) => void;
   onInterrupt: (threadId: string) => void;
   onRespondToTool: (threadId: string, toolUseId: string, text: string) => void;
+  /**
+   * Flip the pending thread's provider when the user picks a Codex model
+   * on a brand-new (uncommitted) conversation. No-op for already-started
+   * threads — provider is frozen after session_init.
+   */
+  onUpdateThreadProvider?: (threadId: string, provider: Provider) => void;
 }
 
-export function ChatView({ thread, projectCwd, onSend, onInterrupt, onRespondToTool }: ChatViewProps) {
+export function ChatView({ thread, projectCwd, onSend, onInterrupt, onRespondToTool, onUpdateThreadProvider }: ChatViewProps) {
   const [input, setInput] = useState("");
-  const [selectedModel, setSelectedModel] = useState(CLAUDE_MODELS[0]);
+  // GOTCHA: `selectedModel` is the unified picker state. When the user
+  // picks a Codex model on a pending thread, we also call
+  // `onUpdateThreadProvider` to flip the thread.provider so subsequent
+  // handleSend routes to the Codex backend.
+  const [selectedModel, setSelectedModel] = useState<ModelDef>(CLAUDE_MODELS[0]);
   const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
   const modelDropdownRef = useRef<HTMLDivElement>(null);
-  const [selectedEffort, setSelectedEffort] = useState(EFFORT_LEVELS[1]); // default "high"
+  // GOTCHA: separate effort states per provider because the vocabularies
+  // don't overlap (Codex has "minimal"/"xhigh" that Claude doesn't).
+  const [claudeEffort, setClaudeEffort] = useState<EffortDef>(CLAUDE_EFFORT[1]); // default "high"
+  const [codexEffort, setCodexEffort] = useState<EffortDef>(CODEX_EFFORT[2]); // default "medium"
   const [effortDropdownOpen, setEffortDropdownOpen] = useState(false);
   const effortDropdownRef = useRef<HTMLDivElement>(null);
   const [selectedMode, setSelectedMode] = useState(MODES[2]); // default "Auto-accept edits" (only available mode for now)
@@ -1136,6 +1208,11 @@ export function ChatView({ thread, projectCwd, onSend, onInterrupt, onRespondToT
   }, [thread?.id]);
 
   const addFiles = useCallback((files: FileList | File[]) => {
+    // GOTCHA: Codex threads don't support images in v1. The SDK wants
+    // filesystem paths (local_image) rather than base64, and we'd have
+    // to round-trip through the main process to write temp files. For
+    // now we silently ignore attachments on Codex threads.
+    if (thread?.provider === "codex") return;
     const images = Array.from(files).filter((f) => f.type.startsWith("image/"));
     if (images.length === 0) return;
     const newAttachments: ImageAttachment[] = images.map((file) => ({
@@ -1145,7 +1222,7 @@ export function ChatView({ thread, projectCwd, onSend, onInterrupt, onRespondToT
       previewUrl: URL.createObjectURL(file),
     }));
     setAttachments((prev) => [...prev, ...newAttachments]);
-  }, []);
+  }, [thread?.provider]);
 
   const removeAttachment = useCallback((id: string) => {
     setAttachments((prev) => {
@@ -1258,7 +1335,8 @@ export function ChatView({ thread, projectCwd, onSend, onInterrupt, onRespondToT
       );
     }
 
-    onSend(thread.id, input.trim(), images);
+    const effort = thread.provider === "codex" ? codexEffort.id : claudeEffort.id;
+    onSend(thread.id, input.trim(), images, { model: selectedModel.id, effort });
     setInput("");
     setAttachments((prev) => {
       prev.forEach((a) => URL.revokeObjectURL(a.previewUrl));
@@ -1314,8 +1392,20 @@ export function ChatView({ thread, projectCwd, onSend, onInterrupt, onRespondToT
   }
 
   const isClaude = thread.provider === "claude";
-  const modelLabel = isClaude ? selectedModel.label : "GPT-5.6";
+  const isCodex = thread.provider === "codex";
   const isStarted = thread.messages.length > 0;
+
+  // GOTCHA: if the currently-selected model doesn't match the thread's
+  // provider (e.g. thread is Codex but we still have Claude Opus picked
+  // from the previous thread), fall back to the first model of the
+  // thread's provider so the label doesn't lie.
+  const displayedModel: ModelDef = selectedModel.provider === thread.provider
+    ? selectedModel
+    : (isClaude ? CLAUDE_MODELS[0] : CODEX_MODELS[0]);
+  const modelLabel = displayedModel.label;
+  const effortList = isCodex ? CODEX_EFFORT : CLAUDE_EFFORT;
+  const selectedEffort = isCodex ? codexEffort : claudeEffort;
+  const setSelectedEffort = isCodex ? setCodexEffort : setClaudeEffort;
 
   return (
     <OpenFileContext.Provider value={{ open: handleOpenInEditor, editorLabel: editorLabel(preferredEditor) }}>
@@ -1644,19 +1734,32 @@ export function ChatView({ thread, projectCwd, onSend, onInterrupt, onRespondToT
               <div className="flex items-center gap-0">
 <div className="relative" ref={modelDropdownRef}>
                   <ControlButton
-                    onClick={() => isClaude && !isStarted && setModelDropdownOpen((v) => !v)}
+                    onClick={() => !isStarted && setModelDropdownOpen((v) => !v)}
                     tooltip={isStarted ? "Can't change model after thread has started" : undefined}
                   >
-                    <ClaudeIcon className="w-[14px] h-[14px] shrink-0 text-[#D97757]" />
+                    {isClaude
+                      ? <ClaudeIcon className="w-[14px] h-[14px] shrink-0 text-[#D97757]" />
+                      : <span className="w-[14px] h-[14px] shrink-0 text-[11px] font-bold flex items-center justify-center" style={{ color: "#10A37F" }}>O</span>
+                    }
                     <span>{modelLabel}</span>
-                    {isClaude && <CaretDown size={10} weight="bold" />}
+                    {!isStarted && <CaretDown size={10} weight="bold" />}
                   </ControlButton>
-                  {modelDropdownOpen && isClaude && (
+                  {modelDropdownOpen && !isStarted && (
                     <ModelDropdown
-                      models={CLAUDE_MODELS}
-                      selected={selectedModel}
+                      sections={[
+                        { label: "Anthropic", models: CLAUDE_MODELS },
+                        { label: "OpenAI", models: CODEX_MODELS },
+                      ]}
+                      selected={displayedModel}
                       onSelect={(m) => {
                         setSelectedModel(m);
+                        // Flip the thread's provider to match the picked
+                        // model. Only effective on pending (uncommitted)
+                        // threads; committed threads already have
+                        // isStarted=true and the dropdown is disabled.
+                        if (m.provider !== thread.provider) {
+                          onUpdateThreadProvider?.(thread.id, m.provider);
+                        }
                         setModelDropdownOpen(false);
                       }}
                     />
@@ -1672,7 +1775,7 @@ export function ChatView({ thread, projectCwd, onSend, onInterrupt, onRespondToT
                   </ControlButton>
                   {effortDropdownOpen && (
                     <EffortDropdown
-                      levels={EFFORT_LEVELS}
+                      levels={effortList}
                       selected={selectedEffort}
                       onSelect={(e) => {
                         setSelectedEffort(e);
@@ -1891,12 +1994,17 @@ function OpenInEditorDropdown({
 
 /* ── Model dropdown ─────────────────────────────────────────── */
 
+interface ModelSection {
+  label: string;
+  models: ModelDef[];
+}
+
 function ModelDropdown({
-  models,
+  sections,
   selected,
   onSelect,
 }: {
-  models: ModelDef[];
+  sections: ModelSection[];
   selected: ModelDef;
   onSelect: (m: ModelDef) => void;
 }) {
@@ -1909,40 +2017,56 @@ function ModelDropdown({
         boxShadow: "0 8px 24px rgba(0,0,0,0.4)",
       }}
     >
-      {models.map((m) => {
-        const isSelected = m.id === selected.id;
-        return (
-          <button
-            key={m.id}
-            onClick={() => onSelect(m)}
-            className="w-full flex items-start gap-2.5 rounded-xl px-2.5 py-2 text-left transition-colors"
-            style={{
-              background: isSelected ? "rgba(255,255,255,0.06)" : "transparent",
-            }}
-            onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.06)")}
-            onMouseLeave={(e) => (e.currentTarget.style.background = isSelected ? "rgba(255,255,255,0.06)" : "transparent")}
+      {sections.map((section, sIdx) => (
+        <div key={section.label} className="flex flex-col gap-[2px]">
+          {sIdx > 0 && (
+            <div className="my-1 h-px" style={{ background: "var(--border-subtle)" }} />
+          )}
+          <div
+            className="text-[10px] font-semibold uppercase tracking-wider px-2.5 pt-1 pb-0.5"
+            style={{ color: "var(--text-faint)" }}
           >
-            <ClaudeIcon className="w-[20px] h-[20px] shrink-0 mt-0.5 text-[#D97757]" />
-            <div className="flex flex-col gap-0.5 flex-1 min-w-0">
-              <span
-                className="text-[13px] font-medium leading-tight"
-                style={{ color: "var(--text-primary)" }}
+            {section.label}
+          </div>
+          {section.models.map((m) => {
+            const isSelected = m.id === selected.id;
+            return (
+              <button
+                key={m.id}
+                onClick={() => onSelect(m)}
+                className="w-full flex items-start gap-2.5 rounded-xl px-2.5 py-2 text-left transition-colors"
+                style={{
+                  background: isSelected ? "rgba(255,255,255,0.06)" : "transparent",
+                }}
+                onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.06)")}
+                onMouseLeave={(e) => (e.currentTarget.style.background = isSelected ? "rgba(255,255,255,0.06)" : "transparent")}
               >
-                {m.label}
-              </span>
-              <span
-                className="text-[11px] font-medium leading-tight"
-                style={{ color: "var(--text-muted)" }}
-              >
-                {m.subtitle}
-              </span>
-            </div>
-            {isSelected && (
-              <Check size={14} weight="bold" className="shrink-0 mt-0.5" style={{ color: "var(--text-primary)" }} />
-            )}
-          </button>
-        );
-      })}
+                {m.provider === "claude"
+                  ? <ClaudeIcon className="w-[20px] h-[20px] shrink-0 mt-0.5 text-[#D97757]" />
+                  : <span className="w-[20px] h-[20px] shrink-0 mt-0.5 text-[13px] font-bold flex items-center justify-center" style={{ color: "#10A37F" }}>O</span>
+                }
+                <div className="flex flex-col gap-0.5 flex-1 min-w-0">
+                  <span
+                    className="text-[13px] font-medium leading-tight"
+                    style={{ color: "var(--text-primary)" }}
+                  >
+                    {m.label}
+                  </span>
+                  <span
+                    className="text-[11px] font-medium leading-tight"
+                    style={{ color: "var(--text-muted)" }}
+                  >
+                    {m.subtitle}
+                  </span>
+                </div>
+                {isSelected && (
+                  <Check size={14} weight="bold" className="shrink-0 mt-0.5" style={{ color: "var(--text-primary)" }} />
+                )}
+              </button>
+            );
+          })}
+        </div>
+      ))}
     </div>
   );
 }

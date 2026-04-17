@@ -1,0 +1,1 @@
+ALTER TABLE `known_threads` ADD `provider` text DEFAULT 'claude' NOT NULL;

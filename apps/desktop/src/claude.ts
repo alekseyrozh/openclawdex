@@ -5,6 +5,17 @@ import {
   type SDKUserMessage,
   type Options as ClaudeQueryOptions,
 } from "@anthropic-ai/claude-agent-sdk";
+import type {
+  AgentSession,
+  ContextUsage,
+  DeferredToolUse,
+  ImageInput,
+  SessionEvent,
+} from "./agent-session";
+
+// Re-export the shared types so existing imports from "./claude" keep working
+// while we migrate call sites over to "./agent-session".
+export type { AgentSession, ContextUsage, DeferredToolUse, ImageInput, SessionEvent };
 
 /**
  * Locate the `claude` binary on the system.
@@ -18,27 +29,19 @@ export function findClaudeBinary(): string | null {
   }
 }
 
-export type ContextUsage = { totalTokens: number; maxTokens: number; percentage: number };
-
-export type DeferredToolUse = { id: string; name: string; input: Record<string, unknown> };
-
-export type ImageInput = { name: string; base64: string; mediaType: string };
-
-export type SessionEvent =
-  | { kind: "init"; sessionId: string; model: string }
-  | { kind: "text_delta"; text: string }
-  | { kind: "tool_use"; toolName: string; toolInput: Record<string, unknown> }
-  | { kind: "result"; costUsd: number; durationMs: number; isError: boolean; contextUsage: ContextUsage | null; deferredToolUse: DeferredToolUse | null }
-  | { kind: "error"; message: string }
-  | { kind: "done" };
-
 /**
  * One multi-turn conversation with Claude Code via the Agent SDK.
  *
  * Uses `query()` with an async-iterable prompt so we can push
  * follow-up messages into the same session.
+ *
+ * Implements {@link AgentSession} so it can be stored alongside
+ * {@link CodexSession} in a single `Map<threadId, AgentSession>` in
+ * `main.ts`.
  */
-export class ClaudeSession {
+export class ClaudeSession implements AgentSession {
+  readonly provider = "claude" as const;
+
   private claudePath: string;
   private resumeSessionId: string | undefined;
   private queryInstance: ReturnType<typeof query> | null = null;
