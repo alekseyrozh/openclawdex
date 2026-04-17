@@ -4,6 +4,7 @@ import {
   type SDKMessage,
   type SDKUserMessage,
   type Options as ClaudeQueryOptions,
+  type EffortLevel,
 } from "@anthropic-ai/claude-agent-sdk";
 import type {
   AgentSession,
@@ -176,10 +177,7 @@ export class ClaudeSession implements AgentSession {
       resume: this.resumeSessionId,
       cwd: this.cwd,
       ...(this.model && { model: this.model }),
-      // GOTCHA: SDK's `EffortLevel` type is `low|medium|high|max` but
-      // the CLI accepts `xhigh` too (Opus-only). Cast past the type
-      // so the wire value flows through unchanged.
-      ...(this.effort && { effort: this.effort as "low" | "medium" | "high" | "max" }),
+      ...(this.effort && { effort: this.effort as EffortLevel }),
     };
 
     this.queryInstance = query({

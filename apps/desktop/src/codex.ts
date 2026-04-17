@@ -11,20 +11,12 @@ import type {
   SessionEvent,
 } from "./agent-session";
 
-/**
- * Locate the `codex` binary on the system.
- * Mirrors {@link findClaudeBinary}; returns null if not installed.
- *
- * GOTCHA: the Codex SDK spawns the `codex` CLI under the hood and relies
- * on the user's existing `codex login` credentials — we never handle
- * API keys ourselves. If the binary is missing we surface the install
- * hint in the IPC error layer instead of throwing here.
- */
-export function findCodexBinary(): string | null {
+export function isCodexInstalled(): boolean {
   try {
-    return execSync("which codex", { encoding: "utf-8" }).trim();
+    execSync("which codex", { encoding: "utf-8" });
+    return true;
   } catch {
-    return null;
+    return false;
   }
 }
 

@@ -7,7 +7,7 @@ import { execSync, spawn } from "child_process";
 import fs from "fs";
 import { eq } from "drizzle-orm";
 import { findClaudeBinary, ClaudeSession } from "./claude";
-import { findCodexBinary, CodexSession, type CodexEffort } from "./codex";
+import { isCodexInstalled, CodexSession, type CodexEffort } from "./codex";
 import { listCodexModels } from "./codex-models";
 import { listClaudeModels } from "./claude-models";
 import type { AgentSession } from "./agent-session";
@@ -41,7 +41,7 @@ let mainWindow: BrowserWindow | null = null;
 // `provider` column to decide which backend to instantiate on first send.
 
 const claudePath = findClaudeBinary();
-const codexPath = findCodexBinary();
+const codexInstalled = isCodexInstalled();
 const sessions = new Map<string, AgentSession>();
 
 function getOrCreateSession(
@@ -74,7 +74,7 @@ function getOrCreateSession(
   }
 
   // provider === "codex"
-  if (!codexPath) return null;
+  if (!codexInstalled) return null;
   const session = new CodexSession({
     resumeThreadId: opts?.resumeSessionId,
     cwd: opts?.cwd,
@@ -113,7 +113,7 @@ function setupIpcHandlers(): void {
   ipcMain.handle("session:check", () => {
     return {
       claude: claudePath !== null,
-      codex: codexPath !== null,
+      codex: codexInstalled,
     };
   });
 
@@ -124,7 +124,7 @@ function setupIpcHandlers(): void {
    * that case so the picker is never empty.
    */
   ipcMain.handle("codex:list-models", async () => {
-    if (!codexPath) return [];
+    if (!codexInstalled) return [];
     try {
       return await listCodexModels();
     } catch (err) {

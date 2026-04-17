@@ -115,10 +115,6 @@ export type CodexModel = z.infer<typeof CodexModel>;
 // schema change; only `supportedEffortLevels` is consumed today
 // (to drive a per-model effort picker).
 
-// GOTCHA: the Agent SDK's `ModelInfo` type only declares `low | medium |
-// high | max`, but at runtime Opus reports `xhigh` too — the TS type is
-// a subset of the real wire values. Keep this enum wider than the SDK
-// type so validation doesn't reject Opus's effort list.
 export const ClaudeEffortLevel = z.enum(["low", "medium", "high", "xhigh", "max"]);
 export type ClaudeEffortLevel = z.infer<typeof ClaudeEffortLevel>;
 
