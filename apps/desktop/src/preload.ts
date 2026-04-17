@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { SessionInfo, HistoryMessage, ProjectInfo, EditorTarget, Provider } from "@openclawdex/shared";
+import type { SessionInfo, HistoryMessage, ProjectInfo, EditorTarget, Provider, CodexModel, ClaudeModel } from "@openclawdex/shared";
 
 contextBridge.exposeInMainWorld("openclawdex", {
   platform: process.platform,
@@ -13,6 +13,22 @@ contextBridge.exposeInMainWorld("openclawdex", {
    */
   checkProviders: (): Promise<{ claude: boolean; codex: boolean }> =>
     ipcRenderer.invoke("session:check"),
+
+  /**
+   * Fetch the Codex model list from the CLI's `app-server` JSON-RPC
+   * protocol. Returns an empty array if Codex isn't installed or the
+   * handshake fails — callers should fall back to a hardcoded list.
+   */
+  listCodexModels: (): Promise<CodexModel[]> =>
+    ipcRenderer.invoke("codex:list-models"),
+
+  /**
+   * Fetch the Claude model list via a throwaway Agent SDK query.
+   * Returns an empty array if Claude isn't installed or the control
+   * request fails — callers should fall back to a hardcoded list.
+   */
+  listClaudeModels: (): Promise<ClaudeModel[]> =>
+    ipcRenderer.invoke("claude:list-models"),
 
   /**
    * Send a user message to the agent backing a given thread.

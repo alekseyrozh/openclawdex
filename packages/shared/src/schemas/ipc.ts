@@ -68,6 +68,71 @@ export const HistoryMessage = z.discriminatedUnion("role", [
 ]);
 export type HistoryMessage = z.infer<typeof HistoryMessage>;
 
+// ── Codex model listing ──────────────────────────────────────
+//
+// Mirrors the `Model` shape from the Codex app-server protocol
+// (`model/list` RPC). Only the fields we currently use are required;
+// the rest pass through so the schema doesn't have to chase every
+// upstream addition. Run `codex app-server generate-json-schema
+// --out <dir> --experimental` to inspect the full protocol.
+
+export const CodexReasoningEffort = z.enum([
+  "none",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+]);
+export type CodexReasoningEffort = z.infer<typeof CodexReasoningEffort>;
+
+export const CodexReasoningEffortOption = z.object({
+  reasoningEffort: CodexReasoningEffort,
+  description: z.string(),
+});
+
+export const CodexModel = z.object({
+  id: z.string(),
+  model: z.string(),
+  displayName: z.string(),
+  description: z.string(),
+  hidden: z.boolean(),
+  isDefault: z.boolean(),
+  // When non-null, OpenAI has marked this model as superseded by the
+  // named successor (e.g. `upgrade: "gpt-5.4"`). We surface it in the
+  // picker subtitle so users know they're about to pick a stale model.
+  upgrade: z.string().nullable().optional(),
+  defaultReasoningEffort: CodexReasoningEffort,
+  supportedReasoningEfforts: z.array(CodexReasoningEffortOption),
+});
+export type CodexModel = z.infer<typeof CodexModel>;
+
+// ── Claude model listing ─────────────────────────────────────
+//
+// Mirrors the `ModelInfo` shape returned by the Agent SDK's
+// `Query.supportedModels()`. We pass through the boolean capability
+// flags unchanged so the renderer can use them later without another
+// schema change; only `supportedEffortLevels` is consumed today
+// (to drive a per-model effort picker).
+
+// GOTCHA: the Agent SDK's `ModelInfo` type only declares `low | medium |
+// high | max`, but at runtime Opus reports `xhigh` too — the TS type is
+// a subset of the real wire values. Keep this enum wider than the SDK
+// type so validation doesn't reject Opus's effort list.
+export const ClaudeEffortLevel = z.enum(["low", "medium", "high", "xhigh", "max"]);
+export type ClaudeEffortLevel = z.infer<typeof ClaudeEffortLevel>;
+
+export const ClaudeModel = z.object({
+  value: z.string(),
+  displayName: z.string(),
+  description: z.string(),
+  supportsEffort: z.boolean().optional(),
+  supportedEffortLevels: z.array(ClaudeEffortLevel).optional(),
+  supportsAdaptiveThinking: z.boolean().optional(),
+  supportsFastMode: z.boolean().optional(),
+});
+export type ClaudeModel = z.infer<typeof ClaudeModel>;
+
 // ── AskUserQuestion tool input ───────────────────────────────
 
 export const AskUserOption = z.object({

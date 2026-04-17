@@ -44,6 +44,8 @@ export class ClaudeSession implements AgentSession {
 
   private claudePath: string;
   private resumeSessionId: string | undefined;
+  private model: string | undefined;
+  private effort: string | undefined;
   private queryInstance: ReturnType<typeof query> | null = null;
   private streamLoopRunning = false;
 
@@ -54,10 +56,20 @@ export class ClaudeSession implements AgentSession {
 
   private cwd: string | undefined;
 
-  constructor(claudePath: string, opts?: { resumeSessionId?: string; cwd?: string }) {
+  constructor(
+    claudePath: string,
+    opts?: {
+      resumeSessionId?: string;
+      cwd?: string;
+      model?: string;
+      effort?: string;
+    },
+  ) {
     this.claudePath = claudePath;
     this.resumeSessionId = opts?.resumeSessionId;
     this.cwd = opts?.cwd;
+    this.model = opts?.model;
+    this.effort = opts?.effort;
   }
 
   private static toUserMessage(text: string, images?: ImageInput[]): SDKUserMessage {
@@ -163,6 +175,11 @@ export class ClaudeSession implements AgentSession {
       allowDangerouslySkipPermissions: true,
       resume: this.resumeSessionId,
       cwd: this.cwd,
+      ...(this.model && { model: this.model }),
+      // GOTCHA: SDK's `EffortLevel` type is `low|medium|high|max` but
+      // the CLI accepts `xhigh` too (Opus-only). Cast past the type
+      // so the wire value flows through unchanged.
+      ...(this.effort && { effort: this.effort as "low" | "medium" | "high" | "max" }),
     };
 
     this.queryInstance = query({

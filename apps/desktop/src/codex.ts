@@ -200,13 +200,17 @@ export class CodexSession implements AgentSession {
     const abort = new AbortController();
     this.currentAbort = abort;
 
+    // Track tokens across updates so we can emit a final ContextUsage
+    // on `turn.completed`.
+    let lastUsage: ContextUsage | null = null;
+    // Captured from JSON events on stdout. Preferred over the
+    // `exited with code` wrapper the SDK throws, because that wrapper
+    // only carries stderr (e.g. "Reading prompt from stdin...") while
+    // the real reason (rate limit, auth, etc.) is in the JSON event.
+    let turnError: string | null = null;
+
     try {
       const { events } = await this.thread.runStreamed(input, { signal: abort.signal });
-
-      // Track tokens across updates so we can emit a final ContextUsage
-      // on `turn.completed`.
-      let lastUsage: ContextUsage | null = null;
-      let turnError: string | null = null;
 
       for await (const ev of events) {
         this.handleEvent(ev, onEvent);
@@ -225,33 +229,28 @@ export class CodexSession implements AgentSession {
           turnError = ev.message;
         }
       }
-
-      onEvent({
-        kind: "result",
-        // Codex never reports a dollar cost.
-        costUsd: null,
-        // Codex SDK does not surface a duration either.
-        durationMs: null,
-        isError: turnError !== null,
-        contextUsage: lastUsage,
-        // No AskUserQuestion analogue on Codex.
-        deferredToolUse: null,
-      });
-
-      if (turnError) {
-        onEvent({ kind: "error", message: turnError });
-      }
     } catch (err) {
-      // AbortError from interrupt() — swallow as a clean stop.
-      const msg = err instanceof Error ? err.message : String(err);
       const aborted = err instanceof Error && (err.name === "AbortError" || abort.signal.aborted);
-      if (!aborted) {
-        onEvent({ kind: "error", message: msg });
+      if (!aborted && !turnError) {
+        turnError = err instanceof Error ? err.message : String(err);
       }
     } finally {
       this.currentAbort = null;
-      onEvent({ kind: "done" });
     }
+
+    onEvent({
+      kind: "result",
+      costUsd: null,
+      durationMs: null,
+      isError: turnError !== null,
+      contextUsage: lastUsage,
+      deferredToolUse: null,
+    });
+
+    if (turnError) {
+      onEvent({ kind: "error", message: turnError });
+    }
+    onEvent({ kind: "done" });
   }
 
   /**

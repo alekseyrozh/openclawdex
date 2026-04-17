@@ -4,8 +4,9 @@
   "version": "0.2.1",
   "main": "dist/main.js",
   "scripts": {
-    "dev": "tsc && electron .",
-    "build": "tsc",
+    "dev": "tsup && electron .",
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
     "dist": "npx electron-builder --mac",
     "db:studio": "drizzle-kit studio",
     "db:generate": "drizzle-kit generate"
@@ -13,6 +14,7 @@
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.110",
     "@libsql/client": "^0.17.2",
+    "@openai/codex": "^0.121.0",
     "@openai/codex-sdk": "^0.121.0",
     "@openclawdex/shared": "workspace:*",
     "drizzle-orm": "^0.44.2",
@@ -25,6 +27,7 @@
     "drizzle-kit": "^0.30.4",
     "electron": "41.2.0",
     "electron-builder": "^25.1.8",
+    "tsup": "^8.5.1",
     "typescript": "^6.0.2"
   },
   "build": {

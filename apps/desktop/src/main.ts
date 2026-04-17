@@ -8,6 +8,8 @@ import fs from "fs";
 import { eq } from "drizzle-orm";
 import { findClaudeBinary, ClaudeSession } from "./claude";
 import { findCodexBinary, CodexSession, type CodexEffort } from "./codex";
+import { listCodexModels } from "./codex-models";
+import { listClaudeModels } from "./claude-models";
 import type { AgentSession } from "./agent-session";
 import {
   listSessions,
@@ -64,6 +66,8 @@ function getOrCreateSession(
     const session = new ClaudeSession(claudePath, {
       resumeSessionId: opts?.resumeSessionId,
       cwd: opts?.cwd,
+      model: opts?.model,
+      effort: opts?.effort,
     });
     sessions.set(threadId, session);
     return session;
@@ -111,6 +115,37 @@ function setupIpcHandlers(): void {
       claude: claudePath !== null,
       codex: codexPath !== null,
     };
+  });
+
+  /**
+   * Fetch the account-aware Codex model list via the `codex app-server`
+   * JSON-RPC protocol. Returns `[]` if Codex isn't installed or the
+   * handshake fails — the renderer falls back to a hardcoded list in
+   * that case so the picker is never empty.
+   */
+  ipcMain.handle("codex:list-models", async () => {
+    if (!codexPath) return [];
+    try {
+      return await listCodexModels();
+    } catch (err) {
+      console.error("[codex-models] failed:", err);
+      return [];
+    }
+  });
+
+  /**
+   * Fetch the account-aware Claude model list via the Agent SDK's
+   * `Query.supportedModels()` control request. Returns `[]` on failure;
+   * the renderer falls back to a hardcoded list in that case.
+   */
+  ipcMain.handle("claude:list-models", async () => {
+    if (!claudePath) return [];
+    try {
+      return await listClaudeModels(claudePath);
+    } catch (err) {
+      console.error("[claude-models] failed:", err);
+      return [];
+    }
   });
 
   /** Send a user message to the selected agent for a given thread. */

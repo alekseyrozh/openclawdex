@@ -1,6 +1,6 @@
 /** Type declarations for the preload bridge exposed on `window.openclawdex`. */
 
-import type { SessionInfo, HistoryMessage, ProjectInfo, EditorTarget, Provider } from "@openclawdex/shared";
+import type { SessionInfo, HistoryMessage, ProjectInfo, EditorTarget, Provider, CodexModel, ClaudeModel } from "@openclawdex/shared";
 
 export {};
 
@@ -8,6 +8,8 @@ declare global {
   interface OpenClawdexBridge {
     platform: string;
     checkProviders: () => Promise<{ claude: boolean; codex: boolean }>;
+    listCodexModels: () => Promise<CodexModel[]>;
+    listClaudeModels: () => Promise<ClaudeModel[]>;
     send: (
       threadId: string,
       message: string,

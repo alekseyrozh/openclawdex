@@ -18,5 +18,7 @@ export async function initDb(): Promise<void> {
   const dbPath = path.join(app.getPath("userData"), "openclawdex.db");
   const client = createClient({ url: `file:${dbPath}` });
   _db = drizzle(client, { schema });
-  await migrate(_db, { migrationsFolder: path.join(__dirname, "../../drizzle") });
+  // With tsup bundling, main.js and everything required into it live in
+  // `dist/`, so the drizzle/ folder is one level up.
+  await migrate(_db, { migrationsFolder: path.join(__dirname, "../drizzle") });
 }
