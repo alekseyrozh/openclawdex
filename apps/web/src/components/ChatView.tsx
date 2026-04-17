@@ -180,6 +180,16 @@ function ClaudeIcon({ className }: { className?: string }) {
   );
 }
 
+/* ── OpenAI blossom icon ────────────────────────────────────── */
+
+function OpenAIIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor" className={className}>
+      <path d="M22.2819 9.8211a5.9847 5.9847 0 0 0-.5157-4.9108 6.0462 6.0462 0 0 0-6.5098-2.9A6.0651 6.0651 0 0 0 4.9807 4.1818a5.9847 5.9847 0 0 0-3.9977 2.9 6.0462 6.0462 0 0 0 .7427 7.0966 5.98 5.98 0 0 0 .511 4.9107 6.051 6.051 0 0 0 6.5146 2.9001A5.9847 5.9847 0 0 0 13.2599 24a6.0557 6.0557 0 0 0 5.7718-4.2058 5.9894 5.9894 0 0 0 3.9977-2.9001 6.0557 6.0557 0 0 0-.7475-7.0729zm-9.022 12.6081a4.4755 4.4755 0 0 1-2.8764-1.0408l.1419-.0804 4.7783-2.7582a.7948.7948 0 0 0 .3927-.6813v-6.7369l2.02 1.1686a.071.071 0 0 1 .038.052v5.5826a4.504 4.504 0 0 1-4.4945 4.4944zm-9.6607-4.1254a4.4708 4.4708 0 0 1-.5346-3.0137l.142.0852 4.783 2.7582a.7712.7712 0 0 0 .7806 0l5.8428-3.3685v2.3324a.0804.0804 0 0 1-.0332.0615L9.74 19.9502a4.4992 4.4992 0 0 1-6.1408-1.6464zM2.3408 7.8956a4.485 4.485 0 0 1 2.3655-1.9728V11.6a.7664.7664 0 0 0 .3879.6765l5.8144 3.3543-2.0201 1.1685a.0757.0757 0 0 1-.071 0l-4.8303-2.7865A4.504 4.504 0 0 1 2.3408 7.872zm16.5963 3.8558L13.1038 8.364 15.1192 7.2a.0757.0757 0 0 1 .071 0l4.8303 2.7913a4.4944 4.4944 0 0 1-.6765 8.1042v-5.6772a.79.79 0 0 0-.3927-.667zm2.0107-3.0231l-.142-.0852-4.7735-2.7818a.7759.7759 0 0 0-.7854 0L9.409 9.2297V6.8974a.0662.0662 0 0 1 .0284-.0615l4.8303-2.7866a4.4992 4.4992 0 0 1 6.6802 4.66zM8.3065 12.863l-2.02-1.1638a.0804.0804 0 0 1-.038-.0567V6.0742a4.4992 4.4992 0 0 1 7.3757-3.4537l-.142.0805L8.704 5.459a.7948.7948 0 0 0-.3927.6813zm1.0976-2.3654l2.602-1.4998 2.6069 1.4998v2.9994l-2.5974 1.4997-2.6067-1.4997Z" />
+    </svg>
+  );
+}
+
 /* ── Model definitions ──────────────────────────────────────── */
 
 import type { Provider } from "@openclawdex/shared";
@@ -189,24 +199,204 @@ interface ModelDef {
   label: string;
   subtitle: string;
   provider: Provider;
+  // Optional compact suffix rendered next to the label in a muted
+  // color — used for "1M context" variants the way Claude Desktop
+  // displays them, e.g. `Opus 4.7 [1M]`.
+  badge?: string;
+  // Reasoning-effort IDs this model supports (e.g. ["low","medium","high"]).
+  // `undefined` means unknown → render the full provider effort list as
+  // a fallback (existing hardcoded CLAUDE_EFFORT/CODEX_EFFORT behavior).
+  // An empty array means the model has no reasoning-effort control
+  // (e.g. Haiku) → the effort picker is hidden entirely.
+  supportedEfforts?: string[];
 }
 
-const CLAUDE_MODELS: ModelDef[] = [
-  { id: "opus", label: "Claude Opus 4.6", subtitle: "Most capable", provider: "claude" },
-  { id: "sonnet", label: "Claude Sonnet 4.6", subtitle: "Fast & capable", provider: "claude" },
-  { id: "haiku", label: "Claude Haiku 4.5", subtitle: "Fastest", provider: "claude" },
-];
+// Shared formatters so the picker looks uniform across providers.
+//
+// The two SDKs hand us very different label conventions:
+//   - Codex: brand-prefixed `displayName` ("GPT-5.4"), short
+//     single-sentence `description`.
+//   - Claude: bare model-family `displayName` ("Sonnet"), long
+//     two-clause `description` joined by " · ".
+//
+// We normalize to: `{Brand} {displayName}` as the label, and the
+// first clause of description as the subtitle.
+function formatModelLabel(displayName: string, brand: string): string {
+  // Claude's default entry tags itself as "Default (recommended)" —
+  // nothing else in the picker carries a parenthetical modifier, so
+  // strip it for consistency.
+  const cleaned = displayName.replace(/\s*\(recommended\)\s*$/i, "").trim();
+  // Codex's `model/list` returns most display names as lowercase
+  // hyphenated slugs ("gpt-5.2-codex") with only the occasional
+  // properly-cased one ("GPT-5.4-Mini"). Normalize every segment so
+  // the list looks uniform: uppercase the `GPT` brand, titlecase
+  // word segments, leave version numbers ("5.4") alone.
+  const titlecased = cleaned
+    .split("-")
+    .map((seg) => {
+      if (seg.length === 0) return seg;
+      if (/^\d/.test(seg)) return seg;
+      // Only normalize segments the SDK hands back in all-lowercase
+      // (Codex slugs). Preserve already-cased segments like "Mini" or
+      // Claude's "Sonnet (1M context)" where the internal capital
+      // matters.
+      if (seg !== seg.toLowerCase()) return seg;
+      if (seg === "gpt") return "GPT";
+      return seg.charAt(0).toUpperCase() + seg.slice(1);
+    })
+    .join("-");
+  // If the SDK already brand-prefixed the name (Codex's "GPT-…"),
+  // don't double-prefix.
+  return titlecased.toLowerCase().startsWith(brand.toLowerCase())
+    ? titlecased
+    : `${brand} ${titlecased}`;
+}
 
-// GOTCHA: the `id` MUST be what the Codex SDK's `ThreadOptions.model`
-// accepts. The SDK passes it through to the `codex` CLI's `--model` flag.
-// Keep these in sync with whichever models the user's Codex CLI knows
-// about (as of 0.121.0, gpt-5.1-codex is the primary option).
-const CODEX_MODELS: ModelDef[] = [
-  { id: "gpt-5.1-codex", label: "GPT-5.1 Codex", subtitle: "Most capable", provider: "codex" },
-  { id: "gpt-5.1-codex-mini", label: "GPT-5.1 Codex Mini", subtitle: "Fastest", provider: "codex" },
-];
+function formatModelSubtitle(description: string): string {
+  const [first] = description.split(" · ");
+  return first.trim();
+}
 
-const ALL_MODELS: ModelDef[] = [...CLAUDE_MODELS, ...CODEX_MODELS];
+// Module-level cache — same shape as the Codex one. Fetching Claude's
+// model list is more expensive (~1–2s cold-start of the CLI) so we
+// never want to do it twice in a single app lifetime.
+let claudeModelsCache: ModelDef[] | null = null;
+let claudeModelsPromise: Promise<ModelDef[]> | null = null;
+
+function loadClaudeModels(): Promise<ModelDef[]> {
+  if (claudeModelsCache) return Promise.resolve(claudeModelsCache);
+  if (!claudeModelsPromise) {
+    claudeModelsPromise = window.openclawdex
+      .listClaudeModels()
+      .then((models) => {
+        const result: ModelDef[] =
+          models.length > 0
+            ? models.map((m) => {
+                // Claude's `description` is a " · "-joined string where
+                // the first clause names the actual model+version
+                // ("Opus 4.7 with 1M context") and the rest is
+                // marketing and/or billing copy. That first clause is
+                // far more informative than `displayName` ("Default")
+                // so we use it as the label.
+                //
+                // We also split " with NM context" off the first
+                // clause into a compact badge (the convention Claude
+                // Desktop uses) and filter out billing clauses from
+                // the subtitle — those belong on a plan screen, not
+                // a model picker.
+                const [head, ...rest] = m.description.split(" · ");
+                const rawHead = (head ?? m.displayName).trim();
+                const ctxMatch = rawHead.match(/^(.*?)\s+with\s+(\S+)\s+context\s*$/i);
+                const label = ctxMatch ? ctxMatch[1].trim() : rawHead;
+                const badge = ctxMatch ? ctxMatch[2] : undefined;
+                const subtitle = rest
+                  .map((s) => s.trim())
+                  .filter((s) => s.length > 0 && !/\bbilled\b/i.test(s) && !/\$/.test(s))
+                  .join(" · ");
+                // `supportsEffort: false` or a missing
+                // `supportedEffortLevels` array (e.g. Haiku) means the
+                // model has no reasoning knob — represent that as an
+                // empty list so the effort picker hides.
+                const supportedEfforts = m.supportsEffort && m.supportedEffortLevels
+                  ? m.supportedEffortLevels
+                  : [];
+                return {
+                  id: m.value,
+                  label,
+                  subtitle: subtitle || m.displayName,
+                  provider: "claude" as const,
+                  badge,
+                  supportedEfforts,
+                };
+              })
+            : [];
+        claudeModelsCache = result;
+        return result;
+      })
+      .catch(() => [] as ModelDef[]);
+  }
+  return claudeModelsPromise;
+}
+
+// Parse a Codex model slug ("gpt-5.1-codex-max") into a human-friendly
+// label. OpenAI's own `displayName` field mixes casing ("gpt-5.2-codex"
+// vs "GPT-5.4-Mini") and the hyphenated slugs look like path names in
+// the picker. Normalize by treating `codex` as the primary product
+// name when present (matching OpenAI's own "Codex CLI" branding), with
+// other suffixes like `mini`/`max` as variant qualifiers.
+//
+// Shape mirrors Claude Desktop's convention of "{Product} {Version}":
+//   gpt-5.4              → "GPT-5.4"
+//   gpt-5.4-mini         → "GPT-5.4 Mini"
+//   gpt-5.3-codex        → "Codex 5.3"
+//   gpt-5.1-codex-max    → "Codex 5.1 Max"
+//   gpt-5.1-codex-mini   → "Codex 5.1 Mini"
+function prettyCodexLabel(slug: string): string {
+  const match = slug.toLowerCase().match(/^gpt-(\d+(?:\.\d+)?)(.*)$/);
+  if (!match) return slug;
+  const [, version, rest] = match;
+  const parts = rest.split("-").filter(Boolean);
+  const hasCodex = parts.includes("codex");
+  const variants = parts
+    .filter((p) => p !== "codex")
+    .map((p) => p.charAt(0).toUpperCase() + p.slice(1));
+  const variantStr = variants.length > 0 ? ` ${variants.join(" ")}` : "";
+  return hasCodex
+    ? `Codex ${version}${variantStr}`
+    : `GPT-${version}${variantStr}`;
+}
+
+// OpenAI's `model/list` description field is full of repeated
+// boilerplate — 3 of the 7 entries open with "frontier agentic coding
+// model" — which makes the picker hard to scan. Derive a concise
+// Claude-style subtitle from the slug suffix instead.
+//
+// We intentionally ignore the `upgrade` field even though it's in the
+// payload: OpenAI flags older models as "superseded" but they remain
+// fully usable and some users prefer them. Framing them as superseded
+// in the picker would make them feel obsolete, which they aren't.
+function codexSubtitle(model: {
+  model: string;
+  isDefault: boolean;
+}): string {
+  if (model.isDefault) return "Most capable";
+  const slug = model.model.toLowerCase();
+  if (/-mini$/.test(slug)) return "Smaller, faster";
+  if (/-max$/.test(slug)) return "Deepest reasoning";
+  if (/-codex(-|$)/.test(slug)) return "Coding-specialized";
+  return "Professional work";
+}
+
+// Module-level cache so a freshly-mounted ChatView doesn't re-IPC if
+// another instance has already fetched. Main-process side also caches
+// so repeat calls are cheap, but the extra round-trip is still visible
+// on thread-switch.
+let codexModelsCache: ModelDef[] | null = null;
+let codexModelsPromise: Promise<ModelDef[]> | null = null;
+
+function loadCodexModels(): Promise<ModelDef[]> {
+  if (codexModelsCache) return Promise.resolve(codexModelsCache);
+  if (!codexModelsPromise) {
+    codexModelsPromise = window.openclawdex
+      .listCodexModels()
+      .then((models) => {
+        // Empty means main process couldn't fetch (no Codex installed,
+        // app-server failed, etc.). We surface that as an empty list
+        // rather than hardcoding fallback models.
+        const result: ModelDef[] = models.map((m) => ({
+          id: m.model,
+          label: prettyCodexLabel(m.model),
+          subtitle: m.description.replace(/\.$/, ""),
+          provider: "codex" as const,
+          supportedEfforts: m.supportedReasoningEfforts.map((e) => e.reasoningEffort),
+        }));
+        codexModelsCache = result;
+        return result;
+      })
+      .catch(() => [] as ModelDef[]);
+  }
+  return codexModelsPromise;
+}
 
 /* ── Effort levels ──────────────────────────────────────────── */
 
@@ -223,13 +413,18 @@ interface EffortDef {
 // on the thread's provider.
 const CLAUDE_EFFORT: EffortDef[] = [
   { id: "max", label: "Max", subtitle: "Extended thinking, highest quality" },
+  // GOTCHA: "xhigh" is Opus-only. The SDK's `ModelInfo` TS type
+  // declares effort as `low|medium|high|max`, but the wire data
+  // contains `xhigh` too — we need the entry here so the per-model
+  // filter can surface it when a model actually supports it.
+  { id: "xhigh", label: "Extra high", subtitle: "Deepest reasoning" },
   { id: "high", label: "High", subtitle: "Thorough reasoning" },
   { id: "medium", label: "Medium", subtitle: "Balanced speed and quality" },
   { id: "low", label: "Low", subtitle: "Fast, minimal reasoning" },
 ];
 
 const CODEX_EFFORT: EffortDef[] = [
-  { id: "xhigh", label: "XHigh", subtitle: "Deepest reasoning, slowest" },
+  { id: "xhigh", label: "Extra high", subtitle: "Deepest reasoning, slowest" },
   { id: "high", label: "High", subtitle: "Thorough reasoning" },
   { id: "medium", label: "Medium", subtitle: "Balanced speed and quality" },
   { id: "low", label: "Low", subtitle: "Fast, minimal reasoning" },
@@ -1162,11 +1357,29 @@ export function ChatView({ thread, projectCwd, onSend, onInterrupt, onRespondToT
   // picks a Codex model on a pending thread, we also call
   // `onUpdateThreadProvider` to flip the thread.provider so subsequent
   // handleSend routes to the Codex backend.
-  const [selectedModel, setSelectedModel] = useState<ModelDef>(CLAUDE_MODELS[0]);
+  // `selectedModel` starts null on a fresh mount — the real default
+  // is picked once the live list loads (see the effect below that
+  // auto-syncs it when claudeModels/codexModels arrive). The last
+  // user-picked id is remembered in localStorage and re-applied once
+  // the list for its provider loads.
+  const [selectedModel, setSelectedModel] = useState<ModelDef | null>(
+    claudeModelsCache?.[0] ?? null,
+  );
+  // Live Claude + Codex model lists, fetched from the respective
+  // SDK/CLI on mount. Start from the module-level cache if a previous
+  // mount already loaded them; otherwise empty until loadXxx resolves.
+  const [claudeModels, setClaudeModels] = useState<ModelDef[]>(claudeModelsCache ?? []);
+  const [codexModels, setCodexModels] = useState<ModelDef[]>(codexModelsCache ?? []);
+  useEffect(() => {
+    loadClaudeModels().then(setClaudeModels);
+    loadCodexModels().then(setCodexModels);
+  }, []);
   const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
   const modelDropdownRef = useRef<HTMLDivElement>(null);
   // GOTCHA: separate effort states per provider because the vocabularies
   // don't overlap (Codex has "minimal"/"xhigh" that Claude doesn't).
+  // Effort is intentionally NOT persisted — it resets to the provider
+  // default whenever the model changes (see the effect below).
   const [claudeEffort, setClaudeEffort] = useState<EffortDef>(CLAUDE_EFFORT[1]); // default "high"
   const [codexEffort, setCodexEffort] = useState<EffortDef>(CODEX_EFFORT[2]); // default "medium"
   const [effortDropdownOpen, setEffortDropdownOpen] = useState(false);
@@ -1336,7 +1549,13 @@ export function ChatView({ thread, projectCwd, onSend, onInterrupt, onRespondToT
     }
 
     const effort = thread.provider === "codex" ? codexEffort.id : claudeEffort.id;
-    onSend(thread.id, input.trim(), images, { model: selectedModel.id, effort });
+    // `selectedModel` can be null during the brief window before the
+    // live model list arrives. Omit the model field so the backend
+    // falls back to the CLI's own default for the provider.
+    onSend(thread.id, input.trim(), images, {
+      ...(selectedModel && { model: selectedModel.id }),
+      effort,
+    });
     setInput("");
     setAttachments((prev) => {
       prev.forEach((a) => URL.revokeObjectURL(a.previewUrl));
@@ -1380,6 +1599,83 @@ export function ChatView({ thread, projectCwd, onSend, onInterrupt, onRespondToT
     return () => document.removeEventListener("mousedown", handleClick);
   }, [modelDropdownOpen, effortDropdownOpen, modeDropdownOpen]);
 
+  // Keep `selectedModel` in sync with whichever provider's list
+  // matches the current thread. Fires in three cases:
+  //   - First mount, no cached list yet: selectedModel is null →
+  //     restore the last-used model for this provider from
+  //     localStorage, or fall back to the list head.
+  //   - Thread switch crosses providers: selectedModel belongs to
+  //     the other provider → swap to the current provider's saved
+  //     model (or list head).
+  //   - Live list replaces a stale entry: selectedModel's id isn't
+  //     in the list anymore → fall back to the list head.
+  useEffect(() => {
+    if (!thread) return;
+    const raw = localStorage.getItem("lastSelection");
+    const saved = raw ? (() => { try { return JSON.parse(raw); } catch { return null; } })() : null;
+    const savedProvider: Provider | undefined = saved?.provider === "claude" || saved?.provider === "codex" ? saved.provider : undefined;
+    // For a pending thread, honour whatever provider was last picked by
+    // flipping thread.provider if needed. Started threads are locked.
+    const isPending = thread.messages.length === 0 && thread.sessionId === undefined;
+    const targetProvider = isPending && savedProvider ? savedProvider : thread.provider;
+    const list = targetProvider === "claude" ? claudeModels : codexModels;
+    console.log("[model-restore] thread=%s provider=%s isPending=%s saved=%o targetProvider=%s list.length=%d", thread.id.slice(0, 8), thread.provider, isPending, saved, targetProvider, list.length);
+    if (list.length === 0) { console.log("[model-restore] → skipped (list empty)"); return; }
+    const ok =
+      selectedModel &&
+      selectedModel.provider === targetProvider &&
+      list.some((m) => m.id === selectedModel.id);
+    if (isPending && targetProvider !== thread.provider) {
+      console.log("[model-restore] → flipping thread provider to %s", targetProvider);
+      onUpdateThreadProvider?.(thread.id, targetProvider);
+    }
+    if (ok) { console.log("[model-restore] → already ok, selectedModel=%s", selectedModel?.id); return; }
+    const restored = saved?.modelId ? list.find((m) => m.id === saved.modelId) : undefined;
+    console.log("[model-restore] → setSelectedModel to %s (fallback=%s)", restored?.id ?? list[0]?.id, !restored);
+    setSelectedModel(restored ?? list[0]);
+  }, [thread, selectedModel, claudeModels, codexModels, onUpdateThreadProvider]);
+
+  // Restore the effort for the current provider whenever the selected model changes.
+  useEffect(() => {
+    if (!selectedModel || !thread) return;
+    const raw = localStorage.getItem("lastSelection");
+    const saved = raw ? (() => { try { return JSON.parse(raw); } catch { return null; } })() : null;
+    const base = thread.provider === "codex" ? CODEX_EFFORT : CLAUDE_EFFORT;
+    const fallback = thread.provider === "codex" ? CODEX_EFFORT[2] : CLAUDE_EFFORT[1];
+    const restored = base.find((e) => e.id === saved?.effortId) ?? fallback;
+    console.log("[effort-restore] model=%s provider=%s savedEffort=%s → restored=%s", selectedModel.id, thread.provider, saved?.effortId, restored.id);
+    if (thread.provider === "codex") setCodexEffort(restored);
+    else setClaudeEffort(restored);
+  }, [selectedModel?.id, thread?.provider]);
+
+  // Auto-correct the selected effort when the model changes to one
+  // that doesn't support it (e.g. Opus's "xhigh" → Sonnet has no
+  // "xhigh"). Lives above the early return below so the hook order
+  // stays stable when `thread` flips between null and non-null.
+  useEffect(() => {
+    if (!thread) return;
+    const picked =
+      selectedModel?.provider === thread.provider
+        ? selectedModel
+        : thread.provider === "claude"
+          ? claudeModels[0]
+          : codexModels[0];
+    if (!picked) return;
+    const isCodexThread = thread.provider === "codex";
+    const base = isCodexThread ? CODEX_EFFORT : CLAUDE_EFFORT;
+    const list =
+      picked.supportedEfforts === undefined
+        ? base
+        : base.filter((e) => picked.supportedEfforts!.includes(e.id));
+    if (list.length === 0) return;
+    const current = isCodexThread ? codexEffort : claudeEffort;
+    const setCurrent = isCodexThread ? setCodexEffort : setClaudeEffort;
+    if (list.find((e) => e.id === current.id)) return;
+    const fallback =
+      list.find((e) => e.id === "high") ?? list[Math.floor(list.length / 2)];
+    if (fallback) setCurrent(fallback);
+  }, [thread, selectedModel, claudeModels, codexModels, claudeEffort, codexEffort]);
+
   if (!thread) {
     return (
       <div
@@ -1393,19 +1689,36 @@ export function ChatView({ thread, projectCwd, onSend, onInterrupt, onRespondToT
 
   const isClaude = thread.provider === "claude";
   const isCodex = thread.provider === "codex";
-  const isStarted = thread.messages.length > 0;
+  // A "pending" thread hasn't been committed to the DB yet — no
+  // session_init has fired, so no sessionId. Only pending threads can
+  // have their model/provider changed; committed threads have a real
+  // server-side session and changing the model retroactively doesn't
+  // make sense. (`isStarted` alone isn't enough because a committed
+  // thread whose history hasn't loaded yet also has messages.length=0.)
+  const isStarted = thread.messages.length > 0 || thread.sessionId !== undefined;
 
-  // GOTCHA: if the currently-selected model doesn't match the thread's
-  // provider (e.g. thread is Codex but we still have Claude Opus picked
-  // from the previous thread), fall back to the first model of the
-  // thread's provider so the label doesn't lie.
-  const displayedModel: ModelDef = selectedModel.provider === thread.provider
-    ? selectedModel
-    : (isClaude ? CLAUDE_MODELS[0] : CODEX_MODELS[0]);
-  const modelLabel = displayedModel.label;
-  const effortList = isCodex ? CODEX_EFFORT : CLAUDE_EFFORT;
+  // If the currently-selected model doesn't match the thread's
+  // provider (e.g. thread is Codex but we still have Claude Opus
+  // picked from the previous thread), fall back to the first model
+  // of the thread's provider so the label doesn't lie. May be null
+  // while the live list is still loading.
+  const displayedModel: ModelDef | null =
+    selectedModel && selectedModel.provider === thread.provider
+      ? selectedModel
+      : (isClaude ? claudeModels[0] : codexModels[0]) ?? null;
+  const modelLabel = displayedModel?.label ?? "Loading models…";
+  const baseEffortList = isCodex ? CODEX_EFFORT : CLAUDE_EFFORT;
+  // Filter the provider's full effort list down to the ones the
+  // selected model supports. While no model is resolved yet, show
+  // the full base list so the picker isn't empty.
+  const effortList = !displayedModel || displayedModel.supportedEfforts === undefined
+    ? baseEffortList
+    : baseEffortList.filter((e) => displayedModel.supportedEfforts!.includes(e.id));
   const selectedEffort = isCodex ? codexEffort : claudeEffort;
   const setSelectedEffort = isCodex ? setCodexEffort : setClaudeEffort;
+  // Hide the effort picker entirely for models that don't support
+  // reasoning control (e.g. Claude Haiku).
+  const showEffortPicker = effortList.length > 0;
 
   return (
     <OpenFileContext.Provider value={{ open: handleOpenInEditor, editorLabel: editorLabel(preferredEditor) }}>
@@ -1739,20 +2052,33 @@ export function ChatView({ thread, projectCwd, onSend, onInterrupt, onRespondToT
                   >
                     {isClaude
                       ? <ClaudeIcon className="w-[14px] h-[14px] shrink-0 text-[#D97757]" />
-                      : <span className="w-[14px] h-[14px] shrink-0 text-[11px] font-bold flex items-center justify-center" style={{ color: "#10A37F" }}>O</span>
+                      : <OpenAIIcon className="w-[13px] h-[13px] shrink-0 text-white/90" />
                     }
-                    <span>{modelLabel}</span>
-                    {!isStarted && <CaretDown size={10} weight="bold" />}
+                    <span>
+                      {modelLabel}
+                      {displayedModel?.badge && (
+                        <span className="ml-1" style={{ color: "var(--text-faint)" }}>
+                          {displayedModel.badge}
+                        </span>
+                      )}
+                    </span>
+                    <CaretDown size={10} weight="bold" />
                   </ControlButton>
-                  {modelDropdownOpen && !isStarted && (
+                  {modelDropdownOpen && !isStarted && displayedModel && (
                     <ModelDropdown
                       sections={[
-                        { label: "Anthropic", models: CLAUDE_MODELS },
-                        { label: "OpenAI", models: CODEX_MODELS },
+                        { label: "Anthropic", models: claudeModels },
+                        { label: "OpenAI", models: codexModels },
                       ]}
                       selected={displayedModel}
                       onSelect={(m) => {
                         setSelectedModel(m);
+                        // Persist the pick so new threads on app
+                        // restart default to the same model for this
+                        // provider.
+                        const selectionToSave = { provider: m.provider, modelId: m.id, effortId: (m.provider === "codex" ? codexEffort : claudeEffort).id };
+                        console.log("[model-save] saving lastSelection:", selectionToSave);
+                        localStorage.setItem("lastSelection", JSON.stringify(selectionToSave));
                         // Flip the thread's provider to match the picked
                         // model. Only effective on pending (uncommitted)
                         // threads; committed threads already have
@@ -1765,25 +2091,35 @@ export function ChatView({ thread, projectCwd, onSend, onInterrupt, onRespondToT
                     />
                   )}
                 </div>
-                <div className="relative" ref={effortDropdownRef}>
-                  <ControlButton
-                    onClick={() => !isStarted && setEffortDropdownOpen((v) => !v)}
-                    tooltip={isStarted ? "Can't change effort after thread has started" : undefined}
-                  >
-                    <span>{selectedEffort.label}</span>
-                    <CaretDown size={10} weight="bold" />
-                  </ControlButton>
-                  {effortDropdownOpen && (
-                    <EffortDropdown
-                      levels={effortList}
-                      selected={selectedEffort}
-                      onSelect={(e) => {
-                        setSelectedEffort(e);
-                        setEffortDropdownOpen(false);
-                      }}
-                    />
-                  )}
-                </div>
+                {showEffortPicker && (
+                  <div className="relative" ref={effortDropdownRef}>
+                    <ControlButton
+                      onClick={() => !isStarted && setEffortDropdownOpen((v) => !v)}
+                      tooltip={isStarted ? "Can't change effort after thread has started" : undefined}
+                    >
+                      <span>{selectedEffort.label}</span>
+                      <CaretDown size={10} weight="bold" />
+                    </ControlButton>
+                    {effortDropdownOpen && (
+                      <EffortDropdown
+                        levels={effortList}
+                        selected={selectedEffort}
+                        onSelect={(e) => {
+                          setSelectedEffort(e);
+                          // Remember this effort for the current
+                          // model so switching away and back restores
+                          // the same choice.
+                          if (displayedModel) {
+                            const selectionToSave = { provider: displayedModel.provider, modelId: displayedModel.id, effortId: e.id };
+                            console.log("[effort-save] saving lastSelection:", selectionToSave);
+                            localStorage.setItem("lastSelection", JSON.stringify(selectionToSave));
+                          }
+                          setEffortDropdownOpen(false);
+                        }}
+                      />
+                    )}
+                  </div>
+                )}
               </div>
               <div className="flex items-center gap-1.5">
                 <div className="relative" ref={modeDropdownRef}>
@@ -2010,7 +2346,7 @@ function ModelDropdown({
 }) {
   return (
     <div
-      className="absolute bottom-full left-0 mb-2 rounded-2xl p-1.5 min-w-[260px] z-50 flex flex-col gap-[2px]"
+      className="absolute bottom-full left-0 mb-2 rounded-2xl p-1.5 w-[300px] z-50 flex flex-col gap-[2px]"
       style={{
         background: "var(--surface-3)",
         border: "1px solid var(--border-emphasis)",
@@ -2024,7 +2360,7 @@ function ModelDropdown({
           )}
           <div
             className="text-[10px] font-semibold uppercase tracking-wider px-2.5 pt-1 pb-0.5"
-            style={{ color: "var(--text-faint)" }}
+            style={{ color: "var(--text-muted)" }}
           >
             {section.label}
           </div>
@@ -2043,17 +2379,25 @@ function ModelDropdown({
               >
                 {m.provider === "claude"
                   ? <ClaudeIcon className="w-[20px] h-[20px] shrink-0 mt-0.5 text-[#D97757]" />
-                  : <span className="w-[20px] h-[20px] shrink-0 mt-0.5 text-[13px] font-bold flex items-center justify-center" style={{ color: "#10A37F" }}>O</span>
+                  : <OpenAIIcon className="w-[18px] h-[18px] shrink-0 mt-0.5 text-white/90" />
                 }
                 <div className="flex flex-col gap-0.5 flex-1 min-w-0">
                   <span
                     className="text-[13px] font-medium leading-tight"
                     style={{ color: "var(--text-primary)" }}
                   >
-                    {m.label}
+                    {m.provider === "claude" ? `Claude ${m.label}` : m.label}
+                    {m.badge && (
+                      <span
+                        className="ml-1.5 text-[11px] font-medium"
+                        style={{ color: "var(--text-muted)" }}
+                      >
+                        {m.badge}
+                      </span>
+                    )}
                   </span>
                   <span
-                    className="text-[11px] font-medium leading-tight"
+                    className="text-[11px] font-medium leading-tight truncate"
                     style={{ color: "var(--text-muted)" }}
                   >
                     {m.subtitle}

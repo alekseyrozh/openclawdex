@@ -59,7 +59,17 @@ function msgId() {
   return `msg-${nextMsgId++}`;
 }
 
-function newThread(projectId: string | null, provider: Provider = "claude"): Thread {
+function lastSavedProvider(): Provider {
+  try {
+    const raw = localStorage.getItem("lastSelection");
+    if (!raw) return "claude";
+    const saved = JSON.parse(raw);
+    if (saved?.provider === "codex") return "codex";
+  } catch {}
+  return "claude";
+}
+
+function newThread(projectId: string | null, provider: Provider = lastSavedProvider()): Thread {
   return {
     id: crypto.randomUUID(),
     name: "New conversation",
