@@ -136,14 +136,18 @@ const OpenFileContext = createContext<OpenFileCtx | null>(null);
 /**
  * Parse a file reference like `path/to/file.tsx`, `file.tsx:42`, or
  * `file.tsx (line 42)` / `file.tsx (lines 42-50)` into path + optional line.
+ * Also handles lists/ranges after the first line number, e.g.
+ * `file.tsx:85, 116, 128` or `file.tsx:190–191` — the first number wins.
  */
 function parseFileRef(text: string): { path: string; line?: number } | null {
   const trimmed = text.trim();
   // "file (line 42)" or "file (lines 42-50)"
   const parenMatch = trimmed.match(/^(.+?)\s*\(lines?\s+(\d+)(?:-\d+)?\)$/i);
   if (parenMatch) return { path: parenMatch[1], line: Number(parenMatch[2]) };
-  // "file:42" or "file:42:5" — only treat trailing :N as a line number
-  const colonMatch = trimmed.match(/^(.+?):(\d+)(?::\d+)?$/);
+  // "file:42", "file:42:5", "file:42, 50, 60", "file:190–191", etc.
+  // Accept any non-digit trailer after the first line number so comma lists
+  // and en/em-dash ranges don't poison the path.
+  const colonMatch = trimmed.match(/^(.+?):(\d+)(?:\D.*)?$/);
   if (colonMatch && colonMatch[1].includes("/")) {
     return { path: colonMatch[1], line: Number(colonMatch[2]) };
   }
