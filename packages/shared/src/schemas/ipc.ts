@@ -234,14 +234,51 @@ export const IpcToolUse = z.object({
   toolInput: z.record(z.string(), z.unknown()).optional(),
 });
 
-// GOTCHA: Codex has no equivalent of Claude's AskUserQuestion pause-for-input
-// protocol, so deferred_tool_use events are emitted only for Claude threads.
-export const IpcDeferredToolUse = z.object({
-  type: z.literal("deferred_tool_use"),
-  threadId: z.string(),
-  toolUseId: z.string(),
+// ── Pending requests (agent pauses, waits for user) ──────────
+//
+// Generalizes "the agent needs something from the user before it can
+// continue." Today only `ask_user_question` is emitted (by Claude via
+// its AskUserQuestion tool); the discriminated union is shaped to
+// accept approval-style variants (command approval, file-change
+// approval, plan approval) without changing any surrounding plumbing.
+//
+// Protocol:
+//   1. Agent emits a `pending_request` IPC event with a fresh `requestId`.
+//   2. Renderer shows UI keyed on `kind`, collects user response.
+//   3. Renderer dispatches `session:resolve-request` with a matching
+//      `RequestResolution` variant (same `kind` + `requestId`).
+//   4. Main routes the resolution to the session's `resolveRequest`.
+//   5. Each backend translates the resolution into its native mechanism
+//      (Claude: user message with `parent_tool_use_id`; Codex: reply to
+//      the paused JSON-RPC approval request — future).
+
+export const PendingAskUserQuestion = z.object({
+  kind: z.literal("ask_user_question"),
+  requestId: z.string(),
   toolName: z.string(),
-  toolInput: z.record(z.string(), z.unknown()).optional(),
+  input: z.record(z.string(), z.unknown()).optional(),
+});
+
+export const PendingRequest = z.discriminatedUnion("kind", [
+  PendingAskUserQuestion,
+]);
+export type PendingRequest = z.infer<typeof PendingRequest>;
+
+export const AskUserQuestionResolution = z.object({
+  kind: z.literal("ask_user_question"),
+  requestId: z.string(),
+  text: z.string(),
+});
+
+export const RequestResolution = z.discriminatedUnion("kind", [
+  AskUserQuestionResolution,
+]);
+export type RequestResolution = z.infer<typeof RequestResolution>;
+
+export const IpcPendingRequest = z.object({
+  type: z.literal("pending_request"),
+  threadId: z.string(),
+  request: PendingRequest,
 });
 
 export const IpcEvent = z.discriminatedUnion("type", [
@@ -251,6 +288,6 @@ export const IpcEvent = z.discriminatedUnion("type", [
   IpcError,
   IpcSessionInit,
   IpcToolUse,
-  IpcDeferredToolUse,
+  IpcPendingRequest,
 ]);
 export type IpcEvent = z.infer<typeof IpcEvent>;

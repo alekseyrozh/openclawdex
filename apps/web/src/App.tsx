@@ -2,7 +2,7 @@ import { useState, useCallback, useRef, useEffect } from "react";
 import { Sidebar } from "./components/Sidebar";
 import { ChatView } from "./components/ChatView";
 import type { ImagePayload } from "./components/ChatView";
-import { IpcEvent, SessionInfo, HistoryMessage, ProjectInfo, ContextStats, type Provider } from "@openclawdex/shared";
+import { IpcEvent, SessionInfo, HistoryMessage, ProjectInfo, ContextStats, type Provider, type PendingRequest } from "@openclawdex/shared";
 export type { ContextStats, Provider };
 
 export interface Thread {
@@ -28,8 +28,13 @@ export interface Thread {
   archived?: boolean;
   pinned?: boolean;
   needsAttention?: boolean;
-  /** ID of a tool call waiting for user input (e.g. AskUserQuestion). Claude-only. */
-  pendingToolUseId?: string;
+  /**
+   * The open pause-for-input request, if any. Set when the backend
+   * emits a `pending_request` IPC event and cleared the moment the
+   * user submits a resolution. `request.kind` drives which renderer
+   * (e.g. QuestionCard for `ask_user_question`) handles the input.
+   */
+  pendingRequest?: PendingRequest;
 }
 
 export interface MessageImage {
@@ -235,8 +240,8 @@ function applyIpcEvent(thread: Thread, event: IpcEvent): Thread {
     case "session_init": {
       return { ...thread, sessionId: event.sessionId, provider: event.provider, historyLoaded: true };
     }
-    case "deferred_tool_use": {
-      return { ...thread, pendingToolUseId: event.toolUseId };
+    case "pending_request": {
+      return { ...thread, pendingRequest: event.request };
     }
   }
 }
@@ -657,10 +662,10 @@ export function App() {
     [],
   );
 
-  // ── Respond to deferred tool (e.g. AskUserQuestion) ──────────
+  // ── Resolve a pending request (e.g. AskUserQuestion answer) ──
 
-  const handleRespondToTool = useCallback(
-    (threadId: string, toolUseId: string, text: string) => {
+  const handleResolveRequest = useCallback(
+    (threadId: string, request: PendingRequest, text: string) => {
       const userMsg: Message = {
         id: msgId(),
         role: "user",
@@ -671,7 +676,7 @@ export function App() {
       // Update thread: add user message, clear pending, set running
       const updateThread = (t: Thread): Thread =>
         t.id === threadId
-          ? { ...t, status: "running" as const, pendingToolUseId: undefined, messages: [...t.messages, userMsg] }
+          ? { ...t, status: "running" as const, pendingRequest: undefined, messages: [...t.messages, userMsg] }
           : t;
 
       if (pendingThreadRef.current?.id === threadId) {
@@ -680,9 +685,18 @@ export function App() {
         setThreads((prev) => prev.map(updateThread));
       }
 
-      window.openclawdex?.respondToTool(threadId, toolUseId, text)?.catch((err) =>
-        reportIpcError("Submit tool response", err),
-      );
+      // Dispatch on the request's kind to build a matching resolution
+      // variant. Today only `ask_user_question` is possible; future
+      // approval kinds slot in alongside without touching the callers.
+      switch (request.kind) {
+        case "ask_user_question":
+          window.openclawdex?.resolveRequest(threadId, {
+            kind: "ask_user_question",
+            requestId: request.requestId,
+            text,
+          })?.catch((err) => reportIpcError("Submit question answer", err));
+          return;
+      }
     },
     [],
   );
@@ -912,7 +926,7 @@ export function App() {
           isLoading={threadsLoading}
           onSend={handleSend}
           onInterrupt={handleInterrupt}
-          onRespondToTool={handleRespondToTool}
+          onResolveRequest={handleResolveRequest}
           onUpdateThreadProvider={handleUpdateThreadProvider}
           onChangeThreadProject={handleChangeThreadProject}
           onCreateProject={handleCreateProjectBare}

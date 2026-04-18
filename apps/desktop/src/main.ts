@@ -32,7 +32,7 @@ import type {
   ClaudeEffortLevel,
   ImagePayload as ImagePayloadT,
 } from "@openclawdex/shared";
-import { ImagePayload } from "@openclawdex/shared";
+import { ImagePayload, RequestResolution } from "@openclawdex/shared";
 import { ContextStats } from "@openclawdex/shared";
 import {
   ThreadsRenameInput,
@@ -381,14 +381,14 @@ function setupIpcHandlers(): void {
 
             emitToRenderer({ type: "result", threadId, ...contextStats });
 
-            if (e.deferredToolUse) {
-              // Tool is waiting for user input (e.g. AskUserQuestion) — pause and wait
+            if (e.pendingRequest) {
+              // Agent is paused waiting on the user (AskUserQuestion today;
+              // approvals/plan-mode in the future). Renderer reads
+              // `pending_request.request.kind` to decide what UI to show.
               emitToRenderer({
-                type: "deferred_tool_use",
+                type: "pending_request",
                 threadId,
-                toolUseId: e.deferredToolUse.id,
-                toolName: e.deferredToolUse.name,
-                toolInput: e.deferredToolUse.input,
+                request: e.pendingRequest,
               });
               emitToRenderer({
                 type: "status",
@@ -423,14 +423,29 @@ function setupIpcHandlers(): void {
     sessions.get(threadId)?.interrupt();
   });
 
-  /** Respond to a deferred tool call (e.g. AskUserQuestion). Claude-only. */
+  /**
+   * Resolve a {@link PendingRequest} (AskUserQuestion answer, or
+   * future approval/plan decision). The resolution is validated
+   * against {@link RequestResolution} so a misbehaving renderer can't
+   * poke an unknown `kind` through to a backend — the Zod parse fails
+   * and the handler drops it.
+   */
   ipcMain.handle(
-    "session:respond-to-tool",
-    (_event, threadId: string, toolUseId: string, responseText: string) => {
+    "session:resolve-request",
+    (_event, threadId: string, resolution: unknown) => {
       const session = sessions.get(threadId);
       if (!session) return;
+      const parsed = RequestResolution.safeParse(resolution);
+      if (!parsed.success) {
+        emitToRenderer({
+          type: "error",
+          threadId,
+          message: `Invalid request resolution: ${JSON.stringify(parsed.error.issues)}`,
+        });
+        return;
+      }
       emitToRenderer({ type: "status", threadId, status: "running" });
-      session.respondToTool(toolUseId, responseText);
+      session.resolveRequest(parsed.data);
     },
   );
 

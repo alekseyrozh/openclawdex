@@ -10,14 +10,19 @@
  * - `costUsd` / `durationMs` are `number | null` because Codex does not
  *   report a per-turn dollar cost (billing runs against the user's ChatGPT
  *   plan) and may not surface a duration. Claude always reports both.
- * - `deferredToolUse` is `DeferredToolUse | null` because Codex has no
- *   equivalent of Claude's AskUserQuestion pause-for-input protocol —
- *   Codex adapters always set it to null.
- * - `respondToTool` is a no-op for Codex; only Claude's AskUserQuestion
- *   path ever invokes it.
+ * - `pendingRequest` is `PendingRequest | null` — a discriminated union
+ *   covering every "agent paused waiting for the user" flow (today:
+ *   `ask_user_question`; future: approval/plan variants). Backends that
+ *   don't surface the current kind always set it to null.
+ * - `resolveRequest` is the inverse — receives a typed resolution
+ *   variant and routes it into the backend's native mechanism (Claude:
+ *   user message with `parent_tool_use_id`; Codex: reply to a paused
+ *   approval RPC — future). No-op on backends that don't know the kind.
  */
 
-import type { Provider } from "@openclawdex/shared";
+import type { PendingRequest, Provider, RequestResolution } from "@openclawdex/shared";
+
+export type { PendingRequest, RequestResolution };
 
 /**
  * One image attachment on an outgoing user message.
@@ -40,12 +45,6 @@ export type ContextUsage = {
   totalTokens: number;
   maxTokens: number;
   percentage: number;
-};
-
-export type DeferredToolUse = {
-  id: string;
-  name: string;
-  input: Record<string, unknown>;
 };
 
 export type SessionEvent =
@@ -73,8 +72,9 @@ export type SessionEvent =
       durationMs: number | null;
       isError: boolean;
       contextUsage: ContextUsage | null;
-      // Always `null` for Codex (no AskUserQuestion analogue).
-      deferredToolUse: DeferredToolUse | null;
+      // Always `null` for Codex today (no AskUserQuestion analogue, and
+      // approval requests aren't wired through yet).
+      pendingRequest: PendingRequest | null;
     }
   | { kind: "error"; message: string }
   | { kind: "done" };
@@ -108,11 +108,12 @@ export interface AgentSession {
   interrupt(): Promise<void>;
 
   /**
-   * Respond to a deferred tool call. Only meaningful for Claude's
-   * AskUserQuestion — Codex implementations make this a no-op because
-   * the Codex SDK does not surface a pause-for-input protocol.
+   * Resolve a {@link PendingRequest} previously emitted on a `result`
+   * event. The `resolution.kind` must match the request's `kind`;
+   * backends dispatch on it to route into their native protocol.
+   * Unknown kinds are silently ignored (future-variant safety).
    */
-  respondToTool(toolUseId: string, text: string): void;
+  resolveRequest(resolution: RequestResolution): void;
 
   /** Close the session entirely and release any child-process handles. */
   close(): void;

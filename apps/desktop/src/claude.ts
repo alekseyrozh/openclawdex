@@ -9,14 +9,15 @@ import type { ClaudeEffortLevel } from "@openclawdex/shared";
 import type {
   AgentSession,
   ContextUsage,
-  DeferredToolUse,
   ImageInput,
+  PendingRequest,
+  RequestResolution,
   SessionEvent,
 } from "./agent-session";
 
 // Re-export the shared types so existing imports from "./claude" keep working
 // while we migrate call sites over to "./agent-session".
-export type { AgentSession, ContextUsage, DeferredToolUse, ImageInput, SessionEvent };
+export type { AgentSession, ContextUsage, ImageInput, PendingRequest, RequestResolution, SessionEvent };
 
 /**
  * Locate the `claude` binary on the system.
@@ -207,13 +208,19 @@ export class ClaudeSession implements AgentSession {
           // Check for deferred tool use (e.g. AskUserQuestion). The SDK
           // surfaces this on the `result` message under `deferred_tool_use`
           // but the TS types don't expose it — hence the untyped cast.
-          // We forward it through to the renderer via the `result` event
-          // below; the renderer then shows the QuestionCard and pauses
-          // the thread on `awaiting_input`.
+          // We project it into the generalized `PendingRequest` shape
+          // (kind: "ask_user_question"), which the main process forwards
+          // as an IPC `pending_request` event; the renderer renders a
+          // QuestionCard and the thread goes into `awaiting_input`.
           const msgRecord = msg as Record<string, unknown>;
           const rawDeferred = msgRecord.deferred_tool_use as { id: string; name: string; input: Record<string, unknown> } | undefined;
-          const deferredToolUse: DeferredToolUse | null = rawDeferred
-            ? { id: rawDeferred.id, name: rawDeferred.name, input: rawDeferred.input }
+          const pendingRequest: PendingRequest | null = rawDeferred
+            ? {
+                kind: "ask_user_question",
+                requestId: rawDeferred.id,
+                toolName: rawDeferred.name,
+                input: rawDeferred.input,
+              }
             : null;
 
           onEvent({
@@ -222,7 +229,7 @@ export class ClaudeSession implements AgentSession {
             durationMs: msg.duration_ms,
             isError: msg.is_error,
             contextUsage,
-            deferredToolUse,
+            pendingRequest,
           });
         } else {
           this.handleMessage(msg, onEvent);
@@ -286,16 +293,21 @@ export class ClaudeSession implements AgentSession {
   }
 
   /**
-   * Respond to a deferred tool call (e.g. AskUserQuestion).
-   * Pushes a user message with `parent_tool_use_id` so the SDK
-   * routes it as the tool result, allowing Claude to continue.
+   * Resolve a pending request. For `ask_user_question` we push a user
+   * message with `parent_tool_use_id` so the SDK routes it as the tool
+   * result, allowing Claude to continue. Other kinds (approvals, plan)
+   * are not yet surfaced on Claude and fall through to a no-op.
    */
-  respondToTool(toolUseId: string, text: string): void {
-    this.enqueueMessage({
-      type: "user",
-      message: { role: "user", content: text },
-      parent_tool_use_id: toolUseId,
-    });
+  resolveRequest(resolution: RequestResolution): void {
+    switch (resolution.kind) {
+      case "ask_user_question":
+        this.enqueueMessage({
+          type: "user",
+          message: { role: "user", content: resolution.text },
+          parent_tool_use_id: resolution.requestId,
+        });
+        return;
+    }
   }
 
   /** Interrupt the current turn. */

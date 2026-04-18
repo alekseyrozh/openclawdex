@@ -10,6 +10,7 @@ import type {
   AgentSession,
   ContextUsage,
   ImageInput,
+  RequestResolution,
   SessionEvent,
 } from "./agent-session";
 
@@ -508,14 +509,16 @@ export class CodexSession implements AgentSession {
       durationMs: null,
       isError: turnError !== null,
       contextUsage: lastUsage,
-      deferredToolUse: null,
+      pendingRequest: null,
     });
     if (turnError) onEvent({ kind: "error", message: turnError });
     onEvent({ kind: "done" });
   }
 
-  respondToTool(_toolUseId: string, _text: string): void {
-    // Codex currently has no deferred-tool input protocol exposed here.
+  resolveRequest(_resolution: RequestResolution): void {
+    // Codex doesn't emit any PendingRequest variants today. When we wire
+    // app-server approval requests, this will dispatch on
+    // `resolution.kind` and reply on the paused JSON-RPC call.
   }
 
   async interrupt(): Promise<void> {

@@ -1,6 +1,6 @@
 /** Type declarations for the preload bridge exposed on `window.openclawdex`. */
 
-import type { SessionInfo, HistoryMessage, ProjectInfo, EditorTarget, Provider, CodexModel, ClaudeModel, ImagePayload } from "@openclawdex/shared";
+import type { SessionInfo, HistoryMessage, ProjectInfo, EditorTarget, Provider, CodexModel, ClaudeModel, ImagePayload, RequestResolution } from "@openclawdex/shared";
 
 export {};
 
@@ -30,7 +30,7 @@ declare global {
       },
     ) => Promise<void>;
     interrupt: (threadId: string) => Promise<void>;
-    respondToTool: (threadId: string, toolUseId: string, responseText: string) => Promise<void>;
+    resolveRequest: (threadId: string, resolution: RequestResolution) => Promise<void>;
     listSessions: () => Promise<SessionInfo[]>;
     loadHistory: (sessionId: string) => Promise<HistoryMessage[]>;
     createProject: () => Promise<ProjectInfo | null>;

@@ -44,7 +44,7 @@ import {
   DropdownSectionHeader,
 } from "./Dropdown";
 import type { Thread, Message, FileChange, ContextStats } from "../App";
-import { EditorTarget, type ProjectInfo } from "@openclawdex/shared";
+import { EditorTarget, type PendingRequest, type ProjectInfo } from "@openclawdex/shared";
 
 /* ── Editor logos ────────────────────────────────────────────── */
 
@@ -1998,7 +1998,7 @@ interface ChatViewProps {
     opts?: { model?: string; effort?: string },
   ) => void;
   onInterrupt: (threadId: string) => void;
-  onRespondToTool: (threadId: string, toolUseId: string, text: string) => void;
+  onResolveRequest: (threadId: string, request: PendingRequest, text: string) => void;
   /**
    * Flip the pending thread's provider when the user picks a Codex model
    * on a brand-new (uncommitted) conversation. No-op for already-started
@@ -2085,7 +2085,7 @@ export function ChatView({
   isLoading,
   onSend,
   onInterrupt,
-  onRespondToTool,
+  onResolveRequest,
   onUpdateThreadProvider,
   onChangeThreadProject,
   onCreateProject,
@@ -3118,12 +3118,14 @@ export function ChatView({
                                 toolInput={m.toolInput}
                                 alreadyAnswered={hasUserMsgAfter}
                                 onSubmit={(text) => {
-                                  if (thread.pendingToolUseId) {
-                                    onRespondToTool(
-                                      thread.id,
-                                      thread.pendingToolUseId,
-                                      text,
-                                    );
+                                  // If we have an open pending request matching
+                                  // this question, route through the resolver
+                                  // so the backend can continue the paused
+                                  // turn. Otherwise (e.g. viewing old history),
+                                  // fall back to starting a new turn.
+                                  const pending = thread.pendingRequest;
+                                  if (pending && pending.kind === "ask_user_question") {
+                                    onResolveRequest(thread.id, pending, text);
                                   } else {
                                     onSend(thread.id, text);
                                   }
