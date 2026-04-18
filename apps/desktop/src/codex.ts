@@ -140,8 +140,16 @@ export class CodexSession implements AgentSession {
   // first `thread.started` event, or from a resume id in the ctor.
   private threadId: string | null = null;
 
+  // The model label we echo on `init`. The Codex SDK doesn't emit the
+  // active model on `thread.started`, so we capture whatever the
+  // renderer selected at construction time. Falls back to "codex" when
+  // the caller didn't pick one (the CLI will use its configured
+  // default).
+  private readonly modelLabel: string;
+
   constructor(opts?: CodexSessionOptions) {
     this.cwd = opts?.cwd;
+    this.modelLabel = opts?.model ?? "codex";
 
     // GOTCHA: we must pass workingDirectory here (not later per-turn).
     // The SDK scopes sandbox permissions to this directory for the
@@ -339,9 +347,10 @@ export class CodexSession implements AgentSession {
             kind: "init",
             sessionId: ev.thread_id,
             // GOTCHA: the SDK doesn't echo back the model name on
-            // thread.started. We fall back to a constant label; the
-            // renderer's model picker already knows what was selected.
-            model: "codex",
+            // thread.started. Surface whatever the renderer selected
+            // at ctor time so `SessionInfo.model` reads correctly in
+            // the sidebar instead of the misleading literal "codex".
+            model: this.modelLabel,
           });
         }
         break;

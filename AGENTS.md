@@ -59,12 +59,12 @@ Migrations run automatically on app startup via `initDb()`. To change the schema
 
 ### CLI integration
 
-The Electron main process spawns Claude as a subprocess:
+The Electron main process spawns both Claude and Codex as subprocesses:
 
 | Agent | Method | Auth |
 |---|---|---|
-| Claude | `claude -p` with `--output-format stream-json` | User's existing `claude auth login` (Max plan works) |
-| Codex | `codex app-server` (JSON-RPC over stdout) — planned | User's existing `codex login` |
+| Claude | Claude Agent SDK (`@anthropic-ai/claude-agent-sdk`) wrapping `claude -p --output-format stream-json` | User's existing `claude auth login` (Max plan works) |
+| Codex | OpenAI Codex SDK (`@openai/codex-sdk`) wrapping `codex app-server` JSON-RPC; rollout JSONL at `~/.codex/sessions/**` parsed for history | User's existing `codex login` |
 
 No OAuth, no API keys to manage — relies entirely on existing CLI logins.
 

@@ -170,6 +170,32 @@ export function buildCodexSessionIndex(): Map<string, string> {
   return index;
 }
 
+/**
+ * Cached wrapper around {@link buildCodexSessionIndex}.
+ *
+ * `session:load-history` is called once per thread-open and the naive
+ * implementation re-walks `~/.codex/sessions/**` on every call — with
+ * hundreds of rollouts that adds up. The cache is held forever and
+ * invalidated in two places:
+ *
+ *   1. main.ts calls {@link invalidateCodexSessionIndex} on every
+ *      `init` event, because that's when a brand-new rollout file
+ *      appears on disk for a thread we just started.
+ *   2. {@link readCodexHistory} invalidates on a cache miss before
+ *      retrying, so Codex sessions started outside this app (e.g.
+ *      from a terminal `codex` invocation) are picked up too.
+ */
+let cachedIndex: Map<string, string> | null = null;
+
+export function getCodexSessionIndex(): Map<string, string> {
+  if (!cachedIndex) cachedIndex = buildCodexSessionIndex();
+  return cachedIndex;
+}
+
+export function invalidateCodexSessionIndex(): void {
+  cachedIndex = null;
+}
+
 function safeReaddir(p: string): string[] {
   try { return fs.readdirSync(p); } catch { return []; }
 }
@@ -192,7 +218,16 @@ function isInjectedContext(text: string): boolean {
 
 /** Parse the rollout file into provider-neutral history messages. */
 export function readCodexHistory(threadId: string): CodexHistoryMsg[] {
-  const file = findCodexSessionFile(threadId);
+  // Use the cached index — `session:load-history` fires once per
+  // thread-open, and without a cache each call re-walks the entire
+  // `~/.codex/sessions` tree. If the id isn't in the cache we fall
+  // back to a fresh walk once in case the rollout landed after the
+  // last cache refresh.
+  let file = getCodexSessionIndex().get(threadId) ?? null;
+  if (!file) {
+    invalidateCodexSessionIndex();
+    file = getCodexSessionIndex().get(threadId) ?? null;
+  }
   if (!file) return [];
   return readCodexHistoryFromFile(file);
 }

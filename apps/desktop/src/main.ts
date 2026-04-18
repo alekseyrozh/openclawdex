@@ -9,7 +9,12 @@ import fs from "fs";
 import { eq } from "drizzle-orm";
 import { findClaudeBinary, ClaudeSession } from "./claude";
 import { isCodexInstalled, CodexSession } from "./codex";
-import { readCodexHistory, readCodexSummaryFromFile, buildCodexSessionIndex } from "./codex-history";
+import {
+  readCodexHistory,
+  readCodexSummaryFromFile,
+  buildCodexSessionIndex,
+  invalidateCodexSessionIndex,
+} from "./codex-history";
 import { listCodexModels } from "./codex-models";
 import { listClaudeModels } from "./claude-models";
 import type { AgentSession } from "./agent-session";
@@ -18,7 +23,16 @@ import {
   getSessionMessages,
 } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
-import type { IpcEvent, EditorTarget, Provider, SessionInfo, CodexReasoningEffort, ClaudeEffortLevel } from "@openclawdex/shared";
+import type {
+  IpcEvent,
+  EditorTarget,
+  Provider,
+  SessionInfo,
+  CodexReasoningEffort,
+  ClaudeEffortLevel,
+  ImagePayload as ImagePayloadT,
+} from "@openclawdex/shared";
+import { ImagePayload } from "@openclawdex/shared";
 import { ContextStats } from "@openclawdex/shared";
 import {
   ThreadsRenameInput,
@@ -37,9 +51,13 @@ const IS_DEV = !app.isPackaged;
 // (Claude CLI, git, node, etc.) work the same as in the terminal.
 if (app.isPackaged && process.platform === "darwin") {
   try {
-    const path = execSync("/bin/zsh -ilc 'echo $PATH'", { encoding: "utf-8" }).trim();
+    const path = execSync("/bin/zsh -ilc 'echo $PATH'", {
+      encoding: "utf-8",
+    }).trim();
     if (path) process.env.PATH = path;
-  } catch { /* keep default PATH */ }
+  } catch {
+    /* keep default PATH */
+  }
 }
 
 let mainWindow: BrowserWindow | null = null;
@@ -113,7 +131,11 @@ function emitToRenderer(event: IpcEvent): void {
 function parseContextStats(raw: string | null): ContextStats | undefined {
   if (!raw) return undefined;
   let parsed: unknown;
-  try { parsed = JSON.parse(raw); } catch { return undefined; }
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return undefined;
+  }
   const result = ContextStats.safeParse(parsed);
   return result.success ? result.data : undefined;
 }
@@ -216,18 +238,40 @@ function setupIpcHandlers(): void {
         provider?: Provider;
         resumeSessionId?: string;
         projectId?: string;
-        images?: { name: string; base64: string; mediaType: string; path?: string }[];
+        images?: unknown;
         model?: string;
         effort?: string;
       },
     ) => {
+      // Validate the `images` payload at the boundary. Per CLAUDE.md
+      // ("Zod for all external data"), we don't trust renderer-supplied
+      // shapes — a stray `path` from a compromised renderer would
+      // otherwise reach `session.send` and could be passed straight to
+      // Codex's `local_image` (which reads the file).
+      let images: ImagePayloadT[] | undefined;
+      if (opts?.images !== undefined) {
+        const parsed = z.array(ImagePayload).safeParse(opts.images);
+        if (!parsed.success) {
+          emitToRenderer({
+            type: "error",
+            threadId,
+            message: `Invalid images payload: ${JSON.stringify(parsed.error.issues)}`,
+          });
+          return;
+        }
+        images = parsed.data;
+      }
+
       // Resolve provider. The DB is authoritative for any thread we've
       // seen before (keyed by its session id); the renderer-supplied
       // `opts.provider` is only consulted for brand-new threads where
       // no DB row exists yet. This closes a class of bugs where the
       // renderer has stale state and passes the wrong provider for a
       // known session id — we'd otherwise spin up the wrong backend.
-      const provider = await resolveProvider(opts?.resumeSessionId, opts?.provider);
+      const provider = await resolveProvider(
+        opts?.resumeSessionId,
+        opts?.provider,
+      );
 
       // Resolve the project's folder as the session cwd
       let cwd: string | undefined;
@@ -242,9 +286,10 @@ function setupIpcHandlers(): void {
         effort: opts?.effort,
       });
       if (!session) {
-        const installHint = provider === "claude"
-          ? "Claude CLI not found. Install it with: npm install -g @anthropic-ai/claude-code"
-          : "Codex CLI not found. Install it with: npm install -g @openai/codex";
+        const installHint =
+          provider === "claude"
+            ? "Claude CLI not found. Install it with: npm install -g @anthropic-ai/claude-code"
+            : "Codex CLI not found. Install it with: npm install -g @openai/codex";
         emitToRenderer({ type: "error", threadId, message: installHint });
         return;
       }
@@ -253,10 +298,14 @@ function setupIpcHandlers(): void {
 
       let currentSessionId: string | null = opts?.resumeSessionId ?? null;
 
-      session.send(message, opts?.images, async (e) => {
+      session.send(message, images, async (e) => {
         switch (e.kind) {
           case "init": {
             currentSessionId = e.sessionId;
+            // A new Codex rollout file will appear on disk for this id;
+            // drop the cached session index so the next `load-history`
+            // call rebuilds it and finds the new rollout.
+            if (provider === "codex") invalidateCodexSessionIndex();
             try {
               await getDb()
                 .insert(knownThreads)
@@ -269,7 +318,12 @@ function setupIpcHandlers(): void {
                 .onConflictDoNothing();
             } catch (err) {
               console.error("[db] failed to register session:", err);
-              emitToRenderer({ type: "error", threadId, message: "Failed to save session to database — your conversation won't appear in the sidebar after restart." });
+              emitToRenderer({
+                type: "error",
+                threadId,
+                message:
+                  "Failed to save session to database — your conversation won't appear in the sidebar after restart.",
+              });
               return;
             }
 
@@ -336,7 +390,11 @@ function setupIpcHandlers(): void {
                 toolName: e.deferredToolUse.name,
                 toolInput: e.deferredToolUse.input,
               });
-              emitToRenderer({ type: "status", threadId, status: "awaiting_input" });
+              emitToRenderer({
+                type: "status",
+                threadId,
+                status: "awaiting_input",
+              });
             } else {
               // Turn is complete — mark thread as idle so user can send follow-ups
               emitToRenderer({ type: "status", threadId, status: "idle" });
@@ -366,12 +424,15 @@ function setupIpcHandlers(): void {
   });
 
   /** Respond to a deferred tool call (e.g. AskUserQuestion). Claude-only. */
-  ipcMain.handle("session:respond-to-tool", (_event, threadId: string, toolUseId: string, responseText: string) => {
-    const session = sessions.get(threadId);
-    if (!session) return;
-    emitToRenderer({ type: "status", threadId, status: "running" });
-    session.respondToTool(toolUseId, responseText);
-  });
+  ipcMain.handle(
+    "session:respond-to-tool",
+    (_event, threadId: string, toolUseId: string, responseText: string) => {
+      const session = sessions.get(threadId);
+      if (!session) return;
+      emitToRenderer({ type: "status", threadId, status: "running" });
+      session.respondToTool(toolUseId, responseText);
+    },
+  );
 
   /**
    * List sessions started from this UI. Unions Claude's on-disk session
@@ -387,16 +448,18 @@ function setupIpcHandlers(): void {
   ipcMain.handle("session:list-sessions", async (): Promise<SessionInfo[]> => {
     const [claudeSessions, known] = await Promise.all([
       listSessions(),
-      getDb().select({
-        sessionId: knownThreads.sessionId,
-        projectId: knownThreads.projectId,
-        customName: knownThreads.customName,
-        contextStats: knownThreads.contextStats,
-        pinned: knownThreads.pinned,
-        archived: knownThreads.archived,
-        provider: knownThreads.provider,
-        createdAt: knownThreads.createdAt,
-      }).from(knownThreads),
+      getDb()
+        .select({
+          sessionId: knownThreads.sessionId,
+          projectId: knownThreads.projectId,
+          customName: knownThreads.customName,
+          contextStats: knownThreads.contextStats,
+          pinned: knownThreads.pinned,
+          archived: knownThreads.archived,
+          provider: knownThreads.provider,
+          createdAt: knownThreads.createdAt,
+        })
+        .from(knownThreads),
     ]);
 
     const claudeMap = new Map(claudeSessions.map((s) => [s.sessionId, s]));
@@ -438,7 +501,9 @@ function setupIpcHandlers(): void {
         // looked up via the one-shot `codexIndex` so this stays O(1)
         // per row.
         const rolloutFile = codexIndex?.get(row.sessionId) ?? null;
-        const diskSummary = rolloutFile ? readCodexSummaryFromFile(rolloutFile) : null;
+        const diskSummary = rolloutFile
+          ? readCodexSummaryFromFile(rolloutFile)
+          : null;
         const summary = row.customName ?? diskSummary ?? "Codex thread";
         results.push({
           sessionId: row.sessionId,
@@ -486,8 +551,18 @@ function setupIpcHandlers(): void {
         data: z.string(),
       }),
     });
-    const ToolUseBlock = z.object({ type: z.literal("tool_use"), id: z.string(), name: z.string(), input: z.record(z.string(), z.unknown()).optional() });
-    const AnyBlock = z.union([TextBlock, ImageBlock, ToolUseBlock, z.object({ type: z.string() })]);
+    const ToolUseBlock = z.object({
+      type: z.literal("tool_use"),
+      id: z.string(),
+      name: z.string(),
+      input: z.record(z.string(), z.unknown()).optional(),
+    });
+    const AnyBlock = z.union([
+      TextBlock,
+      ImageBlock,
+      ToolUseBlock,
+      z.object({ type: z.string() }),
+    ]);
     const UserBody = z.object({
       role: z.literal("user"),
       content: z.union([z.string(), z.array(AnyBlock)]),
@@ -501,7 +576,12 @@ function setupIpcHandlers(): void {
     type HistoryMsg =
       | { id: string; role: "user"; content: string; images?: HistoryImage[] }
       | { id: string; role: "assistant"; content: string }
-      | { id: string; role: "tool_use"; toolName: string; toolInput?: Record<string, unknown> };
+      | {
+          id: string;
+          role: "tool_use";
+          toolName: string;
+          toolInput?: Record<string, unknown>;
+        };
 
     const result: HistoryMsg[] = [];
 
@@ -518,8 +598,9 @@ function setupIpcHandlers(): void {
             .filter((b): b is z.infer<typeof TextBlock> => b.type === "text")
             .map((b) => b.text)
             .join("");
-          const imageBlocks = parsed.data.content
-            .filter((b): b is z.infer<typeof ImageBlock> => b.type === "image");
+          const imageBlocks = parsed.data.content.filter(
+            (b): b is z.infer<typeof ImageBlock> => b.type === "image",
+          );
           if (imageBlocks.length > 0) {
             images = imageBlocks.map((b) => ({
               mediaType: b.source.media_type,
@@ -527,7 +608,13 @@ function setupIpcHandlers(): void {
             }));
           }
         }
-        if (content.trim() || images) result.push({ id: m.uuid, role: "user", content, ...(images && { images }) });
+        if (content.trim() || images)
+          result.push({
+            id: m.uuid,
+            role: "user",
+            content,
+            ...(images && { images }),
+          });
       } else if (m.type === "assistant") {
         const parsed = AssistantBody.safeParse(m.message);
         if (!parsed.success) continue;
@@ -536,10 +623,18 @@ function setupIpcHandlers(): void {
           .filter((b): b is z.infer<typeof TextBlock> => b.type === "text")
           .map((b) => b.text)
           .join("");
-        if (textContent.trim()) result.push({ id: m.uuid, role: "assistant", content: textContent });
-        const toolBlocks = blocks.filter((b): b is z.infer<typeof ToolUseBlock> => b.type === "tool_use");
+        if (textContent.trim())
+          result.push({ id: m.uuid, role: "assistant", content: textContent });
+        const toolBlocks = blocks.filter(
+          (b): b is z.infer<typeof ToolUseBlock> => b.type === "tool_use",
+        );
         for (const t of toolBlocks) {
-          result.push({ id: `${m.uuid}-${t.id}`, role: "tool_use", toolName: t.name, toolInput: t.input });
+          result.push({
+            id: `${m.uuid}-${t.id}`,
+            role: "tool_use",
+            toolName: t.name,
+            toolInput: t.input,
+          });
         }
       }
     }
@@ -566,9 +661,15 @@ function setupIpcHandlers(): void {
 
     const db = getDb();
     await db.insert(projects).values({ id: projectId, name, createdAt: now });
-    await db.insert(projectFolders).values({ id: folderId, projectId, folderPath, createdAt: now });
+    await db
+      .insert(projectFolders)
+      .values({ id: folderId, projectId, folderPath, createdAt: now });
 
-    return { id: projectId, name, folders: [{ id: folderId, path: folderPath }] };
+    return {
+      id: projectId,
+      name,
+      folders: [{ id: folderId, path: folderPath }],
+    };
   });
 
   /** List all projects with their folders. */
@@ -588,15 +689,24 @@ function setupIpcHandlers(): void {
   });
 
   /** Rename a project. */
-  ipcMain.handle("projects:rename", async (_event, projectId: string, name: string) => {
-    await getDb().update(projects).set({ name }).where(eq(projects.id, projectId));
-  });
+  ipcMain.handle(
+    "projects:rename",
+    async (_event, projectId: string, name: string) => {
+      await getDb()
+        .update(projects)
+        .set({ name })
+        .where(eq(projects.id, projectId));
+    },
+  );
 
   /** Delete a project and all its threads. */
   ipcMain.handle("projects:delete", async (_event, projectId: string) => {
     const db = getDb();
     // Close any live sessions for threads in this project
-    const threadRows = await db.select({ sessionId: knownThreads.sessionId }).from(knownThreads).where(eq(knownThreads.projectId, projectId));
+    const threadRows = await db
+      .select({ sessionId: knownThreads.sessionId })
+      .from(knownThreads)
+      .where(eq(knownThreads.projectId, projectId));
     for (const row of threadRows) {
       const session = sessions.get(row.sessionId);
       if (session) {
@@ -605,16 +715,23 @@ function setupIpcHandlers(): void {
       }
     }
     await db.delete(knownThreads).where(eq(knownThreads.projectId, projectId));
-    await db.delete(projectFolders).where(eq(projectFolders.projectId, projectId));
+    await db
+      .delete(projectFolders)
+      .where(eq(projectFolders.projectId, projectId));
     await db.delete(projects).where(eq(projects.id, projectId));
   });
 
   /** Add a folder to an existing project. */
-  ipcMain.handle("projects:add-folder", async (_event, projectId: string, folderPath: string) => {
-    const id = randomUUID();
-    await getDb().insert(projectFolders).values({ id, projectId, folderPath, createdAt: Date.now() });
-    return id;
-  });
+  ipcMain.handle(
+    "projects:add-folder",
+    async (_event, projectId: string, folderPath: string) => {
+      const id = randomUUID();
+      await getDb()
+        .insert(projectFolders)
+        .values({ id, projectId, folderPath, createdAt: Date.now() });
+      return id;
+    },
+  );
 
   /** Remove a folder from a project. */
   ipcMain.handle("projects:remove-folder", async (_event, folderId: string) => {
@@ -626,7 +743,12 @@ function setupIpcHandlers(): void {
   /** Get the current git branch for a directory. */
   ipcMain.handle("git:branch", (_event, cwd: string): string | null => {
     try {
-      return execSync("git rev-parse --abbrev-ref HEAD", { cwd, encoding: "utf-8" }).trim();
+      const branch = execSync("git rev-parse --abbrev-ref HEAD", {
+        cwd,
+        encoding: "utf-8",
+        stdio: ["ignore", "pipe", "ignore"],
+      }).trim();
+      return branch || null;
     } catch {
       return null;
     }
@@ -640,18 +762,24 @@ function setupIpcHandlers(): void {
    * which the renderer has no business triggering. Callers that need
    * anything else should get their own dedicated IPC handler.
    */
-  ipcMain.handle("shell:open-external", async (_event, url: string): Promise<void> => {
-    try {
-      const parsed = new URL(url);
-      if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
-        console.warn("[shell:open-external] refused non-http(s) scheme:", parsed.protocol);
-        return;
+  ipcMain.handle(
+    "shell:open-external",
+    async (_event, url: string): Promise<void> => {
+      try {
+        const parsed = new URL(url);
+        if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+          console.warn(
+            "[shell:open-external] refused non-http(s) scheme:",
+            parsed.protocol,
+          );
+          return;
+        }
+        await shell.openExternal(parsed.toString());
+      } catch (err) {
+        console.error("[shell:open-external] failed:", err);
       }
-      await shell.openExternal(parsed.toString());
-    } catch (err) {
-      console.error("[shell:open-external] failed:", err);
-    }
-  });
+    },
+  );
 
   // ── Editor integration ──────────────────────────────────────
 
@@ -661,80 +789,108 @@ function setupIpcHandlers(): void {
    * "terminal", "iterm", or "ghostty". For vscode/cursor, a `line` opens
    * the file at that line via `-g path:line`.
    */
-  ipcMain.handle("editor:open", (_event, targetPath: string, cwd?: string, line?: number, editor?: EditorTarget): Promise<{ ok: boolean; message?: string }> => {
-    const resolved = path.isAbsolute(targetPath) || !cwd
-      ? targetPath
-      : path.resolve(cwd, targetPath);
-    const target = editor ?? "vscode";
+  ipcMain.handle(
+    "editor:open",
+    (
+      _event,
+      targetPath: string,
+      cwd?: string,
+      line?: number,
+      editor?: EditorTarget,
+    ): Promise<{ ok: boolean; message?: string }> => {
+      const resolved =
+        path.isAbsolute(targetPath) || !cwd
+          ? targetPath
+          : path.resolve(cwd, targetPath);
+      const target = editor ?? "vscode";
 
-    // Detect whether the path is a file (used to give non-editor targets
-    // sensible per-file behavior). A line number implies file.
-    const isFile: boolean = line != null || (() => {
-      try { return fs.statSync(resolved).isFile(); } catch { return false; }
-    })();
+      // Detect whether the path is a file (used to give non-editor targets
+      // sensible per-file behavior). A line number implies file.
+      const isFile: boolean =
+        line != null ||
+        (() => {
+          try {
+            return fs.statSync(resolved).isFile();
+          } catch {
+            return false;
+          }
+        })();
 
-    if (target === "finder") {
-      // For files, reveal-in-Finder; for folders, open the folder.
-      if (isFile) {
-        try {
-          shell.showItemInFolder(resolved);
-          return Promise.resolve({ ok: true });
-        } catch (err) {
-          console.error("[editor:open] finder reveal error:", err);
-          return Promise.resolve({ ok: false, message: `Couldn't reveal in Finder: ${err}` });
+      if (target === "finder") {
+        // For files, reveal-in-Finder; for folders, open the folder.
+        if (isFile) {
+          try {
+            shell.showItemInFolder(resolved);
+            return Promise.resolve({ ok: true });
+          } catch (err) {
+            console.error("[editor:open] finder reveal error:", err);
+            return Promise.resolve({
+              ok: false,
+              message: `Couldn't reveal in Finder: ${err}`,
+            });
+          }
         }
+        return shell.openPath(resolved).then((err) => {
+          if (err) {
+            console.error("[editor:open] finder error:", err);
+            return { ok: false, message: `Couldn't open in Finder: ${err}` };
+          }
+          return { ok: true };
+        });
       }
-      return shell.openPath(resolved).then((err) => {
-        if (err) {
-          console.error("[editor:open] finder error:", err);
-          return { ok: false, message: `Couldn't open in Finder: ${err}` };
-        }
-        return { ok: true };
-      });
-    }
 
-    // macOS terminal apps — launch via `open -a <AppName> <path>`
-    if (target === "terminal" || target === "iterm" || target === "ghostty") {
-      // Terminals take a working directory; for files, open the parent dir.
-      const openDir = isFile ? path.dirname(resolved) : resolved;
-      const appName =
-        target === "terminal" ? "Terminal" :
-        target === "iterm" ? "iTerm" :
-        "Ghostty";
+      // macOS terminal apps — launch via `open -a <AppName> <path>`
+      if (target === "terminal" || target === "iterm" || target === "ghostty") {
+        // Terminals take a working directory; for files, open the parent dir.
+        const openDir = isFile ? path.dirname(resolved) : resolved;
+        const appName =
+          target === "terminal"
+            ? "Terminal"
+            : target === "iterm"
+              ? "iTerm"
+              : "Ghostty";
+        return new Promise((resolve) => {
+          const child = spawn("open", ["-a", appName, openDir], {
+            detached: true,
+            stdio: "ignore",
+          });
+          child.once("error", (err) => {
+            console.error("[editor:open] terminal spawn error:", err);
+            resolve({
+              ok: false,
+              message: `Couldn't launch ${appName}. Make sure it's installed.`,
+            });
+          });
+          child.once("spawn", () => {
+            child.unref();
+            resolve({ ok: true });
+          });
+        });
+      }
+
+      const { bin, label } =
+        target === "cursor"
+          ? { bin: "cursor", label: "Cursor" }
+          : { bin: "code", label: "VSCode" };
+      const installHint = `Install the \`${bin}\` command from ${label}'s command palette: "Shell Command: Install '${bin}' command in PATH".`;
+
+      const args = line != null ? ["-g", `${resolved}:${line}`] : [resolved];
       return new Promise((resolve) => {
-        const child = spawn("open", ["-a", appName, openDir], { detached: true, stdio: "ignore" });
+        const child = spawn(bin, args, { detached: true, stdio: "ignore" });
         child.once("error", (err) => {
-          console.error("[editor:open] terminal spawn error:", err);
-          resolve({ ok: false, message: `Couldn't launch ${appName}. Make sure it's installed.` });
+          console.error("[editor:open] spawn error:", err);
+          resolve({
+            ok: false,
+            message: `Couldn't launch ${label}. ${installHint}`,
+          });
         });
         child.once("spawn", () => {
           child.unref();
           resolve({ ok: true });
         });
       });
-    }
-
-    const { bin, label } = target === "cursor"
-      ? { bin: "cursor", label: "Cursor" }
-      : { bin: "code", label: "VSCode" };
-    const installHint = `Install the \`${bin}\` command from ${label}'s command palette: "Shell Command: Install '${bin}' command in PATH".`;
-
-    const args = line != null ? ["-g", `${resolved}:${line}`] : [resolved];
-    return new Promise((resolve) => {
-      const child = spawn(bin, args, { detached: true, stdio: "ignore" });
-      child.once("error", (err) => {
-        console.error("[editor:open] spawn error:", err);
-        resolve({
-          ok: false,
-          message: `Couldn't launch ${label}. ${installHint}`,
-        });
-      });
-      child.once("spawn", () => {
-        child.unref();
-        resolve({ ok: true });
-      });
-    });
-  });
+    },
+  );
 
   // ── Thread CRUD ───────────────────────────────────────────────
   //
@@ -749,44 +905,82 @@ function setupIpcHandlers(): void {
   /** Parse tuple-shaped IPC args or throw a descriptive error. */
   function parseIpcArgs<T>(
     op: string,
-    schema: { safeParse: (v: unknown) => { success: true; data: T } | { success: false; error: unknown } },
+    schema: {
+      safeParse: (
+        v: unknown,
+      ) => { success: true; data: T } | { success: false; error: unknown };
+    },
     args: unknown[],
   ): T {
     const parsed = schema.safeParse(args);
     if (!parsed.success) {
-      throw new Error(`Invalid arguments to ${op}: ${JSON.stringify(parsed.error)}`);
+      // `parsed.error` is a `ZodError`; its own `toString()` returns
+      // "[object Object]". Prefer the `issues` array (actionable per-
+      // field messages) and fall back to `message` then the raw value.
+      const err = parsed.error as { issues?: unknown; message?: string };
+      const detail = err.issues
+        ? JSON.stringify(err.issues)
+        : (err.message ?? String(parsed.error));
+      throw new Error(`Invalid arguments to ${op}: ${detail}`);
     }
     return parsed.data;
   }
 
   /** Rename a thread (sets a custom name override). */
   ipcMain.handle("threads:rename", async (_event, ...args: unknown[]) => {
-    const [sessionId, name] = parseIpcArgs("threads:rename", ThreadsRenameInput, args);
-    await getDb().update(knownThreads).set({ customName: name }).where(eq(knownThreads.sessionId, sessionId));
+    const [sessionId, name] = parseIpcArgs(
+      "threads:rename",
+      ThreadsRenameInput,
+      args,
+    );
+    await getDb()
+      .update(knownThreads)
+      .set({ customName: name })
+      .where(eq(knownThreads.sessionId, sessionId));
   });
 
   /** Pin or unpin a thread. */
   ipcMain.handle("threads:pin", async (_event, ...args: unknown[]) => {
-    const [sessionId, pinned] = parseIpcArgs("threads:pin", ThreadsPinInput, args);
-    await getDb().update(knownThreads).set({ pinned }).where(eq(knownThreads.sessionId, sessionId));
+    const [sessionId, pinned] = parseIpcArgs(
+      "threads:pin",
+      ThreadsPinInput,
+      args,
+    );
+    await getDb()
+      .update(knownThreads)
+      .set({ pinned })
+      .where(eq(knownThreads.sessionId, sessionId));
   });
 
   /** Archive or unarchive a thread. */
   ipcMain.handle("threads:archive", async (_event, ...args: unknown[]) => {
-    const [sessionId, archived] = parseIpcArgs("threads:archive", ThreadsArchiveInput, args);
-    await getDb().update(knownThreads).set({ archived }).where(eq(knownThreads.sessionId, sessionId));
+    const [sessionId, archived] = parseIpcArgs(
+      "threads:archive",
+      ThreadsArchiveInput,
+      args,
+    );
+    await getDb()
+      .update(knownThreads)
+      .set({ archived })
+      .where(eq(knownThreads.sessionId, sessionId));
   });
 
   /** Delete a thread from the sidebar. */
   ipcMain.handle("threads:delete", async (_event, ...args: unknown[]) => {
-    const [sessionId] = parseIpcArgs("threads:delete", ThreadsDeleteInput, args);
+    const [sessionId] = parseIpcArgs(
+      "threads:delete",
+      ThreadsDeleteInput,
+      args,
+    );
     // Close the live session if running
     const session = sessions.get(sessionId);
     if (session) {
       session.close();
       sessions.delete(sessionId);
     }
-    await getDb().delete(knownThreads).where(eq(knownThreads.sessionId, sessionId));
+    await getDb()
+      .delete(knownThreads)
+      .where(eq(knownThreads.sessionId, sessionId));
   });
 
   /**
@@ -794,10 +988,20 @@ function setupIpcHandlers(): void {
    * Only affects the DB row keyed by session_id — live session state is
    * provider-agnostic and doesn't care which project a thread "belongs" to.
    */
-  ipcMain.handle("threads:change-project", async (_event, ...args: unknown[]) => {
-    const [sessionId, projectId] = parseIpcArgs("threads:change-project", ThreadsChangeProjectInput, args);
-    await getDb().update(knownThreads).set({ projectId }).where(eq(knownThreads.sessionId, sessionId));
-  });
+  ipcMain.handle(
+    "threads:change-project",
+    async (_event, ...args: unknown[]) => {
+      const [sessionId, projectId] = parseIpcArgs(
+        "threads:change-project",
+        ThreadsChangeProjectInput,
+        args,
+      );
+      await getDb()
+        .update(knownThreads)
+        .set({ projectId })
+        .where(eq(knownThreads.sessionId, sessionId));
+    },
+  );
 }
 
 // ── Window creation ───────────────────────────────────────────
@@ -821,11 +1025,48 @@ function createWindow() {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
+      sandbox: true,
       preload: path.join(app.getAppPath(), "dist/preload.cjs"),
     },
 
     show: false,
   });
+
+  // ── Content-Security-Policy ────────────────────────────────
+  //
+  // Only applied in packaged builds. Vite's dev server relies on a
+  // websocket for HMR and inline scripts for module replacement; a
+  // strict CSP would break both. In prod we load `file://`, so we
+  // can lock things down.
+  //
+  // - `default-src 'self'`  — scripts/fonts/etc. only from the bundle.
+  // - `style-src  'unsafe-inline'` — Tailwind/React inject inline <style>.
+  // - `img-src data: https:` — assistant markdown can include remote
+  //   images and we also render data: URLs for pasted screenshots.
+  // - `connect-src 'self'` — no outbound renderer fetches; all
+  //   network goes through the main process.
+  if (!IS_DEV) {
+    mainWindow.webContents.session.webRequest.onHeadersReceived(
+      (details, cb) => {
+        cb({
+          responseHeaders: {
+            ...details.responseHeaders,
+            "Content-Security-Policy": [
+              "default-src 'self'; " +
+                "script-src 'self'; " +
+                "style-src 'self' 'unsafe-inline'; " +
+                "img-src 'self' data: https:; " +
+                "font-src 'self' data:; " +
+                "connect-src 'self'; " +
+                "object-src 'none'; " +
+                "base-uri 'self'; " +
+                "frame-ancestors 'none'",
+            ],
+          },
+        });
+      },
+    );
+  }
 
   mainWindow.once("ready-to-show", () => {
     mainWindow!.show();
@@ -862,7 +1103,9 @@ function createWindow() {
         const u = new URL(url);
         const d = new URL(DEV_URL);
         if (u.origin === d.origin) return true;
-      } catch { /* fall through */ }
+      } catch {
+        /* fall through */
+      }
     }
     return false;
   };
@@ -886,7 +1129,9 @@ function createWindow() {
       if (parsed.protocol === "http:" || parsed.protocol === "https:") {
         void shell.openExternal(parsed.toString());
       }
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
     return { action: "deny" };
   });
 
@@ -900,7 +1145,10 @@ function createWindow() {
 // ── Auto-update ──────────────────────────────────────────────
 
 function checkForUpdates(): void {
-  autoUpdater.logger = console;
+  // Only attach a logger in dev. In release builds this routes every
+  // update-check heartbeat to stderr, which macOS then captures into
+  // the unified system log — noisy and unhelpful for end users.
+  if (IS_DEV) autoUpdater.logger = console;
   autoUpdater.on("update-downloaded", (info) => {
     if (!mainWindow) return;
     dialog

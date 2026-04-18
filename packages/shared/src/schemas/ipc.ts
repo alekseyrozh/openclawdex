@@ -61,6 +61,20 @@ export const HistoryImage = z.object({
 });
 export type HistoryImage = z.infer<typeof HistoryImage>;
 
+// ── Image attachments on session:send (renderer → main) ──────
+//
+// Validated in main.ts before being handed to the agent backend.
+// `path` is only set when Electron could resolve a real OS path for
+// the attachment (drag-drop from the OS); clipboard pastes leave it
+// undefined and we fall back to the inline `base64`.
+export const ImagePayload = z.object({
+  name: z.string(),
+  base64: z.string(),
+  mediaType: z.string(),
+  path: z.string().optional(),
+});
+export type ImagePayload = z.infer<typeof ImagePayload>;
+
 export const HistoryMessage = z.discriminatedUnion("role", [
   z.object({ id: z.string(), role: z.literal("user"), content: z.string(), images: z.array(HistoryImage).optional() }),
   z.object({ id: z.string(), role: z.literal("assistant"), content: z.string() }),

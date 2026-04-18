@@ -1,12 +1,19 @@
 /** Type declarations for the preload bridge exposed on `window.openclawdex`. */
 
-import type { SessionInfo, HistoryMessage, ProjectInfo, EditorTarget, Provider, CodexModel, ClaudeModel } from "@openclawdex/shared";
+import type { SessionInfo, HistoryMessage, ProjectInfo, EditorTarget, Provider, CodexModel, ClaudeModel, ImagePayload } from "@openclawdex/shared";
 
 export {};
 
 declare global {
   interface OpenClawdexBridge {
     platform: string;
+    /**
+     * Resolve the absolute OS path of a `File` (drag-drop or file input).
+     * Returns `undefined` when Electron can't map it (e.g. synthesized
+     * blob from clipboard paste). Replaces the legacy `File.path` which
+     * was removed in Electron 32.
+     */
+    getFilePath: (file: File) => string | undefined;
     checkProviders: () => Promise<{ claude: boolean; codex: boolean }>;
     listCodexModels: () => Promise<CodexModel[]>;
     listClaudeModels: () => Promise<ClaudeModel[]>;
@@ -17,7 +24,7 @@ declare global {
         provider?: Provider;
         resumeSessionId?: string;
         projectId?: string;
-        images?: { name: string; base64: string; mediaType: string }[];
+        images?: ImagePayload[];
         model?: string;
         effort?: string;
       },

@@ -1,4 +1,5 @@
 import { spawn } from "child_process";
+import { app } from "electron";
 import { z } from "zod";
 import { CodexModel } from "@openclawdex/shared";
 
@@ -106,7 +107,7 @@ async function fetchCodexModels(): Promise<CodexModel[]> {
         id: 0,
         method: "initialize",
         params: {
-          clientInfo: { name: "openclawdex", version: "0.2.1" },
+          clientInfo: { name: "openclawdex", version: app.getVersion() },
           capabilities: { experimentalApi: true },
         },
       }) + "\n",

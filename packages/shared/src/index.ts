@@ -16,6 +16,7 @@ export {
   ContextStats,
   SessionInfo,
   HistoryMessage,
+  ImagePayload,
   AskUserOption,
   AskUserQuestionItem,
   AskUserInput,

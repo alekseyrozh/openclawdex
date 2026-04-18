@@ -1,8 +1,29 @@
-import { contextBridge, ipcRenderer } from "electron";
-import type { SessionInfo, HistoryMessage, ProjectInfo, EditorTarget, Provider, CodexModel, ClaudeModel } from "@openclawdex/shared";
+import { contextBridge, ipcRenderer, webUtils } from "electron";
+import type { SessionInfo, HistoryMessage, ProjectInfo, EditorTarget, Provider, CodexModel, ClaudeModel, ImagePayload } from "@openclawdex/shared";
 
 contextBridge.exposeInMainWorld("openclawdex", {
   platform: process.platform,
+
+  /**
+   * Resolve the absolute OS path for a `File` obtained from drag-drop
+   * or a file input.
+   *
+   * GOTCHA: Electron removed the legacy `File.path` property in v32, so
+   * reading it from the renderer now returns `undefined`. The official
+   * replacement is `webUtils.getPathForFile()`, which is only callable
+   * from a preload script. We expose it through the bridge so the
+   * composer can recover the real path for attached images and dragged
+   * files/folders (needed by Codex's `local_image` and for inserting
+   * @-references into the chat).
+   */
+  getFilePath: (file: File): string | undefined => {
+    try {
+      const p = webUtils.getPathForFile(file);
+      return p || undefined;
+    } catch {
+      return undefined;
+    }
+  },
 
   /**
    * Check which provider backends are available on this machine.
@@ -47,7 +68,7 @@ contextBridge.exposeInMainWorld("openclawdex", {
       provider?: Provider;
       resumeSessionId?: string;
       projectId?: string;
-      images?: { name: string; base64: string; mediaType: string; path?: string }[];
+      images?: ImagePayload[];
       model?: string;
       effort?: string;
     },

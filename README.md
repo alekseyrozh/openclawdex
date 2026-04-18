@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  Lightweight desktop UI for orchestrating Claude (and in the future Codex) coding agents through their CLIs, with a native Mac feel. No separate login &mdash; it uses your existing Claude Code auth.
+  Lightweight desktop UI for orchestrating Claude Code and OpenAI Codex coding agents through their CLIs, with a native Mac feel. No separate login &mdash; it uses your existing CLI auth.
 </p>
 
 <p align="center">
@@ -27,8 +27,9 @@
 OpenClawdex spawns CLI agents as subprocesses, so you need at least one installed and authenticated:
 
 - **Claude Code** &mdash; `npm install -g @anthropic-ai/claude-code` then `claude auth login`
+- **OpenAI Codex** &mdash; `npm install -g @openai/codex` then `codex login`
 
-No API keys needed &mdash; the app uses your existing CLI logins.
+You can install either or both; the model picker greys out whichever provider isn't available. No API keys needed &mdash; the app uses your existing CLI logins.
 
 ## Build from source
 
