@@ -35,9 +35,10 @@ contextBridge.exposeInMainWorld("openclawdex", {
    *
    * `provider`, `model`, `effort` may be passed for new threads so the
    * main process can route to Claude vs Codex and configure the SDK.
-   * For resumed threads the persisted `provider` takes precedence over
-   * whatever is passed here (main.ts falls back to the arg only when
-   * there's no DB row yet, i.e. first turn of a new thread).
+   * For resumed threads (any call with `resumeSessionId`) the main
+   * process looks up `known_threads.provider` and uses the persisted
+   * value instead — the passed `provider` is ignored. See
+   * `resolveProvider` in main.ts.
    */
   send: (
     threadId: string,
@@ -46,7 +47,7 @@ contextBridge.exposeInMainWorld("openclawdex", {
       provider?: Provider;
       resumeSessionId?: string;
       projectId?: string;
-      images?: { name: string; base64: string; mediaType: string }[];
+      images?: { name: string; base64: string; mediaType: string; path?: string }[];
       model?: string;
       effort?: string;
     },
@@ -112,6 +113,15 @@ contextBridge.exposeInMainWorld("openclawdex", {
   getGitBranch: (cwd: string): Promise<string | null> =>
     ipcRenderer.invoke("git:branch", cwd),
 
+  // ── Shell ───────────────────────────────────────────────────
+
+  /**
+   * Open an external URL in the user's default browser. Main side
+   * rejects anything that isn't http(s).
+   */
+  openExternal: (url: string): Promise<void> =>
+    ipcRenderer.invoke("shell:open-external", url),
+
   // ── Editor ──────────────────────────────────────────────────
 
   /** Open a file or folder in an editor. Relative paths resolve against `cwd`. */
@@ -135,6 +145,10 @@ contextBridge.exposeInMainWorld("openclawdex", {
   /** Delete a thread from the sidebar. */
   deleteThread: (sessionId: string): Promise<void> =>
     ipcRenderer.invoke("threads:delete", sessionId),
+
+  /** Reassign a thread to a different project (or null to ungroup). */
+  changeThreadProject: (sessionId: string, projectId: string | null): Promise<void> =>
+    ipcRenderer.invoke("threads:change-project", sessionId, projectId),
 
   /**
    * Subscribe to events coming from the main process.

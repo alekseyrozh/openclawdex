@@ -12,6 +12,11 @@ import type {
   SessionEvent,
 } from "./agent-session";
 
+/** Best-effort cleanup of a single tempfile. Never throws. */
+function safeUnlink(p: string): void {
+  try { fs.unlinkSync(p); } catch { /* ignore */ }
+}
+
 export function isCodexInstalled(): boolean {
   try {
     execSync("which codex", { encoding: "utf-8" });
@@ -72,24 +77,67 @@ export class CodexSession implements AgentSession {
   private thread: Thread;
   private cwd: string | undefined;
 
-  // Queue of pending user messages + their onEvent callbacks. Each entry
-  // represents one turn. We process them sequentially in `driveQueue`.
-  private queue: Array<{ input: Input; onEvent: (e: SessionEvent) => void }> = [];
+  // Queue of pending user messages + their onEvent callbacks. Each
+  // entry represents one turn. We process them sequentially in
+  // `driveQueue`. `tempImagePaths` holds any tempfiles we wrote *for
+  // this turn only* — they're removed as soon as `runOneTurn` settles,
+  // so long sessions with many image turns don't leak into `tmpdir`.
+  private queue: Array<{
+    input: Input;
+    onEvent: (e: SessionEvent) => void;
+    tempImagePaths: string[];
+  }> = [];
   private draining = false;
 
   // Live controller for the currently-streaming turn, so `interrupt()`
   // can abort mid-turn.
   private currentAbort: AbortController | null = null;
 
-  // Temp files we wrote for image attachments; removed on close().
-  private tempImagePaths: string[] = [];
-
-  // Has the renderer seen an `init` event yet for this session? We emit
-  // exactly one after the first `thread.started` or on resume.
+  // Has the renderer seen an `init` event yet for this session?
+  //
+  // ── When `init` fires ───────────────────────────────────────────
+  //
+  //   (a) NEW thread (no `resumeThreadId` passed): the Codex SDK emits
+  //       a `thread.started` event as the very first event of the first
+  //       turn, carrying the freshly-minted `thread_id`. We forward that
+  //       as `{kind: "init", sessionId, model}`. main.ts uses it to
+  //       insert the DB row and emit `IpcSessionInit` to the renderer,
+  //       which promotes the pending thread into the sidebar.
+  //
+  //   (b) RESUMED thread (`resumeThreadId` passed): the SDK does NOT
+  //       re-emit `thread.started` — from its perspective the thread
+  //       already exists. So `initEmitted` stays `false` forever and
+  //       we never produce an `init` SessionEvent for resumes. That's
+  //       intentional and safe for today's consumers:
+  //
+  //         - main.ts already has the sessionId (it's the same as
+  //           `resumeSessionId` the renderer passed) and the DB row
+  //           already exists, so it doesn't need the event to persist
+  //           anything.
+  //         - The renderer's `Thread` object for a resumed thread was
+  //           hydrated from `session:list-sessions` and already has
+  //           `sessionId` / `provider` populated, so the
+  //           `IpcSessionInit` reducer branch isn't needed.
+  //
+  // ── When this becomes a problem ─────────────────────────────────
+  //
+  //   If you add logic to `applyIpcEvent`'s `session_init` branch
+  //   that MUST run for every thread, not just first-turn-of-new, it
+  //   will silently skip Codex resumes. Examples of things that
+  //   would break:
+  //
+  //     - Recording "user opened thread X in this app session" via
+  //       session_init (would miss all resumed Codex threads).
+  //     - Resetting per-session renderer state on init.
+  //
+  //   If you need a "thread is live again" hook that fires on both
+  //   new and resumed Codex threads, don't rely on `init` — instead
+  //   emit a synthetic event from `runOneTurn` before `turn.started`,
+  //   or hook `status: "running"` in the renderer.
   private initEmitted = false;
 
   // The session id we expose via the `init` event. Populated after the
-  // first `thread.started` event, or from a resume id.
+  // first `thread.started` event, or from a resume id in the ctor.
   private threadId: string | null = null;
 
   constructor(opts?: CodexSessionOptions) {
@@ -125,23 +173,37 @@ export class CodexSession implements AgentSession {
   }
 
   /**
-   * Convert our IPC-level {@link ImageInput} (base64 + mediaType) into
-   * the Codex SDK's `local_image` shape, which takes a filesystem path.
+   * Convert our IPC-level {@link ImageInput} into the Codex SDK's
+   * `local_image` shape (which requires a filesystem path).
    *
-   * We write each image to `~/<tmp>/openclawdex-codex-<uuid>.<ext>` so
-   * the SDK can pass it to the CLI via stdin-free filesystem I/O.
+   * - If the renderer already has a real path (Electron drag-drop sets
+   *   `file.path` on OS-backed files), we forward it directly — no
+   *   tempfile, no copy, no cleanup concern.
+   * - Otherwise (clipboard paste, where the blob has no backing file),
+   *   we materialize a tempfile at
+   *   `<tmpdir>/openclawdex-codex-<uuid>.<ext>` and track it in the
+   *   returned `tempPaths` array so the caller can clean up at
+   *   end-of-turn.
    */
-  private imagesToUserInput(text: string, images: ImageInput[]): Input {
+  private imagesToUserInput(
+    text: string,
+    images: ImageInput[],
+  ): { input: Input; tempPaths: string[] } {
     const items: Input = [];
+    const tempPaths: string[] = [];
     for (const img of images) {
+      if (img.path) {
+        items.push({ type: "local_image", path: img.path });
+        continue;
+      }
       const ext = img.mediaType.split("/")[1] ?? "png";
       const p = path.join(os.tmpdir(), `openclawdex-codex-${randomUUID()}.${ext}`);
       fs.writeFileSync(p, Buffer.from(img.base64, "base64"));
-      this.tempImagePaths.push(p);
+      tempPaths.push(p);
       items.push({ type: "local_image", path: p });
     }
     if (text) items.push({ type: "text", text });
-    return items;
+    return { input: items, tempPaths };
   }
 
   send(
@@ -149,12 +211,15 @@ export class CodexSession implements AgentSession {
     images: ImageInput[] | undefined,
     onEvent: (e: SessionEvent) => void,
   ): void {
-    const input: Input =
-      images && images.length > 0
-        ? this.imagesToUserInput(message, images)
-        : message;
+    let input: Input = message;
+    let tempImagePaths: string[] = [];
+    if (images && images.length > 0) {
+      const prepared = this.imagesToUserInput(message, images);
+      input = prepared.input;
+      tempImagePaths = prepared.tempPaths;
+    }
 
-    this.queue.push({ input, onEvent });
+    this.queue.push({ input, onEvent, tempImagePaths });
     if (!this.draining) {
       this.draining = true;
       void this.driveQueue();
@@ -163,13 +228,18 @@ export class CodexSession implements AgentSession {
 
   /**
    * Process queued turns one at a time. Each turn: open a stream, fan
-   * Codex events out to the caller's `onEvent`, then emit `done`.
+   * Codex events out to the caller's `onEvent`, then emit `done`, then
+   * unlink any tempfiles created for that turn's images.
    */
   private async driveQueue(): Promise<void> {
     try {
       while (this.queue.length > 0) {
-        const { input, onEvent } = this.queue.shift()!;
-        await this.runOneTurn(input, onEvent);
+        const { input, onEvent, tempImagePaths } = this.queue.shift()!;
+        try {
+          await this.runOneTurn(input, onEvent);
+        } finally {
+          for (const p of tempImagePaths) safeUnlink(p);
+        }
       }
     } finally {
       this.draining = false;
@@ -183,9 +253,17 @@ export class CodexSession implements AgentSession {
     const abort = new AbortController();
     this.currentAbort = abort;
 
-    // Track tokens across updates so we can emit a final ContextUsage
-    // on `turn.completed`.
-    let lastUsage: ContextUsage | null = null;
+    // TODO(context-window): surface Codex context usage once we can
+    // resolve the selected model's max-token limit. The SDK's `Usage`
+    // payload exposes only `input_tokens + output_tokens`, not the
+    // model-side context window, so we can compute a percentage only
+    // if we hardcode (or look up) per-model limits. Until then we emit
+    // `null` so the renderer hides the context-window donut entirely
+    // for Codex threads (see ChatView's provider gate). Do NOT reinstate
+    // the `{maxTokens: 0, percentage: 0}` sentinel that lived here
+    // before — downstream `!= null` checks treat zero as "present" and
+    // render a misleading "0% used, N / 0 tokens" tooltip.
+    const lastUsage: ContextUsage | null = null;
     // Captured from JSON events on stdout. Preferred over the
     // `exited with code` wrapper the SDK throws, because that wrapper
     // only carries stderr (e.g. "Reading prompt from stdin...") while
@@ -198,15 +276,7 @@ export class CodexSession implements AgentSession {
       for await (const ev of events) {
         this.handleEvent(ev, onEvent);
 
-        if (ev.type === "turn.completed") {
-          const u = ev.usage;
-          const total = u.input_tokens + u.output_tokens;
-          // GOTCHA: Codex's `Usage` payload carries no context-window
-          // limit, so `maxTokens` and `percentage` are unknown. We
-          // set maxTokens=0 + percentage=0 as sentinels; renderers
-          // already null-check via ContextStats optionality.
-          lastUsage = { totalTokens: total, maxTokens: 0, percentage: 0 };
-        } else if (ev.type === "turn.failed") {
+        if (ev.type === "turn.failed") {
           turnError = ev.error.message;
         } else if (ev.type === "error") {
           turnError = ev.message;
@@ -249,6 +319,15 @@ export class CodexSession implements AgentSession {
    * character-by-character — that's a real UX difference worth
    * keeping in mind when debugging "why isn't my Codex reply
    * streaming?".
+   *
+   * TOOL CARDS: for tool-shaped items (shell, file_change, mcp, web
+   * search, todo list) we emit a `tool_use` on BOTH `item.started`
+   * and `item.completed`, reusing the SDK-provided `item.id` as
+   * `toolUseId`. The renderer de-dupes on that id and updates the
+   * card in place, so the user sees "$ npm install" appear as soon
+   * as Codex decides to run it, then the same card fills in with
+   * the output once it finishes. Without this pairing, long shell
+   * commands would show no activity at all until they exited.
    */
   private handleEvent(ev: ThreadEvent, onEvent: (e: SessionEvent) => void): void {
     switch (ev.type) {
@@ -268,34 +347,52 @@ export class CodexSession implements AgentSession {
         break;
       }
 
+      case "item.started":
       case "item.completed": {
         const item = ev.item;
         switch (item.type) {
           case "agent_message":
-            onEvent({ kind: "text_delta", text: item.text });
+            // Only the final text is useful — `item.started` fires
+            // before any content is streamed (item.text === "").
+            if (ev.type === "item.completed") {
+              onEvent({ kind: "text_delta", text: item.text });
+            }
             break;
 
           case "command_execution":
-            // Surface as a tool_use so the ChatView's tool-card UI
-            // renders it uniformly with Claude's Bash/Shell tool.
+            // On started: command is known, output/exit_code not yet.
+            // On completed: everything's filled in. Same id on both
+            // so the renderer swaps the placeholder for the full card.
             onEvent({
               kind: "tool_use",
+              toolUseId: item.id,
               toolName: "shell",
-              toolInput: { command: item.command, output: item.aggregated_output, exit_code: item.exit_code },
+              toolInput: {
+                command: item.command,
+                output: item.aggregated_output,
+                exit_code: item.exit_code,
+              },
             });
             break;
 
           case "file_change":
-            onEvent({
-              kind: "tool_use",
-              toolName: "apply_patch",
-              toolInput: { changes: item.changes, status: item.status },
-            });
+            // file_change only emits on completion in practice (the
+            // SDK treats it as atomic) but we still dedupe by id in
+            // case that changes upstream.
+            if (ev.type === "item.completed") {
+              onEvent({
+                kind: "tool_use",
+                toolUseId: item.id,
+                toolName: "apply_patch",
+                toolInput: { changes: item.changes, status: item.status },
+              });
+            }
             break;
 
           case "mcp_tool_call":
             onEvent({
               kind: "tool_use",
+              toolUseId: item.id,
               toolName: `${item.server}.${item.tool}`,
               toolInput: (item.arguments as Record<string, unknown>) ?? {},
             });
@@ -304,6 +401,7 @@ export class CodexSession implements AgentSession {
           case "web_search":
             onEvent({
               kind: "tool_use",
+              toolUseId: item.id,
               toolName: "web_search",
               toolInput: { query: item.query },
             });
@@ -312,6 +410,7 @@ export class CodexSession implements AgentSession {
           case "todo_list":
             onEvent({
               kind: "tool_use",
+              toolUseId: item.id,
               toolName: "update_plan",
               toolInput: { items: item.items },
             });
@@ -323,7 +422,9 @@ export class CodexSession implements AgentSession {
             break;
 
           case "error":
-            onEvent({ kind: "error", message: item.message });
+            if (ev.type === "item.completed") {
+              onEvent({ kind: "error", message: item.message });
+            }
             break;
         }
         break;
@@ -332,11 +433,12 @@ export class CodexSession implements AgentSession {
       case "turn.started":
       case "turn.completed":
       case "turn.failed":
-      case "item.started":
       case "item.updated":
       case "error":
         // Lifecycle events we handle in runOneTurn (or explicitly
-        // ignore to avoid double-emitting on update+complete).
+        // ignore — `item.updated` fires many times per streaming
+        // command and we'd rather not redraw the card for every
+        // `aggregated_output` byte).
         break;
     }
   }
@@ -356,13 +458,13 @@ export class CodexSession implements AgentSession {
   close(): void {
     this.currentAbort?.abort();
     this.currentAbort = null;
+    // Drain any queued-but-unstarted turns and release their tempfiles.
+    // In-flight turns clean up in `driveQueue`'s per-turn finally; this
+    // only catches entries the user closed out before they began.
+    for (const entry of this.queue) {
+      for (const p of entry.tempImagePaths) safeUnlink(p);
+    }
     this.queue = [];
     this.draining = false;
-
-    // Best-effort cleanup of temp image files.
-    for (const p of this.tempImagePaths) {
-      try { fs.unlinkSync(p); } catch { /* ignore */ }
-    }
-    this.tempImagePaths = [];
   }
 }

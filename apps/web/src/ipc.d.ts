@@ -33,11 +33,13 @@ declare global {
     addFolder: (projectId: string, folderPath: string) => Promise<string>;
     removeFolder: (folderId: string) => Promise<void>;
     getGitBranch: (cwd: string) => Promise<string | null>;
+    openExternal: (url: string) => Promise<void>;
     openInEditor: (targetPath: string, cwd?: string, line?: number, editor?: EditorTarget) => Promise<{ ok: boolean; message?: string }>;
     renameThread: (sessionId: string, name: string) => Promise<void>;
     pinThread: (sessionId: string, pinned: boolean) => Promise<void>;
     archiveThread: (sessionId: string, archived: boolean) => Promise<void>;
     deleteThread: (sessionId: string) => Promise<void>;
+    changeThreadProject: (sessionId: string, projectId: string | null) => Promise<void>;
     onEvent: (callback: (event: unknown) => void) => () => void;
   }
 

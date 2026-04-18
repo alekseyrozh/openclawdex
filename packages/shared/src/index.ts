@@ -32,4 +32,9 @@ export {
   IpcToolUse,
   IpcDeferredToolUse,
   IpcEvent,
+  ThreadsRenameInput,
+  ThreadsPinInput,
+  ThreadsArchiveInput,
+  ThreadsDeleteInput,
+  ThreadsChangeProjectInput,
 } from "./schemas/ipc";

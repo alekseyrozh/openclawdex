@@ -19,7 +19,22 @@
 
 import type { Provider } from "@openclawdex/shared";
 
-export type ImageInput = { name: string; base64: string; mediaType: string };
+/**
+ * One image attachment on an outgoing user message.
+ *
+ * We always carry `name` + `mediaType` + `base64`. `path` is set only
+ * when the renderer got the file from a source that has a filesystem
+ * path (Electron drag-drop from the OS sets `File.path`); clipboard
+ * pastes yield blob-only images and leave `path` undefined. Backends
+ * that can consume paths directly (Codex, via `local_image`) prefer
+ * `path` to avoid a tempfile round-trip.
+ */
+export type ImageInput = {
+  name: string;
+  base64: string;
+  mediaType: string;
+  path?: string;
+};
 
 export type ContextUsage = {
   totalTokens: number;
@@ -36,7 +51,20 @@ export type DeferredToolUse = {
 export type SessionEvent =
   | { kind: "init"; sessionId: string; model: string }
   | { kind: "text_delta"; text: string }
-  | { kind: "tool_use"; toolName: string; toolInput: Record<string, unknown> }
+  /**
+   * A tool invocation. When `toolUseId` is set and the renderer has
+   * already rendered a card with the same id, it updates the card in
+   * place instead of appending a new one. Codex uses this to show the
+   * shell command / file change immediately on `item.started` and
+   * then replace the card with completed output on `item.completed`.
+   * Claude always emits once per tool call and can omit the id.
+   */
+  | {
+      kind: "tool_use";
+      toolUseId?: string;
+      toolName: string;
+      toolInput: Record<string, unknown>;
+    }
   | {
       kind: "result";
       // `null` for Codex (no cost reporting); always a number for Claude.

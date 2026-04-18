@@ -48,6 +48,10 @@ export type CodexHistoryMsg =
  * Locate the rollout JSONL for a thread id. The file name always ends
  * with `<threadId>.jsonl`, so we walk YYYY/MM/DD dirs and match by
  * suffix rather than guessing the timestamp prefix.
+ *
+ * PERFORMANCE NOTE: calling this in a loop (e.g. once per sidebar row)
+ * is O(N·M) where M is the total number of rollout files on disk. Use
+ * {@link buildCodexSessionIndex} to do one walk and look up by id.
  */
 export function findCodexSessionFile(threadId: string): string | null {
   const suffix = `${threadId}.jsonl`;
@@ -66,6 +70,41 @@ export function findCodexSessionFile(threadId: string): string | null {
     }
   }
   return null;
+}
+
+/**
+ * Walk `~/.codex/sessions/**` once and return a `Map<threadId, filePath>`.
+ *
+ * Use this when you need to look up multiple thread ids in one pass (e.g.
+ * building the sidebar from many `known_threads` rows). A single walk is
+ * fast even with hundreds of rollouts; repeated `findCodexSessionFile`
+ * calls are not.
+ *
+ * Rollout filenames follow `rollout-<ISO-ts>-<uuid>.jsonl` where both
+ * the timestamp and the UUID contain `-`, so we extract the trailing
+ * UUID via a shape-based regex rather than string splitting.
+ */
+const UUID_TAIL = /([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\.jsonl$/;
+
+export function buildCodexSessionIndex(): Map<string, string> {
+  const index = new Map<string, string>();
+  if (!fs.existsSync(SESSIONS_ROOT)) return index;
+
+  for (const year of safeReaddir(SESSIONS_ROOT)) {
+    const yearDir = path.join(SESSIONS_ROOT, year);
+    for (const month of safeReaddir(yearDir)) {
+      const monthDir = path.join(yearDir, month);
+      for (const day of safeReaddir(monthDir)) {
+        const dayDir = path.join(monthDir, day);
+        for (const file of safeReaddir(dayDir)) {
+          const match = UUID_TAIL.exec(file);
+          if (!match) continue;
+          index.set(match[1], path.join(dayDir, file));
+        }
+      }
+    }
+  }
+  return index;
 }
 
 function safeReaddir(p: string): string[] {
@@ -92,11 +131,20 @@ function isInjectedContext(text: string): boolean {
 export function readCodexHistory(threadId: string): CodexHistoryMsg[] {
   const file = findCodexSessionFile(threadId);
   if (!file) return [];
+  return readCodexHistoryFromFile(file);
+}
 
+/**
+ * Same as {@link readCodexHistory} but takes a pre-resolved file path.
+ * Callers that already looked the path up via {@link buildCodexSessionIndex}
+ * should use this to avoid re-walking the sessions tree.
+ */
+export function readCodexHistoryFromFile(file: string): CodexHistoryMsg[] {
   const result: CodexHistoryMsg[] = [];
   let itemIdx = 0;
 
-  const content = fs.readFileSync(file, "utf-8");
+  let content: string;
+  try { content = fs.readFileSync(file, "utf-8"); } catch { return []; }
   for (const line of content.split("\n")) {
     if (!line) continue;
     let raw: unknown;
@@ -149,6 +197,19 @@ export function readCodexHistory(threadId: string): CodexHistoryMsg[] {
  */
 export function readCodexSummary(threadId: string): string | null {
   const history = readCodexHistory(threadId);
+  return summaryFromHistory(history);
+}
+
+/**
+ * Same as {@link readCodexSummary} but takes a pre-resolved file path.
+ * Prefer this when iterating many threads — pair it with
+ * {@link buildCodexSessionIndex} for a single tree walk.
+ */
+export function readCodexSummaryFromFile(file: string): string | null {
+  return summaryFromHistory(readCodexHistoryFromFile(file));
+}
+
+function summaryFromHistory(history: CodexHistoryMsg[]): string | null {
   const firstUser = history.find((m) => m.role === "user");
   if (!firstUser) return null;
   const oneLine = firstUser.content.trim().split("\n")[0];

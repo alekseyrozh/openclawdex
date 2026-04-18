@@ -148,6 +148,23 @@ export const AskUserInput = z.object({
 });
 export type AskUserInput = z.infer<typeof AskUserInput>;
 
+// ── Thread CRUD inputs (renderer → main) ─────────────────────
+//
+// Validated in main.ts before touching the DB. The renderer is sandboxed
+// and preload.ts annotates these as `string`/`boolean`, but the code
+// rule ("Zod for all external data") treats any cross-process boundary
+// as external — a compromised renderer or a future remote-control path
+// shouldn't be able to send a non-string into `db.update`.
+
+export const ThreadsRenameInput = z.tuple([z.string().min(1), z.string()]);
+export const ThreadsPinInput = z.tuple([z.string().min(1), z.boolean()]);
+export const ThreadsArchiveInput = z.tuple([z.string().min(1), z.boolean()]);
+export const ThreadsDeleteInput = z.tuple([z.string().min(1)]);
+export const ThreadsChangeProjectInput = z.tuple([
+  z.string().min(1),
+  z.string().min(1).nullable(),
+]);
+
 // ── Events flowing from main process → renderer ──────────────
 
 export const IpcAssistantText = z.object({
@@ -189,9 +206,16 @@ export const IpcSessionInit = z.object({
   projectId: z.string().optional(),
 });
 
+// GOTCHA: when `toolUseId` is set, the renderer de-dupes on that id — if
+// a message with the same id already exists, its content is replaced in
+// place rather than a new card appended. Codex emits this on both
+// `item.started` and `item.completed` for shell commands so the card
+// appears immediately and fills in on completion. Claude emits each
+// tool call once and can leave `toolUseId` unset.
 export const IpcToolUse = z.object({
   type: z.literal("tool_use"),
   threadId: z.string(),
+  toolUseId: z.string().optional(),
   toolName: z.string(),
   toolInput: z.record(z.string(), z.unknown()).optional(),
 });

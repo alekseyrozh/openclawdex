@@ -204,15 +204,17 @@ export class ClaudeSession implements AgentSession {
             console.error("[claude] getContextUsage failed:", err);
           }
 
-          // Check for deferred tool use (e.g. AskUserQuestion)
+          // Check for deferred tool use (e.g. AskUserQuestion). The SDK
+          // surfaces this on the `result` message under `deferred_tool_use`
+          // but the TS types don't expose it — hence the untyped cast.
+          // We forward it through to the renderer via the `result` event
+          // below; the renderer then shows the QuestionCard and pauses
+          // the thread on `awaiting_input`.
           const msgRecord = msg as Record<string, unknown>;
           const rawDeferred = msgRecord.deferred_tool_use as { id: string; name: string; input: Record<string, unknown> } | undefined;
           const deferredToolUse: DeferredToolUse | null = rawDeferred
             ? { id: rawDeferred.id, name: rawDeferred.name, input: rawDeferred.input }
             : null;
-
-          if (deferredToolUse) {
-          }
 
           onEvent({
             kind: "result",

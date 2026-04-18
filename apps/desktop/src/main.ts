@@ -9,7 +9,7 @@ import fs from "fs";
 import { eq } from "drizzle-orm";
 import { findClaudeBinary, ClaudeSession } from "./claude";
 import { isCodexInstalled, CodexSession } from "./codex";
-import { readCodexHistory, readCodexSummary } from "./codex-history";
+import { readCodexHistory, readCodexSummaryFromFile, buildCodexSessionIndex } from "./codex-history";
 import { listCodexModels } from "./codex-models";
 import { listClaudeModels } from "./claude-models";
 import type { AgentSession } from "./agent-session";
@@ -19,6 +19,14 @@ import {
 } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import type { IpcEvent, EditorTarget, Provider, SessionInfo, CodexReasoningEffort, ClaudeEffortLevel } from "@openclawdex/shared";
+import { ContextStats } from "@openclawdex/shared";
+import {
+  ThreadsRenameInput,
+  ThreadsPinInput,
+  ThreadsArchiveInput,
+  ThreadsDeleteInput,
+  ThreadsChangeProjectInput,
+} from "@openclawdex/shared";
 import { initDb, getDb } from "./db";
 import { knownThreads, projects, projectFolders } from "./db/schema";
 
@@ -92,6 +100,53 @@ function emitToRenderer(event: IpcEvent): void {
   mainWindow?.webContents.send("session:event", event);
 }
 
+/**
+ * Parse a `known_threads.context_stats` TEXT column into a validated
+ * ContextStats object, or `undefined` on any failure (null column,
+ * malformed JSON, schema mismatch).
+ *
+ * The column is external data written by previous runs of this app —
+ * possibly a different version with a different schema — so we validate
+ * with Zod rather than trusting the JSON shape (per the project's "Zod
+ * for all external data" rule).
+ */
+function parseContextStats(raw: string | null): ContextStats | undefined {
+  if (!raw) return undefined;
+  let parsed: unknown;
+  try { parsed = JSON.parse(raw); } catch { return undefined; }
+  const result = ContextStats.safeParse(parsed);
+  return result.success ? result.data : undefined;
+}
+
+/**
+ * Resolve which agent backend a send should route to.
+ *
+ * Ordering, in decreasing authority:
+ *   1. The `known_threads.provider` column for `resumeSessionId`, if we
+ *      have a row for it. This is the committed, authoritative value —
+ *      a thread that was started against Codex must always resume
+ *      against Codex, regardless of what the renderer currently thinks.
+ *   2. The renderer-supplied `providerHint`. Used for the very first
+ *      turn of a brand-new thread, before a DB row exists.
+ *   3. `"claude"` as a last-resort default (preserves pre-multi-provider
+ *      behavior for callers that omit the field).
+ */
+async function resolveProvider(
+  resumeSessionId: string | undefined,
+  providerHint: Provider | undefined,
+): Promise<Provider> {
+  if (resumeSessionId) {
+    const rows = await getDb()
+      .select({ provider: knownThreads.provider })
+      .from(knownThreads)
+      .where(eq(knownThreads.sessionId, resumeSessionId))
+      .limit(1);
+    const persisted = rows[0]?.provider;
+    if (persisted === "claude" || persisted === "codex") return persisted;
+  }
+  return providerHint ?? "claude";
+}
+
 /** Resolve the first folder path for a project, or undefined. */
 async function getProjectCwd(projectId: string): Promise<string | undefined> {
   const rows = await getDb()
@@ -161,13 +216,18 @@ function setupIpcHandlers(): void {
         provider?: Provider;
         resumeSessionId?: string;
         projectId?: string;
-        images?: { name: string; base64: string; mediaType: string }[];
+        images?: { name: string; base64: string; mediaType: string; path?: string }[];
         model?: string;
         effort?: string;
       },
     ) => {
-      // Default to claude to match the pre-multi-provider behavior.
-      const provider: Provider = opts?.provider ?? "claude";
+      // Resolve provider. The DB is authoritative for any thread we've
+      // seen before (keyed by its session id); the renderer-supplied
+      // `opts.provider` is only consulted for brand-new threads where
+      // no DB row exists yet. This closes a class of bugs where the
+      // renderer has stale state and passes the wrong provider for a
+      // known session id — we'd otherwise spin up the wrong backend.
+      const provider = await resolveProvider(opts?.resumeSessionId, opts?.provider);
 
       // Resolve the project's folder as the session cwd
       let cwd: string | undefined;
@@ -237,6 +297,7 @@ function setupIpcHandlers(): void {
             emitToRenderer({
               type: "tool_use",
               threadId,
+              ...(e.toolUseId && { toolUseId: e.toolUseId }),
               toolName: e.toolName,
               toolInput: e.toolInput,
             });
@@ -339,12 +400,18 @@ function setupIpcHandlers(): void {
     ]);
 
     const claudeMap = new Map(claudeSessions.map((s) => [s.sessionId, s]));
+    // One tree-walk of `~/.codex/sessions` regardless of how many Codex
+    // rows we have. Before this we called `readCodexSummary(id)` per row
+    // and each call re-walked the entire sessions tree — O(N·M) in the
+    // number of rows × total rollout files. Skip the walk entirely if
+    // no row is Codex.
+    const hasCodex = known.some((r) => (r.provider ?? "claude") === "codex");
+    const codexIndex = hasCodex ? buildCodexSessionIndex() : null;
     const results: SessionInfo[] = [];
 
     for (const row of known) {
       const provider = (row.provider ?? "claude") as Provider;
-      let contextStats: Record<string, unknown> | undefined;
-      try { contextStats = row.contextStats ? JSON.parse(row.contextStats) : undefined; } catch { /* ignore */ }
+      const contextStats = parseContextStats(row.contextStats);
 
       if (provider === "claude") {
         // Intersect with on-disk Claude sessions; if the JSONL is gone
@@ -367,8 +434,12 @@ function setupIpcHandlers(): void {
       } else {
         // Codex: enrich from the CLI's on-disk rollout JSONL, since its
         // SDK doesn't expose a listing API. `customName` (user rename)
-        // wins; otherwise use the first real user prompt from disk.
-        const summary = row.customName ?? readCodexSummary(row.sessionId) ?? "Codex thread";
+        // wins; otherwise use the first real user prompt from disk —
+        // looked up via the one-shot `codexIndex` so this stays O(1)
+        // per row.
+        const rolloutFile = codexIndex?.get(row.sessionId) ?? null;
+        const diskSummary = rolloutFile ? readCodexSummaryFromFile(rolloutFile) : null;
+        const summary = row.customName ?? diskSummary ?? "Codex thread";
         results.push({
           sessionId: row.sessionId,
           provider: "codex",
@@ -561,6 +632,27 @@ function setupIpcHandlers(): void {
     }
   });
 
+  /**
+   * Open an external URL in the user's default browser.
+   *
+   * Gated to `http(s)` only — `shell.openExternal` will otherwise
+   * happily fire `file://`, `mailto:`, or OS-handled custom schemes,
+   * which the renderer has no business triggering. Callers that need
+   * anything else should get their own dedicated IPC handler.
+   */
+  ipcMain.handle("shell:open-external", async (_event, url: string): Promise<void> => {
+    try {
+      const parsed = new URL(url);
+      if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+        console.warn("[shell:open-external] refused non-http(s) scheme:", parsed.protocol);
+        return;
+      }
+      await shell.openExternal(parsed.toString());
+    } catch (err) {
+      console.error("[shell:open-external] failed:", err);
+    }
+  });
+
   // ── Editor integration ──────────────────────────────────────
 
   /**
@@ -645,24 +737,49 @@ function setupIpcHandlers(): void {
   });
 
   // ── Thread CRUD ───────────────────────────────────────────────
+  //
+  // Inputs are Zod-validated at the boundary. Per CLAUDE.md: "Any data
+  // whose shape you don't fully control — IPC messages from another
+  // process — MUST be validated with a Zod schema before use." The
+  // renderer is sandboxed today, but we don't want DB writes that
+  // assume renderer trust. `safeParse` failures throw — that surfaces
+  // as a rejected IPC promise, which the renderer reports via
+  // `reportIpcError`.
+
+  /** Parse tuple-shaped IPC args or throw a descriptive error. */
+  function parseIpcArgs<T>(
+    op: string,
+    schema: { safeParse: (v: unknown) => { success: true; data: T } | { success: false; error: unknown } },
+    args: unknown[],
+  ): T {
+    const parsed = schema.safeParse(args);
+    if (!parsed.success) {
+      throw new Error(`Invalid arguments to ${op}: ${JSON.stringify(parsed.error)}`);
+    }
+    return parsed.data;
+  }
 
   /** Rename a thread (sets a custom name override). */
-  ipcMain.handle("threads:rename", async (_event, sessionId: string, name: string) => {
+  ipcMain.handle("threads:rename", async (_event, ...args: unknown[]) => {
+    const [sessionId, name] = parseIpcArgs("threads:rename", ThreadsRenameInput, args);
     await getDb().update(knownThreads).set({ customName: name }).where(eq(knownThreads.sessionId, sessionId));
   });
 
   /** Pin or unpin a thread. */
-  ipcMain.handle("threads:pin", async (_event, sessionId: string, pinned: boolean) => {
+  ipcMain.handle("threads:pin", async (_event, ...args: unknown[]) => {
+    const [sessionId, pinned] = parseIpcArgs("threads:pin", ThreadsPinInput, args);
     await getDb().update(knownThreads).set({ pinned }).where(eq(knownThreads.sessionId, sessionId));
   });
 
   /** Archive or unarchive a thread. */
-  ipcMain.handle("threads:archive", async (_event, sessionId: string, archived: boolean) => {
+  ipcMain.handle("threads:archive", async (_event, ...args: unknown[]) => {
+    const [sessionId, archived] = parseIpcArgs("threads:archive", ThreadsArchiveInput, args);
     await getDb().update(knownThreads).set({ archived }).where(eq(knownThreads.sessionId, sessionId));
   });
 
   /** Delete a thread from the sidebar. */
-  ipcMain.handle("threads:delete", async (_event, sessionId: string) => {
+  ipcMain.handle("threads:delete", async (_event, ...args: unknown[]) => {
+    const [sessionId] = parseIpcArgs("threads:delete", ThreadsDeleteInput, args);
     // Close the live session if running
     const session = sessions.get(sessionId);
     if (session) {
@@ -670,6 +787,16 @@ function setupIpcHandlers(): void {
       sessions.delete(sessionId);
     }
     await getDb().delete(knownThreads).where(eq(knownThreads.sessionId, sessionId));
+  });
+
+  /**
+   * Reassign a thread to a different project (or pass null to ungroup).
+   * Only affects the DB row keyed by session_id — live session state is
+   * provider-agnostic and doesn't care which project a thread "belongs" to.
+   */
+  ipcMain.handle("threads:change-project", async (_event, ...args: unknown[]) => {
+    const [sessionId, projectId] = parseIpcArgs("threads:change-project", ThreadsChangeProjectInput, args);
+    await getDb().update(knownThreads).set({ projectId }).where(eq(knownThreads.sessionId, sessionId));
   });
 }
 

@@ -1,4 +1,12 @@
-import { useState, useRef, useEffect, useLayoutEffect, useCallback, createContext, useContext } from "react";
+import {
+  useState,
+  useRef,
+  useEffect,
+  useLayoutEffect,
+  useCallback,
+  createContext,
+  useContext,
+} from "react";
 import { createPortal } from "react-dom";
 import finderIconUrl from "../assets/finder.png";
 import terminalIconUrl from "../assets/apple-terminal.png";
@@ -20,17 +28,32 @@ import {
   Copy,
   X,
   ImageSquare,
+  Folder,
+  Plus,
+  ArrowSquareOut,
 } from "@phosphor-icons/react";
 import { QuestionCard } from "./QuestionCard";
+import {
+  DropdownSurface,
+  DropdownItem,
+  DropdownDivider,
+  DropdownSectionHeader,
+} from "./Dropdown";
 import type { Thread, Message, FileChange, ContextStats } from "../App";
-import { EditorTarget } from "@openclawdex/shared";
+import { EditorTarget, type ProjectInfo } from "@openclawdex/shared";
 
 /* ── Editor logos ────────────────────────────────────────────── */
 
 function VSCodeIcon({ size = 14 }: { size?: number }) {
   // simple-icons VSCode glyph (stylized blue ribbon)
   return (
-    <svg viewBox="0 0 24 24" width={size} height={size} fill="#3DA0E2" aria-hidden>
+    <svg
+      viewBox="0 0 24 24"
+      width={size}
+      height={size}
+      fill="#3DA0E2"
+      aria-hidden
+    >
       <path d="M23.15 2.587 18.21.21a1.494 1.494 0 0 0-1.705.29l-9.46 8.63-4.12-3.128a.999.999 0 0 0-1.276.057L.327 7.261A1 1 0 0 0 .326 8.74L3.899 12 .326 15.26a1 1 0 0 0 .001 1.479L1.65 17.94a.999.999 0 0 0 1.276.057l4.12-3.128 9.46 8.63a1.492 1.492 0 0 0 1.704.29l4.942-2.377A1.5 1.5 0 0 0 24 20.06V3.939a1.5 1.5 0 0 0-.85-1.352zm-5.146 14.861L10.826 12l7.178-5.448z" />
     </svg>
   );
@@ -39,14 +62,29 @@ function VSCodeIcon({ size = 14 }: { size?: number }) {
 function CursorIcon({ size = 14 }: { size?: number }) {
   // Official Cursor light logo (outlined hex)
   return (
-    <svg viewBox="0 0 466.73 532.09" width={size} height={size} fill="currentColor" aria-hidden>
+    <svg
+      viewBox="0 0 466.73 532.09"
+      width={size}
+      height={size}
+      fill="currentColor"
+      aria-hidden
+    >
       <path d="M457.43,125.94L244.42,2.96c-6.84-3.95-15.28-3.95-22.12,0L9.3,125.94c-5.75,3.32-9.3,9.46-9.3,16.11v247.99c0,6.65,3.55,12.79,9.3,16.11l213.01,122.98c6.84,3.95,15.28,3.95,22.12,0l213.01-122.98c5.75-3.32,9.3-9.46,9.3-16.11v-247.99c0-6.65-3.55-12.79-9.3-16.11h-.01ZM444.05,151.99l-205.63,356.16c-1.39,2.4-5.06,1.42-5.06-1.36v-233.21c0-4.66-2.49-8.97-6.53-11.31L24.87,145.67c-2.4-1.39-1.42-5.06,1.36-5.06h411.26c5.84,0,9.49,6.33,6.57,11.39h-.01Z" />
     </svg>
   );
 }
 
 function FinderIcon({ size = 14 }: { size?: number }) {
-  return <img src={finderIconUrl} width={size} height={size} alt="" aria-hidden draggable={false} />;
+  return (
+    <img
+      src={finderIconUrl}
+      width={size}
+      height={size}
+      alt=""
+      aria-hidden
+      draggable={false}
+    />
+  );
 }
 
 function TerminalIcon({ size = 14 }: { size?: number }) {
@@ -82,16 +120,54 @@ function ITermIcon({ size = 14 }: { size?: number }) {
   return (
     <svg viewBox="100 100 824 824" width={size} height={size} aria-hidden>
       <defs>
-        <linearGradient id="iterm-grad" x1="512" y1="100" x2="512" y2="924" gradientUnits="userSpaceOnUse">
+        <linearGradient
+          id="iterm-grad"
+          x1="512"
+          y1="100"
+          x2="512"
+          y2="924"
+          gradientUnits="userSpaceOnUse"
+        >
           <stop stopColor="#D4E6E8" />
           <stop offset="1" stopColor="#767573" />
         </linearGradient>
       </defs>
-      <rect x="100" y="100" width="824" height="824" rx="179" fill="url(#iterm-grad)" />
-      <rect x="121.788" y="121.789" width="780.423" height="780.423" rx="156" fill="black" />
-      <rect x="183.192" y="183.192" width="657.615" height="657.615" rx="94" fill="#202A2F" />
-      <rect x="367.404" y="226.769" width="89.1346" height="178.269" fill="#0EE827" fillOpacity="0.35" />
-      <path fill="#0EE827" d="M274.468 374.622C269.807 374.227 265.438 373.568 261.36 372.645C257.427 371.59 253.786 370.47 250.436 369.284C247.232 368.097 244.392 366.977 241.916 365.922C239.586 364.736 237.838 363.813 236.673 363.154L246.067 345.754C247.086 346.413 248.834 347.335 251.31 348.522C253.786 349.708 256.553 350.96 259.612 352.279C262.816 353.465 266.093 354.52 269.443 355.442C272.793 356.365 275.924 356.827 278.837 356.827C293.402 356.827 300.684 351.356 300.684 340.415C300.684 337.778 300.174 335.603 299.154 333.89C298.281 332.176 296.897 330.726 295.004 329.54C293.256 328.221 291.071 327.101 288.45 326.178C285.974 325.124 283.134 324.069 279.929 323.015C273.812 320.905 268.351 318.73 263.544 316.489C258.884 314.117 254.878 311.48 251.529 308.58C248.179 305.68 245.63 302.385 243.882 298.694C242.135 295.003 241.261 290.784 241.261 286.039C241.261 282.348 242.062 278.789 243.664 275.361C245.266 271.934 247.523 268.902 250.436 266.266C253.349 263.498 256.845 261.191 260.923 259.345C265.001 257.368 269.516 255.984 274.468 255.193V226.769H292.382V254.797C296.169 255.193 299.81 255.786 303.305 256.577C306.801 257.368 309.932 258.225 312.699 259.147C315.467 260.07 317.797 260.993 319.69 261.916C321.729 262.707 323.186 263.3 324.06 263.695L315.321 279.909C314.156 279.382 312.481 278.723 310.296 277.932C308.257 277.009 305.927 276.086 303.305 275.164C300.684 274.241 297.844 273.45 294.785 272.791C291.727 272.132 288.668 271.802 285.61 271.802C280.658 271.802 276.215 272.725 272.283 274.57C268.496 276.284 266.603 279.25 266.603 283.468C266.603 286.105 267.113 288.478 268.132 290.587C269.297 292.564 270.899 294.344 272.938 295.925C275.123 297.507 277.745 299.023 280.803 300.473C284.007 301.791 287.649 303.11 291.727 304.428C297.115 306.405 301.922 308.448 306.145 310.558C310.369 312.667 313.937 315.039 316.85 317.676C319.763 320.312 321.948 323.344 323.404 326.771C325.006 330.199 325.807 334.219 325.807 338.833C325.807 342.788 325.079 346.61 323.623 350.301C322.312 353.992 320.2 357.42 317.287 360.583C314.52 363.747 311.025 366.515 306.801 368.888C302.723 371.129 297.916 372.777 292.382 373.831V403.058H274.468V374.622Z" />
+      <rect
+        x="100"
+        y="100"
+        width="824"
+        height="824"
+        rx="179"
+        fill="url(#iterm-grad)"
+      />
+      <rect
+        x="121.788"
+        y="121.789"
+        width="780.423"
+        height="780.423"
+        rx="156"
+        fill="black"
+      />
+      <rect
+        x="183.192"
+        y="183.192"
+        width="657.615"
+        height="657.615"
+        rx="94"
+        fill="#202A2F"
+      />
+      <rect
+        x="367.404"
+        y="226.769"
+        width="89.1346"
+        height="178.269"
+        fill="#0EE827"
+        fillOpacity="0.35"
+      />
+      <path
+        fill="#0EE827"
+        d="M274.468 374.622C269.807 374.227 265.438 373.568 261.36 372.645C257.427 371.59 253.786 370.47 250.436 369.284C247.232 368.097 244.392 366.977 241.916 365.922C239.586 364.736 237.838 363.813 236.673 363.154L246.067 345.754C247.086 346.413 248.834 347.335 251.31 348.522C253.786 349.708 256.553 350.96 259.612 352.279C262.816 353.465 266.093 354.52 269.443 355.442C272.793 356.365 275.924 356.827 278.837 356.827C293.402 356.827 300.684 351.356 300.684 340.415C300.684 337.778 300.174 335.603 299.154 333.89C298.281 332.176 296.897 330.726 295.004 329.54C293.256 328.221 291.071 327.101 288.45 326.178C285.974 325.124 283.134 324.069 279.929 323.015C273.812 320.905 268.351 318.73 263.544 316.489C258.884 314.117 254.878 311.48 251.529 308.58C248.179 305.68 245.63 302.385 243.882 298.694C242.135 295.003 241.261 290.784 241.261 286.039C241.261 282.348 242.062 278.789 243.664 275.361C245.266 271.934 247.523 268.902 250.436 266.266C253.349 263.498 256.845 261.191 260.923 259.345C265.001 257.368 269.516 255.984 274.468 255.193V226.769H292.382V254.797C296.169 255.193 299.81 255.786 303.305 256.577C306.801 257.368 309.932 258.225 312.699 259.147C315.467 260.07 317.797 260.993 319.69 261.916C321.729 262.707 323.186 263.3 324.06 263.695L315.321 279.909C314.156 279.382 312.481 278.723 310.296 277.932C308.257 277.009 305.927 276.086 303.305 275.164C300.684 274.241 297.844 273.45 294.785 272.791C291.727 272.132 288.668 271.802 285.61 271.802C280.658 271.802 276.215 272.725 272.283 274.57C268.496 276.284 266.603 279.25 266.603 283.468C266.603 286.105 267.113 288.478 268.132 290.587C269.297 292.564 270.899 294.344 272.938 295.925C275.123 297.507 277.745 299.023 280.803 300.473C284.007 301.791 287.649 303.11 291.727 304.428C297.115 306.405 301.922 308.448 306.145 310.558C310.369 312.667 313.937 315.039 316.85 317.676C319.763 320.312 321.948 323.344 323.404 326.771C325.006 330.199 325.807 334.219 325.807 338.833C325.807 342.788 325.079 346.61 323.623 350.301C322.312 353.992 320.2 357.42 317.287 360.583C314.52 363.747 311.025 366.515 306.801 368.888C302.723 371.129 297.916 372.777 292.382 373.831V403.058H274.468V374.622Z"
+      />
     </svg>
   );
 }
@@ -104,23 +180,45 @@ function isEditorTarget(v: string): v is EditorTarget {
 
 function editorLabel(t: EditorTarget): string {
   switch (t) {
-    case "vscode": return "VSCode";
-    case "cursor": return "Cursor";
-    case "finder": return "Finder";
-    case "terminal": return "Terminal";
-    case "iterm": return "iTerm2";
-    case "ghostty": return "Ghostty";
+    case "vscode":
+      return "VSCode";
+    case "cursor":
+      return "Cursor";
+    case "finder":
+      return "Finder";
+    case "terminal":
+      return "Terminal";
+    case "iterm":
+      return "iTerm2";
+    case "ghostty":
+      return "Ghostty";
   }
 }
 
-function EditorTargetIcon({ target, size = 16 }: { target: EditorTarget; size?: number }) {
+function EditorTargetIcon({
+  target,
+  size = 16,
+}: {
+  target: EditorTarget;
+  size?: number;
+}) {
   switch (target) {
-    case "vscode": return <VSCodeIcon size={size} />;
-    case "cursor": return <span style={{ color: "var(--text-primary)", display: "inline-flex" }}><CursorIcon size={size} /></span>;
-    case "finder": return <FinderIcon size={size} />;
-    case "terminal": return <TerminalIcon size={size} />;
-    case "iterm": return <ITermIcon size={size} />;
-    case "ghostty": return <GhosttyIcon size={size} />;
+    case "vscode":
+      return <VSCodeIcon size={size} />;
+    case "cursor":
+      return (
+        <span style={{ color: "var(--text-primary)", display: "inline-flex" }}>
+          <CursorIcon size={size} />
+        </span>
+      );
+    case "finder":
+      return <FinderIcon size={size} />;
+    case "terminal":
+      return <TerminalIcon size={size} />;
+    case "iterm":
+      return <ITermIcon size={size} />;
+    case "ghostty":
+      return <GhosttyIcon size={size} />;
   }
 }
 
@@ -168,6 +266,14 @@ export interface ImagePayload {
   name: string;
   base64: string;
   mediaType: string;
+  /**
+   * Filesystem path when the file came from the OS (Electron drag-drop
+   * sets `File.path`). Codex uses this directly via `local_image`, so
+   * we can skip writing a tempfile in the main process. Clipboard
+   * pastes yield blob-only images with no backing file — `path` stays
+   * undefined in that case.
+   */
+  path?: string;
 }
 
 /* ── Claude sparkle icon ────────────────────────────────────── */
@@ -286,20 +392,26 @@ function loadClaudeModels(): Promise<ModelDef[]> {
                 // a model picker.
                 const [head, ...rest] = m.description.split(" · ");
                 const rawHead = (head ?? m.displayName).trim();
-                const ctxMatch = rawHead.match(/^(.*?)\s+with\s+(\S+)\s+context\s*$/i);
+                const ctxMatch = rawHead.match(
+                  /^(.*?)\s+with\s+(\S+)\s+context\s*$/i,
+                );
                 const label = ctxMatch ? ctxMatch[1].trim() : rawHead;
                 const badge = ctxMatch ? ctxMatch[2] : undefined;
                 const subtitle = rest
                   .map((s) => s.trim())
-                  .filter((s) => s.length > 0 && !/\bbilled\b/i.test(s) && !/\$/.test(s))
+                  .filter(
+                    (s) =>
+                      s.length > 0 && !/\bbilled\b/i.test(s) && !/\$/.test(s),
+                  )
                   .join(" · ");
                 // `supportsEffort: false` or a missing
                 // `supportedEffortLevels` array (e.g. Haiku) means the
                 // model has no reasoning knob — represent that as an
                 // empty list so the effort picker hides.
-                const supportedEfforts = m.supportsEffort && m.supportedEffortLevels
-                  ? m.supportedEffortLevels
-                  : [];
+                const supportedEfforts =
+                  m.supportsEffort && m.supportedEffortLevels
+                    ? m.supportedEffortLevels
+                    : [];
                 return {
                   id: m.value,
                   label,
@@ -313,7 +425,13 @@ function loadClaudeModels(): Promise<ModelDef[]> {
         claudeModelsCache = result;
         return result;
       })
-      .catch(() => [] as ModelDef[]);
+      .catch((err) => {
+        // Cosmetic fallback: the picker renders a hardcoded list when
+        // this returns empty. Log so the failure is diagnosable — no
+        // user-facing alert, the picker degrades gracefully.
+        console.error("[List Claude models] failed:", err);
+        return [] as ModelDef[];
+      });
   }
   return claudeModelsPromise;
 }
@@ -355,10 +473,7 @@ function prettyCodexLabel(slug: string): string {
 // payload: OpenAI flags older models as "superseded" but they remain
 // fully usable and some users prefer them. Framing them as superseded
 // in the picker would make them feel obsolete, which they aren't.
-function codexSubtitle(model: {
-  model: string;
-  isDefault: boolean;
-}): string {
+function codexSubtitle(model: { model: string; isDefault: boolean }): string {
   if (model.isDefault) return "Most capable";
   const slug = model.model.toLowerCase();
   if (/-mini$/.test(slug)) return "Smaller, faster";
@@ -374,6 +489,40 @@ function codexSubtitle(model: {
 let codexModelsCache: ModelDef[] | null = null;
 let codexModelsPromise: Promise<ModelDef[]> | null = null;
 
+/**
+ * Pick the initial `selectedModel` for a freshly-mounted ChatView.
+ *
+ * Tries to honour the persisted `lastSelection` so users who ended
+ * their last session on Codex don't see Claude's label flash on
+ * re-open. Falls back to the first cached Claude model, then the first
+ * cached Codex model, then `null` (the sync effect inside the
+ * component will fill it in once a live list arrives).
+ */
+function pickInitialModel(): ModelDef | null {
+  try {
+    const raw = localStorage.getItem("lastSelection");
+    if (raw) {
+      const saved = JSON.parse(raw) as {
+        provider?: unknown;
+        modelId?: unknown;
+      };
+      const cache =
+        saved.provider === "codex" ? codexModelsCache : claudeModelsCache;
+      if (cache && typeof saved.modelId === "string") {
+        const match = cache.find((m) => m.id === saved.modelId);
+        if (match) return match;
+        // Known provider but unknown model (e.g. a model that was
+        // removed upstream) — fall back to the head of that list
+        // rather than crossing providers.
+        if (cache.length > 0) return cache[0];
+      }
+    }
+  } catch {
+    /* fall through to defaults */
+  }
+  return claudeModelsCache?.[0] ?? codexModelsCache?.[0] ?? null;
+}
+
 function loadCodexModels(): Promise<ModelDef[]> {
   if (codexModelsCache) return Promise.resolve(codexModelsCache);
   if (!codexModelsPromise) {
@@ -388,12 +537,19 @@ function loadCodexModels(): Promise<ModelDef[]> {
           label: prettyCodexLabel(m.model),
           subtitle: m.description.replace(/\.$/, ""),
           provider: "codex" as const,
-          supportedEfforts: m.supportedReasoningEfforts.map((e) => e.reasoningEffort),
+          supportedEfforts: m.supportedReasoningEfforts.map(
+            (e) => e.reasoningEffort,
+          ),
         }));
         codexModelsCache = result;
         return result;
       })
-      .catch(() => [] as ModelDef[]);
+      .catch((err) => {
+        // Same policy as Claude: log + fall through to empty so the
+        // picker's empty-list branch renders.
+        console.error("[List Codex models] failed:", err);
+        return [] as ModelDef[];
+      });
   }
   return codexModelsPromise;
 }
@@ -428,7 +584,11 @@ const CODEX_EFFORT: EffortDef[] = [
   { id: "high", label: "High", subtitle: "Thorough reasoning" },
   { id: "medium", label: "Medium", subtitle: "Balanced speed and quality" },
   { id: "low", label: "Low", subtitle: "Fast, minimal reasoning" },
-  { id: "minimal", label: "Minimal", subtitle: "Fastest, barely any reasoning" },
+  {
+    id: "minimal",
+    label: "Minimal",
+    subtitle: "Fastest, barely any reasoning",
+  },
 ];
 
 /* ── Modes ──────────────────────────────────────────────────── */
@@ -441,14 +601,34 @@ interface ModeDef {
 }
 
 const MODES: ModeDef[] = [
-  { id: "plan", label: "Plan mode", subtitle: "Outline a plan without making changes", comingSoon: true },
-  { id: "ask", label: "Ask before edits", subtitle: "Confirm each file change before applying", comingSoon: true },
-  { id: "auto", label: "Auto-accept edits", subtitle: "Apply changes without asking" },
+  {
+    id: "plan",
+    label: "Plan mode",
+    subtitle: "Outline a plan without making changes",
+    comingSoon: true,
+  },
+  {
+    id: "ask",
+    label: "Ask before edits",
+    subtitle: "Confirm each file change before applying",
+    comingSoon: true,
+  },
+  {
+    id: "auto",
+    label: "Auto-accept edits",
+    subtitle: "Apply changes without asking",
+  },
 ];
 
 /* ── File change card ────────────────────────────────────────── */
 
-function FileChangeCard({ changes, onOpenFile }: { changes: FileChange[]; onOpenFile?: (path: string) => void }) {
+function FileChangeCard({
+  changes,
+  onOpenFile,
+}: {
+  changes: FileChange[];
+  onOpenFile?: (path: string) => void;
+}) {
   const ctx = useContext(OpenFileContext);
   const total = changes.length;
   return (
@@ -463,7 +643,10 @@ function FileChangeCard({ changes, onOpenFile }: { changes: FileChange[]; onOpen
         className="flex items-center justify-between px-3 py-[6px]"
         style={{ borderBottom: "1px solid var(--border-subtle)" }}
       >
-        <span className="text-[13px] font-medium" style={{ color: "var(--text-secondary)" }}>
+        <span
+          className="text-[13px] font-medium"
+          style={{ color: "var(--text-secondary)" }}
+        >
           {total} file{total > 1 ? "s" : ""} changed
         </span>
         <button
@@ -486,7 +669,9 @@ function FileChangeCard({ changes, onOpenFile }: { changes: FileChange[]; onOpen
           onClick={() => onOpenFile?.(fc.path)}
           className="w-full flex items-center gap-2 px-3 py-[7px] transition-colors text-left"
           style={{ cursor: onOpenFile ? "pointer" : "default" }}
-          title={onOpenFile ? `Open in ${ctx?.editorLabel ?? "editor"}` : undefined}
+          title={
+            onOpenFile ? `Open in ${ctx?.editorLabel ?? "editor"}` : undefined
+          }
           onMouseEnter={(e) =>
             (e.currentTarget.style.background = "rgba(255,255,255,0.02)")
           }
@@ -494,7 +679,11 @@ function FileChangeCard({ changes, onOpenFile }: { changes: FileChange[]; onOpen
             (e.currentTarget.style.background = "transparent")
           }
         >
-          <FileText size={13} weight="regular" style={{ color: "var(--text-faint)" }} />
+          <FileText
+            size={13}
+            weight="regular"
+            style={{ color: "var(--text-faint)" }}
+          />
           <span
             className="flex-1 text-[13px] font-mono font-medium truncate"
             style={{ color: "var(--text-secondary)" }}
@@ -559,26 +748,136 @@ function ThinkingIndicator() {
   );
 }
 
-/* ── Streaming text with fade-in ─────────────────────────────── */
+/* ── Streaming markdown ──────────────────────────────────────── */
 
 /**
- * Renders streaming text where each word fades in individually.
- * Splits incoming chunks into words, each mounted as a separate span
- * with a staggered animation delay.
+ * Patches mid-stream markdown so incomplete syntax doesn't render as
+ * literal characters while we're waiting for the closer to arrive.
+ * Only handles the disruptive cases (unclosed fenced code blocks,
+ * unclosed links/images, unclosed inline code on the tail line).
+ * Bold/italic markers are left alone — they render as stray asterisks
+ * for one frame but aren't visually jarring.
  */
-function StreamingText({ text, isStreaming }: { text: string; isStreaming: boolean }) {
-  // Each entry: { token, key, delay, settled }
-  const tokens = useRef<{ token: string; key: number; delay: number; settled: boolean }[]>([]);
-  const prevLength = useRef(0);
+function closeOpenMarkdown(text: string): string {
+  let out = text;
+
+  // 1. Unclosed fenced code block: odd count of ``` at start of line.
+  const fenceMatches = out.match(/^```/gm);
+  if (fenceMatches && fenceMatches.length % 2 === 1) {
+    // Ensure the fence is on its own line before appending.
+    if (!out.endsWith("\n")) out += "\n";
+    out += "```";
+  }
+
+  // 2. Unclosed link / image at the very end: "[label](incomplete"
+  //    -> render as just "[label]" until the URL arrives.
+  out = out.replace(/(!?)\[([^\]\n]*)\]\([^)\n]*$/, "$1[$2]");
+
+  // 2b. Unclosed "[" or "![" with no closing "]" yet — strip it so the
+  //     user doesn't see a stray opening bracket for a frame. Note:
+  //     step 2 always produces a "]" when it fires, so the two rules
+  //     don't step on each other.
+  out = out.replace(/(!?)\[[^\]\n]*$/, "");
+
+  // 3. Unclosed inline backtick on the last line (outside fenced blocks).
+  //    If we already appended a closing fence above, the tail we care
+  //    about is the text *before* that fence.
+  const lastNewline = out.lastIndexOf("\n");
+  const lastLine = lastNewline === -1 ? out : out.slice(lastNewline + 1);
+  if (!lastLine.startsWith("```")) {
+    const tickCount = (lastLine.match(/`/g) ?? []).length;
+    if (tickCount % 2 === 1) out += "`";
+  }
+
+  return out;
+}
+
+/**
+ * Finds the last block-boundary ("\n\n") in `text` that sits OUTSIDE an
+ * open fenced code block. Returns the offset AFTER the boundary (i.e. the
+ * start of the next block), or 0 if there's no valid boundary yet.
+ *
+ * We need this because splitting inside an unclosed ``` fence would cut a
+ * code block in half — we want each markdown block to settle atomically.
+ */
+function findPendingStart(text: string): number {
+  let searchEnd = text.length;
+  while (searchEnd > 0) {
+    const idx = text.lastIndexOf("\n\n", searchEnd - 1);
+    if (idx === -1) return 0;
+    const before = text.slice(0, idx);
+    const fenceCount = (before.match(/^```/gm) ?? []).length;
+    if (fenceCount % 2 === 0) {
+      // Boundary is outside any open fence — safe to split here.
+      return idx + 2;
+    }
+    // Inside an open fence; look further back.
+    searchEnd = idx;
+  }
+  return 0;
+}
+
+/**
+ * Streams assistant text with two zones:
+ *   - Settled prefix (everything up to the last safe block boundary)
+ *     renders as live markdown via MarkdownContent.
+ *   - Pending block (the current block being typed) renders as a flat
+ *     list of word-spans in a single `<p>`. No markdown parsing in the
+ *     pending zone — raw `**`, `*`, backticks etc. show as literal
+ *     characters until the block graduates to settled. This is the
+ *     price of a rock-stable DOM: tokens use a monotonic key counter
+ *     so they never collide or remount, each token animates exactly
+ *     once on mount and then settles to a plain `<span>`, and no
+ *     ReactMarkdown re-parse of the pending text can trigger a
+ *     structural remount (because there's no structure).
+ * When a new block boundary arrives (pending window advances), the
+ * token array resets and the finished block graduates to settled
+ * markdown on the next tick.
+ */
+function StreamingText({
+  text,
+  isStreaming,
+}: {
+  text: string;
+  isStreaming: boolean;
+}) {
+  // Each entry is a single whitespace-delimited part of the pending
+  // text, with a monotonically-increasing key so React never reuses
+  // a span across different content.
+  const tokens = useRef<
+    { token: string; key: number; delay: number; settled: boolean }[]
+  >([]);
+  const pendingStart = useRef(0);
+  const prevPendingLength = useRef(0);
   const nextKey = useRef(0);
 
-  if (isStreaming && text.length > prevLength.current) {
-    // Settle all previous tokens immediately
-    for (const t of tokens.current) {
-      t.settled = true;
-    }
+  if (!isStreaming) {
+    // Streaming ended — reset state and render the full text as markdown.
+    tokens.current = [];
+    pendingStart.current = 0;
+    prevPendingLength.current = 0;
+    nextKey.current = 0;
+    return <MarkdownContent text={text} />;
+  }
 
-    const fresh = text.slice(prevLength.current);
+  const newPendingStart = findPendingStart(text);
+
+  // The pending window moved forward: a new block boundary was reached.
+  // Drop old tokens — that block is now part of the settled markdown.
+  if (newPendingStart > pendingStart.current) {
+    tokens.current = [];
+    prevPendingLength.current = 0;
+    pendingStart.current = newPendingStart;
+    // Keep nextKey monotonically increasing to guarantee unique keys.
+  }
+
+  const pending = text.slice(pendingStart.current);
+
+  if (pending.length > prevPendingLength.current) {
+    // Settle all prior tokens so they stop animating.
+    for (const t of tokens.current) t.settled = true;
+
+    const fresh = pending.slice(prevPendingLength.current);
     const parts = fresh.split(/(\s+)/);
     let wordIndex = 0;
     for (const part of parts) {
@@ -592,32 +891,32 @@ function StreamingText({ text, isStreaming }: { text: string; isStreaming: boole
       });
       if (isWord) wordIndex++;
     }
-    prevLength.current = text.length;
+    prevPendingLength.current = pending.length;
   }
 
-  if (!isStreaming) {
-    tokens.current = [];
-    prevLength.current = 0;
-    nextKey.current = 0;
-    return <MarkdownContent text={text} />;
-  }
+  const settled = text.slice(0, pendingStart.current);
 
   return (
     <>
-      {tokens.current.map(({ token, key, delay, settled }) =>
-        /^\s+$/.test(token) ? (
-          <span key={key}>{token}</span>
-        ) : settled ? (
-          <span key={key}>{token}</span>
-        ) : (
-          <span
-            key={key}
-            className="token-new"
-            style={{ animationDelay: `${delay}ms` }}
-          >
-            {token}
-          </span>
-        ),
+      {settled && <MarkdownContent text={closeOpenMarkdown(settled)} />}
+      {tokens.current.length > 0 && (
+        <p className="mb-3 last:mb-0">
+          {tokens.current.map(({ token, key, delay, settled: s }) =>
+            /^\s+$/.test(token) ? (
+              <span key={key}>{token}</span>
+            ) : s ? (
+              <span key={key}>{token}</span>
+            ) : (
+              <span
+                key={key}
+                className="token-new"
+                style={{ animationDelay: `${delay}ms` }}
+              >
+                {token}
+              </span>
+            ),
+          )}
+        </p>
       )}
     </>
   );
@@ -625,7 +924,13 @@ function StreamingText({ text, isStreaming }: { text: string; isStreaming: boole
 
 /* ── Message block ───────────────────────────────────────────── */
 
-function MessageHoverBar({ message, reverse }: { message: Message; reverse?: boolean }) {
+function MessageHoverBar({
+  message,
+  reverse,
+}: {
+  message: Message;
+  reverse?: boolean;
+}) {
   const [copied, setCopied] = useState(false);
 
   const timeStr = message.timestamp.toLocaleTimeString([], {
@@ -634,10 +939,19 @@ function MessageHoverBar({ message, reverse }: { message: Message; reverse?: boo
   });
 
   function handleCopy() {
-    navigator.clipboard.writeText(message.content).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    });
+    navigator.clipboard
+      .writeText(message.content)
+      .then(() => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      })
+      .catch((err) => {
+        // Electron occasionally rejects clipboard writes when the
+        // webContents isn't focused (e.g. devtools has focus). Log so
+        // the failure is diagnosable; the button just won't flip to
+        // "Copied".
+        console.error("[Copy message] clipboard write failed:", err);
+      });
   }
 
   return (
@@ -659,9 +973,18 @@ function MessageHoverBar({ message, reverse }: { message: Message; reverse?: boo
         }}
         title="Copy message"
       >
-        {copied ? <Check size={15} weight="bold" /> : <Copy size={15} weight="regular" />}
+        {copied ? (
+          <Check size={15} weight="bold" />
+        ) : (
+          <Copy size={15} weight="regular" />
+        )}
       </button>
-      <span className="text-[12px] font-medium" style={{ lineHeight: 1, color: "rgba(255,255,255,0.60)" }}>{timeStr}</span>
+      <span
+        className="text-[12px] font-medium"
+        style={{ lineHeight: 1, color: "rgba(255,255,255,0.60)" }}
+      >
+        {timeStr}
+      </span>
     </div>
   );
 }
@@ -739,7 +1062,10 @@ function toolSummary(name: string, input?: Record<string, unknown>): string {
 }
 
 /** Return the file path this tool targets, if any (Read/Edit/Write/apply_patch). */
-function toolFilePath(toolName: string, toolInput?: Record<string, unknown>): string | null {
+function toolFilePath(
+  toolName: string,
+  toolInput?: Record<string, unknown>,
+): string | null {
   if (!toolInput) return null;
   if (toolName === "Read" || toolName === "Edit" || toolName === "Write") {
     const fp = toolInput.file_path;
@@ -749,16 +1075,27 @@ function toolFilePath(toolName: string, toolInput?: Record<string, unknown>): st
     // Codex file_change: return the first changed file's path
     const changes = Array.isArray(toolInput.changes) ? toolInput.changes : [];
     const first = changes[0] as { path?: string } | undefined;
-    return typeof first?.path === "string" && first.path.length > 0 ? first.path : null;
+    return typeof first?.path === "string" && first.path.length > 0
+      ? first.path
+      : null;
   }
   return null;
 }
 
-function ToolUseIndicator({ toolName, toolInput, onOpenFile }: { toolName: string; toolInput?: Record<string, unknown>; onOpenFile?: (path: string) => void }) {
+function ToolUseIndicator({
+  toolName,
+  toolInput,
+  onOpenFile,
+}: {
+  toolName: string;
+  toolInput?: Record<string, unknown>;
+  onOpenFile?: (path: string) => void;
+}) {
   const ctx = useContext(OpenFileContext);
   const summary = toolSummary(toolName, toolInput);
   const maxLen = 120;
-  const display = summary.length > maxLen ? summary.slice(0, maxLen) + "…" : summary;
+  const display =
+    summary.length > maxLen ? summary.slice(0, maxLen) + "…" : summary;
   const filePath = toolFilePath(toolName, toolInput);
   const clickable = filePath && onOpenFile;
 
@@ -789,7 +1126,7 @@ function ToolUseIndicator({ toolName, toolInput, onOpenFile }: { toolName: strin
       className="flex items-center gap-2 py-1.5 px-1 text-[13px]"
       style={{
         color: "var(--text-muted)",
-        fontFamily: 'var(--font-code)',
+        fontFamily: "var(--font-code)",
       }}
     >
       <span className="truncate">{display}</span>
@@ -802,7 +1139,10 @@ function ToolUseIndicator({ toolName, toolInput, onOpenFile }: { toolName: strin
 function TokenProgressIndicator({ stats }: { stats: ContextStats }) {
   const r = 5.5;
   const circ = 2 * Math.PI * r;
-  const hasContext = stats.percentage != null && stats.totalTokens != null && stats.maxTokens != null;
+  const hasContext =
+    stats.percentage != null &&
+    stats.totalTokens != null &&
+    stats.maxTokens != null;
   const percent = hasContext ? Math.min(stats.percentage! / 100, 1) : 0;
   const offset = circ * (1 - percent);
   const pct = hasContext ? Math.round(stats.percentage!) : null;
@@ -828,10 +1168,19 @@ function TokenProgressIndicator({ stats }: { stats: ContextStats }) {
         }}
       >
         <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-          <circle cx="7" cy="7" r={r} stroke="currentColor" strokeOpacity="0.2" strokeWidth="1.5" />
+          <circle
+            cx="7"
+            cy="7"
+            r={r}
+            stroke="currentColor"
+            strokeOpacity="0.2"
+            strokeWidth="1.5"
+          />
           {hasContext && (
             <circle
-              cx="7" cy="7" r={r}
+              cx="7"
+              cy="7"
+              r={r}
               stroke="currentColor"
               strokeWidth="1.5"
               strokeDasharray={circ}
@@ -851,13 +1200,20 @@ function TokenProgressIndicator({ stats }: { stats: ContextStats }) {
           color: "var(--text-secondary)",
         }}
       >
-        <div className="font-semibold mb-1" style={{ color: "var(--text-primary)" }}>
+        <div
+          className="font-semibold mb-1"
+          style={{ color: "var(--text-primary)" }}
+        >
           Context window
         </div>
         {hasContext && pct != null ? (
           <>
-            <div className="mb-0.5">{pct}% used ({100 - pct}% left)</div>
-            <div>{fmt(stats.totalTokens!)} / {fmt(stats.maxTokens!)} tokens</div>
+            <div className="mb-0.5">
+              {pct}% used ({100 - pct}% left)
+            </div>
+            <div>
+              {fmt(stats.totalTokens!)} / {fmt(stats.maxTokens!)} tokens
+            </div>
           </>
         ) : (
           <div style={{ color: "var(--text-muted)" }}>Usage unavailable</div>
@@ -867,13 +1223,31 @@ function TokenProgressIndicator({ stats }: { stats: ContextStats }) {
   );
 }
 
-function MessageBlock({ message, isStreaming, showHoverBar, onImageClick, onOpenFile }: { message: Message; isStreaming: boolean; showHoverBar: boolean; onImageClick?: (url: string) => void; onOpenFile?: (path: string) => void }) {
+function MessageBlock({
+  message,
+  isStreaming,
+  showHoverBar,
+  onImageClick,
+  onOpenFile,
+}: {
+  message: Message;
+  isStreaming: boolean;
+  showHoverBar: boolean;
+  onImageClick?: (url: string) => void;
+  onOpenFile?: (path: string) => void;
+}) {
   if (message.collapsed) {
     return <CollapsedIndicator count={message.collapsed} />;
   }
 
   if (message.role === "tool_use") {
-    return <ToolUseIndicator toolName={message.toolName ?? "unknown"} toolInput={message.toolInput} onOpenFile={onOpenFile} />;
+    return (
+      <ToolUseIndicator
+        toolName={message.toolName ?? "unknown"}
+        toolInput={message.toolInput}
+        onOpenFile={onOpenFile}
+      />
+    );
   }
 
   const isUser = message.role === "user";
@@ -897,7 +1271,7 @@ function MessageBlock({ message, isStreaming, showHoverBar, onImageClick, onOpen
         )}
         {message.content && (
           <div
-            className="rounded-2xl px-5 py-3.5 text-[14px] leading-[1.6] font-medium break-words"
+            className="rounded-2xl px-5 py-3.5 text-[14px] leading-[1.6] font-medium break-words whitespace-pre-wrap"
             style={{
               background: "var(--surface-3)",
               color: "var(--text-primary)",
@@ -940,7 +1314,7 @@ const codeTheme: Record<string, React.CSSProperties> = {
   },
   'code[class*="language-"]': {
     background: "transparent",
-    fontFamily: 'var(--font-mono)',
+    fontFamily: "var(--font-mono)",
     fontSize: "13px",
     lineHeight: "1.55",
     color: "#ced4e0",
@@ -1027,17 +1401,28 @@ const LANG_LABELS: Record<string, string> = {
   text: "Text",
 };
 
-function CodeBlock({ language, children }: { language: string | undefined; children: string }) {
+function CodeBlock({
+  language,
+  children,
+}: {
+  language: string | undefined;
+  children: string;
+}) {
   const [copied, setCopied] = useState(false);
 
   const handleCopy = useCallback(() => {
-    navigator.clipboard.writeText(children).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    });
+    navigator.clipboard
+      .writeText(children)
+      .then(() => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      })
+      .catch((err) => {
+        console.error("[Copy code block] clipboard write failed:", err);
+      });
   }, [children]);
 
-  const label = language ? LANG_LABELS[language] ?? language : null;
+  const label = language ? (LANG_LABELS[language] ?? language) : null;
 
   return (
     <div
@@ -1058,7 +1443,10 @@ function CodeBlock({ language, children }: { language: string | undefined; child
         <button
           onClick={handleCopy}
           className="flex items-center rounded-lg p-1 -m-1 transition-colors cursor-pointer"
-          style={{ color: copied ? "#2EB67D" : "rgba(255,255,255,0.35)", lineHeight: 1 }}
+          style={{
+            color: copied ? "#2EB67D" : "rgba(255,255,255,0.35)",
+            lineHeight: 1,
+          }}
           onMouseEnter={(e) => {
             if (!copied) {
               e.currentTarget.style.color = "var(--text-primary)";
@@ -1066,12 +1454,18 @@ function CodeBlock({ language, children }: { language: string | undefined; child
             }
           }}
           onMouseLeave={(e) => {
-            e.currentTarget.style.color = copied ? "#2EB67D" : "rgba(255,255,255,0.35)";
+            e.currentTarget.style.color = copied
+              ? "#2EB67D"
+              : "rgba(255,255,255,0.35)";
             e.currentTarget.style.background = "transparent";
           }}
           title="Copy code"
         >
-          {copied ? <Check size={14} weight="bold" /> : <Copy size={14} weight="regular" />}
+          {copied ? (
+            <Check size={14} weight="bold" />
+          ) : (
+            <Copy size={14} weight="regular" />
+          )}
         </button>
       </div>
       {/* Highlighted code */}
@@ -1104,7 +1498,10 @@ function FileRefCode({ inner }: { inner: string }) {
   const ref = parseFileRef(inner);
   if (!ctx || !ref) {
     return (
-      <code className="font-mono text-[12.5px] font-semibold" style={{ color: "#6DC6FF" }}>
+      <code
+        className="font-mono text-[12.5px] font-semibold"
+        style={{ color: "#6DC6FF" }}
+      >
         {inner}
       </code>
     );
@@ -1134,40 +1531,60 @@ function MarkdownContent({ text }: { text: string }) {
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
       components={{
-        p: ({ children }) => (
-          <p className="mb-3 last:mb-0">{children}</p>
-        ),
+        p: ({ children }) => <p className="mb-3 last:mb-0">{children}</p>,
         strong: ({ children }) => (
-          <strong className="font-semibold" style={{ color: "var(--text-primary)" }}>{children}</strong>
+          <strong
+            className="font-semibold"
+            style={{ color: "var(--text-primary)" }}
+          >
+            {children}
+          </strong>
         ),
-        em: ({ children }) => (
-          <em className="italic">{children}</em>
-        ),
+        em: ({ children }) => <em className="italic">{children}</em>,
         h1: ({ children }) => (
-          <h1 className="text-[17px] font-semibold mt-4 mb-2 first:mt-0" style={{ color: "var(--text-primary)" }}>{children}</h1>
+          <h1
+            className="text-[17px] font-semibold mt-4 mb-2 first:mt-0"
+            style={{ color: "var(--text-primary)" }}
+          >
+            {children}
+          </h1>
         ),
         h2: ({ children }) => (
-          <h2 className="text-[15px] font-semibold mt-4 mb-2 first:mt-0" style={{ color: "var(--text-primary)" }}>{children}</h2>
+          <h2
+            className="text-[15px] font-semibold mt-4 mb-2 first:mt-0"
+            style={{ color: "var(--text-primary)" }}
+          >
+            {children}
+          </h2>
         ),
         h3: ({ children }) => (
-          <h3 className="text-[14px] font-semibold mt-3 mb-1.5 first:mt-0" style={{ color: "var(--text-primary)" }}>{children}</h3>
+          <h3
+            className="text-[14px] font-semibold mt-3 mb-1.5 first:mt-0"
+            style={{ color: "var(--text-primary)" }}
+          >
+            {children}
+          </h3>
         ),
         ul: ({ children }) => (
-          <ul className="mb-3 last:mb-0 pl-5 space-y-1 list-disc">{children}</ul>
+          <ul className="mb-3 last:mb-0 pl-5 space-y-1 list-disc">
+            {children}
+          </ul>
         ),
         ol: ({ children }) => (
-          <ol className="mb-3 last:mb-0 pl-5 space-y-1 list-decimal">{children}</ol>
+          <ol className="mb-3 last:mb-0 pl-5 space-y-1 list-decimal">
+            {children}
+          </ol>
         ),
-        li: ({ children }) => (
-          <li className="leading-[1.65]">{children}</li>
-        ),
+        li: ({ children }) => <li className="leading-[1.65]">{children}</li>,
         code: ({ children, className }) => {
           const codeString = String(children).replace(/\n$/, "");
           // Block code: has language class OR contains newlines (fenced block without lang)
           const hasLang = className?.includes("language-");
           const isBlock = hasLang || codeString.includes("\n");
           if (isBlock) {
-            const language = hasLang ? className?.replace("language-", "") : undefined;
+            const language = hasLang
+              ? className?.replace("language-", "")
+              : undefined;
             return <CodeBlock language={language}>{codeString}</CodeBlock>;
           }
           const inner = String(children);
@@ -1187,9 +1604,7 @@ function MarkdownContent({ text }: { text: string }) {
             </code>
           );
         },
-        pre: ({ children }) => (
-          <pre className="mb-3 last:mb-0">{children}</pre>
-        ),
+        pre: ({ children }) => <pre className="mb-3 last:mb-0">{children}</pre>,
         blockquote: ({ children }) => (
           <blockquote
             className="pl-3 my-2 italic"
@@ -1202,27 +1617,54 @@ function MarkdownContent({ text }: { text: string }) {
           </blockquote>
         ),
         hr: () => (
-          <hr className="my-3" style={{ borderColor: "var(--border-subtle)" }} />
+          <hr
+            className="my-3"
+            style={{ borderColor: "var(--border-subtle)" }}
+          />
         ),
         table: ({ children }) => (
-          <div className="mb-3 last:mb-0 overflow-x-auto rounded-2xl" style={{ border: "2px solid var(--border-subtle)" }}>
-            <table className="w-full text-[13px]">
-              {children}
-            </table>
+          <div
+            className="mb-3 last:mb-0 overflow-x-auto rounded-2xl"
+            style={{ border: "2px solid var(--border-subtle)" }}
+          >
+            <table className="w-full text-[13px]">{children}</table>
           </div>
         ),
         thead: ({ children }) => (
-          <thead style={{ background: "rgba(255,255,255,0.06)" }}>{children}</thead>
+          <thead style={{ background: "rgba(255,255,255,0.06)" }}>
+            {children}
+          </thead>
         ),
         tbody: ({ children }) => <tbody>{children}</tbody>,
         tr: ({ children }) => (
-          <tr className="border-b-2 last:border-b-0" style={{ borderColor: "var(--border-subtle)" }}>{children}</tr>
+          <tr
+            className="border-b-2 last:border-b-0"
+            style={{ borderColor: "var(--border-subtle)" }}
+          >
+            {children}
+          </tr>
         ),
         th: ({ children }) => (
-          <th className="px-3 py-2 text-left font-semibold border-r-2 last:border-r-0" style={{ color: "var(--text-primary)", borderColor: "var(--border-subtle)" }}>{children}</th>
+          <th
+            className="px-3 py-2 text-left font-semibold border-r-2 last:border-r-0"
+            style={{
+              color: "var(--text-primary)",
+              borderColor: "var(--border-subtle)",
+            }}
+          >
+            {children}
+          </th>
         ),
         td: ({ children }) => (
-          <td className="px-3 py-2 border-r-2 last:border-r-0" style={{ color: "var(--text-secondary)", borderColor: "var(--border-subtle)" }}>{children}</td>
+          <td
+            className="px-3 py-2 border-r-2 last:border-r-0"
+            style={{
+              color: "var(--text-secondary)",
+              borderColor: "var(--border-subtle)",
+            }}
+          >
+            {children}
+          </td>
         ),
       }}
     >
@@ -1246,47 +1688,59 @@ function TextareaWithScrollbar({
   onKeyDown: React.KeyboardEventHandler<HTMLTextAreaElement>;
   onPaste?: React.ClipboardEventHandler<HTMLTextAreaElement>;
 }) {
-  const [thumb, setThumb] = useState<{ top: number; height: number } | null>(null);
+  const [thumb, setThumb] = useState<{ top: number; height: number } | null>(
+    null,
+  );
   const [scrolling, setScrolling] = useState(false);
   const [hovered, setHovered] = useState(false);
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const updateThumb = useCallback((el: HTMLTextAreaElement) => {
     const maxH = 140;
-    if (el.scrollHeight <= maxH) { setThumb(null); return; }
+    if (el.scrollHeight <= maxH) {
+      setThumb(null);
+      return;
+    }
     const ratio = maxH / el.scrollHeight;
     const height = Math.max(ratio * maxH, 24);
     const top = (el.scrollTop / el.scrollHeight) * maxH;
     setThumb({ height, top });
   }, []);
 
-  const onScroll = useCallback((e: React.UIEvent<HTMLTextAreaElement>) => {
-    updateThumb(e.currentTarget);
-    setScrolling(true);
-    if (hideTimer.current) clearTimeout(hideTimer.current);
-    hideTimer.current = setTimeout(() => setScrolling(false), 1000);
-  }, [updateThumb]);
+  const onScroll = useCallback(
+    (e: React.UIEvent<HTMLTextAreaElement>) => {
+      updateThumb(e.currentTarget);
+      setScrolling(true);
+      if (hideTimer.current) clearTimeout(hideTimer.current);
+      hideTimer.current = setTimeout(() => setScrolling(false), 1000);
+    },
+    [updateThumb],
+  );
 
-  const onThumbMouseDown = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    const el = textareaRef.current;
-    if (!el || !thumb) return;
-    const startY = e.clientY;
-    const startScrollTop = el.scrollTop;
-    const maxH = 140;
-    const thumbRange = maxH - thumb.height;
-    const scrollRange = el.scrollHeight - maxH;
-    const onMove = (ev: MouseEvent) => {
-      el.scrollTop = startScrollTop + ((ev.clientY - startY) / thumbRange) * scrollRange;
-      updateThumb(el);
-    };
-    const onUp = () => {
-      document.removeEventListener("mousemove", onMove);
-      document.removeEventListener("mouseup", onUp);
-    };
-    document.addEventListener("mousemove", onMove);
-    document.addEventListener("mouseup", onUp);
-  }, [textareaRef, thumb, updateThumb]);
+  const onThumbMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      const el = textareaRef.current;
+      if (!el || !thumb) return;
+      const startY = e.clientY;
+      const startScrollTop = el.scrollTop;
+      const maxH = 140;
+      const thumbRange = maxH - thumb.height;
+      const scrollRange = el.scrollHeight - maxH;
+      const onMove = (ev: MouseEvent) => {
+        el.scrollTop =
+          startScrollTop + ((ev.clientY - startY) / thumbRange) * scrollRange;
+        updateThumb(el);
+      };
+      const onUp = () => {
+        document.removeEventListener("mousemove", onMove);
+        document.removeEventListener("mouseup", onUp);
+      };
+      document.addEventListener("mousemove", onMove);
+      document.addEventListener("mouseup", onUp);
+    },
+    [textareaRef, thumb, updateThumb],
+  );
 
   return (
     <div className="relative">
@@ -1307,13 +1761,15 @@ function TextareaWithScrollbar({
         placeholder="Ask for follow-up changes"
         rows={1}
         className="w-full bg-transparent text-[14px] font-medium px-4 pt-3 pb-1 resize-none outline-none placeholder:text-[var(--text-faint)] hide-native-scrollbar"
-        style={{
-          color: "var(--text-primary)",
-          minHeight: "36px",
-          maxHeight: "140px",
-          overflowY: "hidden",
-          scrollbarWidth: "none",
-        } as React.CSSProperties}
+        style={
+          {
+            color: "var(--text-primary)",
+            minHeight: "36px",
+            maxHeight: "140px",
+            overflowY: "hidden",
+            scrollbarWidth: "none",
+          } as React.CSSProperties
+        }
       />
       {thumb && (
         <div
@@ -1322,7 +1778,9 @@ function TextareaWithScrollbar({
             top: thumb.top + 4,
             height: thumb.height - 8,
             width: 8,
-            background: hovered ? "rgba(255,255,255,0.24)" : "rgba(255,255,255,0.14)",
+            background: hovered
+              ? "rgba(255,255,255,0.24)"
+              : "rgba(255,255,255,0.14)",
             borderRadius: 100,
             opacity: scrolling || hovered ? 1 : 0,
           }}
@@ -1339,10 +1797,16 @@ function TextareaWithScrollbar({
 
 interface ChatViewProps {
   thread: Thread | null;
+  projects?: ProjectInfo[];
   projectCwd?: string;
   projectName?: string;
   isLoading?: boolean;
-  onSend: (threadId: string, text: string, images?: ImagePayload[], opts?: { model?: string; effort?: string }) => void;
+  onSend: (
+    threadId: string,
+    text: string,
+    images?: ImagePayload[],
+    opts?: { model?: string; effort?: string },
+  ) => void;
   onInterrupt: (threadId: string) => void;
   onRespondToTool: (threadId: string, toolUseId: string, text: string) => void;
   /**
@@ -1351,30 +1815,75 @@ interface ChatViewProps {
    * threads — provider is frozen after session_init.
    */
   onUpdateThreadProvider?: (threadId: string, provider: Provider) => void;
+  /** Reassign a thread to a different project (or null to ungroup). */
+  onChangeThreadProject?: (threadId: string, projectId: string | null) => void;
+  /**
+   * Create a new project via the native folder picker and return it,
+   * without spawning a new thread. Used by the in-hero project-switcher
+   * so the current thread can be moved into a just-created project.
+   */
+  onCreateProject?: () => Promise<ProjectInfo | null>;
+  /**
+   * Kick off a new chat (resolves to a project via App.handleNewChat,
+   * or opens the folder picker if no projects exist). Used by the
+   * empty-app zero-state CTA.
+   */
+  onNewChat?: () => void;
 }
 
-export function ChatView({ thread, projectCwd, projectName, isLoading, onSend, onInterrupt, onRespondToTool, onUpdateThreadProvider }: ChatViewProps) {
+export function ChatView({
+  thread,
+  projects,
+  projectCwd,
+  projectName,
+  isLoading,
+  onSend,
+  onInterrupt,
+  onRespondToTool,
+  onUpdateThreadProvider,
+  onChangeThreadProject,
+  onCreateProject,
+  onNewChat,
+}: ChatViewProps) {
   const [input, setInput] = useState("");
   // GOTCHA: `selectedModel` is the unified picker state. When the user
   // picks a Codex model on a pending thread, we also call
   // `onUpdateThreadProvider` to flip the thread.provider so subsequent
   // handleSend routes to the Codex backend.
-  // `selectedModel` starts null on a fresh mount — the real default
-  // is picked once the live list loads (see the effect below that
-  // auto-syncs it when claudeModels/codexModels arrive). The last
-  // user-picked id is remembered in localStorage and re-applied once
-  // the list for its provider loads.
-  const [selectedModel, setSelectedModel] = useState<ModelDef | null>(
-    claudeModelsCache?.[0] ?? null,
+  //
+  // Initial value: honour the persisted `lastSelection` if we already
+  // have that provider's list cached (subsequent mounts in the same
+  // app session). Previously this hardcoded Claude even when the user's
+  // last session ended on Codex, producing a one-frame flash of the
+  // wrong picker label before the sync effect corrected it.
+  //
+  // If no cache is available, we start `null` and the effect below
+  // sets the real default once the first live list resolves.
+  const [selectedModel, setSelectedModel] = useState<ModelDef | null>(() =>
+    pickInitialModel(),
   );
   // Live Claude + Codex model lists, fetched from the respective
   // SDK/CLI on mount. Start from the module-level cache if a previous
   // mount already loaded them; otherwise empty until loadXxx resolves.
-  const [claudeModels, setClaudeModels] = useState<ModelDef[]>(claudeModelsCache ?? []);
-  const [codexModels, setCodexModels] = useState<ModelDef[]>(codexModelsCache ?? []);
+  const [claudeModels, setClaudeModels] = useState<ModelDef[]>(
+    claudeModelsCache ?? [],
+  );
+  const [codexModels, setCodexModels] = useState<ModelDef[]>(
+    codexModelsCache ?? [],
+  );
+  // CLI availability. `null` = not yet probed (optimistic — treat both
+  // as available so we don't flash "Not installed" badges on launch).
+  // Once resolved, the model picker greys out whichever provider's CLI
+  // isn't on $PATH and surfaces an install hint next to the section
+  // header. See preload.ts → session:check.
+  const [providers, setProviders] = useState<{
+    claude: boolean;
+    codex: boolean;
+  } | null>(null);
   useEffect(() => {
     loadClaudeModels().then(setClaudeModels);
     loadCodexModels().then(setCodexModels);
+    window.openclawdex.checkProviders().then(setProviders);
   }, []);
   const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
   const modelDropdownRef = useRef<HTMLDivElement>(null);
@@ -1390,7 +1899,10 @@ export function ChatView({ thread, projectCwd, projectName, isLoading, onSend, o
   const [modeDropdownOpen, setModeDropdownOpen] = useState(false);
   const modeDropdownRef = useRef<HTMLDivElement>(null);
   const [editorDropdownOpen, setEditorDropdownOpen] = useState(false);
-  const [editorDropdownPos, setEditorDropdownPos] = useState<{ top: number; right: number } | null>(null);
+  const [editorDropdownPos, setEditorDropdownPos] = useState<{
+    top: number;
+    right: number;
+  } | null>(null);
   const editorCaretRef = useRef<HTMLButtonElement>(null);
   const [preferredEditor, setPreferredEditor] = useState<EditorTarget>(() => {
     const stored = localStorage.getItem("preferredEditor");
@@ -1422,22 +1934,22 @@ export function ChatView({ thread, projectCwd, projectName, isLoading, onSend, o
     });
   }, [thread?.id]);
 
-  const addFiles = useCallback((files: FileList | File[]) => {
-    // GOTCHA: Codex threads don't support images in v1. The SDK wants
-    // filesystem paths (local_image) rather than base64, and we'd have
-    // to round-trip through the main process to write temp files. For
-    // now we silently ignore attachments on Codex threads.
-    if (thread?.provider === "codex") return;
-    const images = Array.from(files).filter((f) => f.type.startsWith("image/"));
-    if (images.length === 0) return;
-    const newAttachments: ImageAttachment[] = images.map((file) => ({
-      id: crypto.randomUUID(),
-      file,
-      name: file.name,
-      previewUrl: URL.createObjectURL(file),
-    }));
-    setAttachments((prev) => [...prev, ...newAttachments]);
-  }, [thread?.provider]);
+  const addFiles = useCallback(
+    (files: FileList | File[]) => {
+      const images = Array.from(files).filter((f) =>
+        f.type.startsWith("image/"),
+      );
+      if (images.length === 0) return;
+      const newAttachments: ImageAttachment[] = images.map((file) => ({
+        id: crypto.randomUUID(),
+        file,
+        name: file.name,
+        previewUrl: URL.createObjectURL(file),
+      }));
+      setAttachments((prev) => [...prev, ...newAttachments]);
+    },
+    [thread?.provider],
+  );
 
   const removeAttachment = useCallback((id: string) => {
     setAttachments((prev) => {
@@ -1471,30 +1983,36 @@ export function ChatView({ thread, projectCwd, projectName, isLoading, onSend, o
     }
   }, []);
 
-  const handleDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    dragCounter.current = 0;
-    setIsDragOver(false);
-    if (e.dataTransfer.files.length > 0) {
-      addFiles(e.dataTransfer.files);
-    }
-  }, [addFiles]);
+  const handleDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      dragCounter.current = 0;
+      setIsDragOver(false);
+      if (e.dataTransfer.files.length > 0) {
+        addFiles(e.dataTransfer.files);
+      }
+    },
+    [addFiles],
+  );
 
   // Paste handler for images
-  const handlePaste = useCallback((e: React.ClipboardEvent) => {
-    const items = e.clipboardData.items;
-    const imageFiles: File[] = [];
-    for (let i = 0; i < items.length; i++) {
-      if (items[i].type.startsWith("image/")) {
-        const file = items[i].getAsFile();
-        if (file) imageFiles.push(file);
+  const handlePaste = useCallback(
+    (e: React.ClipboardEvent) => {
+      const items = e.clipboardData.items;
+      const imageFiles: File[] = [];
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].type.startsWith("image/")) {
+          const file = items[i].getAsFile();
+          if (file) imageFiles.push(file);
+        }
       }
-    }
-    if (imageFiles.length > 0) {
-      addFiles(imageFiles);
-    }
-  }, [addFiles]);
+      if (imageFiles.length > 0) {
+        addFiles(imageFiles);
+      }
+    },
+    [addFiles],
+  );
 
   const handleMessagesScroll = useCallback((el: HTMLDivElement) => {
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
@@ -1505,7 +2023,10 @@ export function ChatView({ thread, projectCwd, projectName, isLoading, onSend, o
   // Scroll to bottom: instant on thread switch or history load, smooth for new messages
   useLayoutEffect(() => {
     const threadChanged = thread?.id !== currentThreadIdRef.current;
-    const historyJustLoaded = !threadChanged && !!thread?.historyLoaded && !prevHistoryLoadedRef.current;
+    const historyJustLoaded =
+      !threadChanged &&
+      !!thread?.historyLoaded &&
+      !prevHistoryLoadedRef.current;
 
     currentThreadIdRef.current = thread?.id;
     prevHistoryLoadedRef.current = thread?.historyLoaded;
@@ -1530,7 +2051,11 @@ export function ChatView({ thread, projectCwd, projectName, isLoading, onSend, o
     const hasContent = input.trim() || attachments.length > 0;
     if (!thread || !hasContent || thread.status === "running") return;
 
-    // Convert attachments to base64
+    // Convert attachments to base64. If the File was sourced from the
+    // OS (drag-drop), Electron exposes its real path on `file.path` —
+    // we pass that through so the Codex backend can use it directly
+    // without materializing a tempfile. Clipboard-paste files have no
+    // backing path, so `path` stays undefined for those.
     let images: ImagePayload[] | undefined;
     if (attachments.length > 0) {
       images = await Promise.all(
@@ -1542,7 +2067,15 @@ export function ChatView({ thread, projectCwd, projectName, isLoading, onSend, o
                 const dataUrl = reader.result as string;
                 // Strip the data:image/xxx;base64, prefix
                 const base64 = dataUrl.split(",")[1];
-                resolve({ name: a.name, base64, mediaType: a.file.type });
+                // `File.path` is Electron-only and not in the DOM lib
+                // typings. Fall back to undefined for clipboard pastes.
+                const osPath = (a.file as File & { path?: string }).path;
+                resolve({
+                  name: a.name,
+                  base64,
+                  mediaType: a.file.type,
+                  ...(osPath && { path: osPath }),
+                });
               };
               reader.readAsDataURL(a.file);
             }),
@@ -1550,7 +2083,8 @@ export function ChatView({ thread, projectCwd, projectName, isLoading, onSend, o
       );
     }
 
-    const effort = thread.provider === "codex" ? codexEffort.id : claudeEffort.id;
+    const effort =
+      thread.provider === "codex" ? codexEffort.id : claudeEffort.id;
     // `selectedModel` can be null during the brief window before the
     // live model list arrives. Omit the model field so the backend
     // falls back to the CLI's own default for the provider.
@@ -1574,12 +2108,19 @@ export function ChatView({ thread, projectCwd, projectName, isLoading, onSend, o
   const handleOpenInEditor = useCallback(
     (target: string, line?: number, editor?: EditorTarget) => {
       const effective = editor ?? preferredEditor;
-      window.openclawdex?.openInEditor(target, projectCwd, line, effective).then((res) => {
-        if (!res.ok && res.message) {
-          // Fall back to a native alert; no toast infra yet.
-          alert(res.message);
-        }
-      });
+      window.openclawdex
+        ?.openInEditor(target, projectCwd, line, effective)
+        .then((res) => {
+          if (!res.ok && res.message) {
+            // Fall back to a native alert; no toast infra yet.
+            alert(res.message);
+          }
+        })
+        .catch((err) => {
+          console.error("[Open in editor] failed:", err);
+          const msg = err instanceof Error ? err.message : String(err);
+          alert(`Open in editor failed: ${msg}`);
+        });
     },
     [projectCwd, preferredEditor],
   );
@@ -1587,13 +2128,25 @@ export function ChatView({ thread, projectCwd, projectName, isLoading, onSend, o
   useEffect(() => {
     if (!modelDropdownOpen && !effortDropdownOpen && !modeDropdownOpen) return;
     const handleClick = (e: MouseEvent) => {
-      if (modelDropdownOpen && modelDropdownRef.current && !modelDropdownRef.current.contains(e.target as Node)) {
+      if (
+        modelDropdownOpen &&
+        modelDropdownRef.current &&
+        !modelDropdownRef.current.contains(e.target as Node)
+      ) {
         setModelDropdownOpen(false);
       }
-      if (effortDropdownOpen && effortDropdownRef.current && !effortDropdownRef.current.contains(e.target as Node)) {
+      if (
+        effortDropdownOpen &&
+        effortDropdownRef.current &&
+        !effortDropdownRef.current.contains(e.target as Node)
+      ) {
         setEffortDropdownOpen(false);
       }
-      if (modeDropdownOpen && modeDropdownRef.current && !modeDropdownRef.current.contains(e.target as Node)) {
+      if (
+        modeDropdownOpen &&
+        modeDropdownRef.current &&
+        !modeDropdownRef.current.contains(e.target as Node)
+      ) {
         setModeDropdownOpen(false);
       }
     };
@@ -1614,38 +2167,64 @@ export function ChatView({ thread, projectCwd, projectName, isLoading, onSend, o
   useEffect(() => {
     if (!thread) return;
     const raw = localStorage.getItem("lastSelection");
-    const saved = raw ? (() => { try { return JSON.parse(raw); } catch { return null; } })() : null;
-    const savedProvider: Provider | undefined = saved?.provider === "claude" || saved?.provider === "codex" ? saved.provider : undefined;
+    const saved = raw
+      ? (() => {
+          try {
+            return JSON.parse(raw);
+          } catch {
+            return null;
+          }
+        })()
+      : null;
+    const savedProvider: Provider | undefined =
+      saved?.provider === "claude" || saved?.provider === "codex"
+        ? saved.provider
+        : undefined;
     // For a pending thread, honour whatever provider was last picked by
     // flipping thread.provider if needed. Started threads are locked.
-    const isPending = thread.messages.length === 0 && thread.sessionId === undefined;
-    const targetProvider = isPending && savedProvider ? savedProvider : thread.provider;
+    const isPending =
+      thread.messages.length === 0 && thread.sessionId === undefined;
+    const targetProvider =
+      isPending && savedProvider ? savedProvider : thread.provider;
     const list = targetProvider === "claude" ? claudeModels : codexModels;
-    console.log("[model-restore] thread=%s provider=%s isPending=%s saved=%o targetProvider=%s list.length=%d", thread.id.slice(0, 8), thread.provider, isPending, saved, targetProvider, list.length);
-    if (list.length === 0) { console.log("[model-restore] → skipped (list empty)"); return; }
+    if (list.length === 0) return;
     const ok =
       selectedModel &&
       selectedModel.provider === targetProvider &&
       list.some((m) => m.id === selectedModel.id);
     if (isPending && targetProvider !== thread.provider) {
-      console.log("[model-restore] → flipping thread provider to %s", targetProvider);
       onUpdateThreadProvider?.(thread.id, targetProvider);
     }
-    if (ok) { console.log("[model-restore] → already ok, selectedModel=%s", selectedModel?.id); return; }
-    const restored = saved?.modelId ? list.find((m) => m.id === saved.modelId) : undefined;
-    console.log("[model-restore] → setSelectedModel to %s (fallback=%s)", restored?.id ?? list[0]?.id, !restored);
+    if (ok) return;
+    const restored = saved?.modelId
+      ? list.find((m) => m.id === saved.modelId)
+      : undefined;
     setSelectedModel(restored ?? list[0]);
-  }, [thread, selectedModel, claudeModels, codexModels, onUpdateThreadProvider]);
+  }, [
+    thread,
+    selectedModel,
+    claudeModels,
+    codexModels,
+    onUpdateThreadProvider,
+  ]);
 
   // Restore the effort for the current provider whenever the selected model changes.
   useEffect(() => {
     if (!selectedModel || !thread) return;
     const raw = localStorage.getItem("lastSelection");
-    const saved = raw ? (() => { try { return JSON.parse(raw); } catch { return null; } })() : null;
+    const saved = raw
+      ? (() => {
+          try {
+            return JSON.parse(raw);
+          } catch {
+            return null;
+          }
+        })()
+      : null;
     const base = thread.provider === "codex" ? CODEX_EFFORT : CLAUDE_EFFORT;
-    const fallback = thread.provider === "codex" ? CODEX_EFFORT[2] : CLAUDE_EFFORT[1];
+    const fallback =
+      thread.provider === "codex" ? CODEX_EFFORT[2] : CLAUDE_EFFORT[1];
     const restored = base.find((e) => e.id === saved?.effortId) ?? fallback;
-    console.log("[effort-restore] model=%s provider=%s savedEffort=%s → restored=%s", selectedModel.id, thread.provider, saved?.effortId, restored.id);
     if (thread.provider === "codex") setCodexEffort(restored);
     else setClaudeEffort(restored);
   }, [selectedModel?.id, thread?.provider]);
@@ -1676,23 +2255,93 @@ export function ChatView({ thread, projectCwd, projectName, isLoading, onSend, o
     const fallback =
       list.find((e) => e.id === "high") ?? list[Math.floor(list.length / 2)];
     if (fallback) setCurrent(fallback);
-  }, [thread, selectedModel, claudeModels, codexModels, claudeEffort, codexEffort]);
+  }, [
+    thread,
+    selectedModel,
+    claudeModels,
+    codexModels,
+    claudeEffort,
+    codexEffort,
+  ]);
 
   if (!thread) {
+    // Two no-thread states:
+    //   1. Loading — spinner while bootstrap is in flight.
+    //   2. No projects exist at all (fresh install, or user just
+    //      deleted the last one) — zero-state hero with a CTA that
+    //      mirrors the sidebar's "New thread" button. Uses handleNewChat's
+    //      fallback chain to open the folder picker.
+    //   3. Otherwise — thread was deselected but projects exist; quiet
+    //      placeholder (old behavior).
+    const noProjects = !isLoading && (projects?.length ?? 0) === 0;
     return (
-      <div className="flex-1 flex items-center justify-center">
+      <div className="flex-1 flex items-center justify-center px-8">
         {isLoading ? (
           <svg
-            width="20" height="20" viewBox="0 0 20 20"
+            width="20"
+            height="20"
+            viewBox="0 0 20 20"
             fill="none"
             className="animate-spin"
             style={{ color: "var(--text-muted)" }}
           >
-            <circle cx="10" cy="10" r="8" stroke="currentColor" strokeWidth="2" strokeOpacity="0.2" />
-            <path d="M10 2a8 8 0 0 1 8 8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+            <circle
+              cx="10"
+              cy="10"
+              r="8"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeOpacity="0.2"
+            />
+            <path
+              d="M10 2a8 8 0 0 1 8 8"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+            />
           </svg>
+        ) : noProjects ? (
+          <div
+            className="flex flex-col items-center gap-6 text-center"
+            style={{ animation: "fadeIn 120ms ease" }}
+          >
+            <div
+              className="text-[28px] font-medium tracking-tight leading-tight"
+              style={{ color: "var(--text-muted)" }}
+            >
+              What are we building today?
+            </div>
+            {onNewChat && (
+              <button
+                onClick={onNewChat}
+                className="flex items-center gap-2 px-3 py-[10px] rounded-xl text-[13px] font-medium transition-colors"
+                style={{
+                  background: "rgba(255, 255, 255, 0.06)",
+                  color: "var(--text-primary)",
+                  border: "1px solid rgba(255, 255, 255, 0.1)",
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background =
+                    "rgba(255, 255, 255, 0.12)";
+                  e.currentTarget.style.borderColor =
+                    "rgba(255, 255, 255, 0.16)";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background =
+                    "rgba(255, 255, 255, 0.06)";
+                  e.currentTarget.style.borderColor =
+                    "rgba(255, 255, 255, 0.1)";
+                }}
+              >
+                <Plus size={15} weight="bold" />
+                Point us at a folder
+              </button>
+            )}
+          </div>
         ) : (
-          <span className="text-[13px]" style={{ color: "var(--text-muted)" }}>No thread selected</span>
+          <span className="text-[13px]" style={{ color: "var(--text-muted)" }}>
+            No thread selected
+          </span>
         )}
       </div>
     );
@@ -1706,7 +2355,15 @@ export function ChatView({ thread, projectCwd, projectName, isLoading, onSend, o
   // server-side session and changing the model retroactively doesn't
   // make sense. (`isStarted` alone isn't enough because a committed
   // thread whose history hasn't loaded yet also has messages.length=0.)
-  const isStarted = thread.messages.length > 0 || thread.sessionId !== undefined;
+  const isStarted =
+    thread.messages.length > 0 || thread.sessionId !== undefined;
+
+  // Both CLIs missing → no agent to pick a model/effort for, and no
+  // reason to show a composer. We swap the entire composer for two
+  // prominent install links. We require both flags to be explicitly
+  // `false` — `null` means we haven't probed yet and we don't want to
+  // flash install links at launch.
+  const bothMissing = providers?.claude === false && providers?.codex === false;
 
   // If the currently-selected model doesn't match the thread's
   // provider (e.g. thread is Codex but we still have Claude Opus
@@ -1716,15 +2373,18 @@ export function ChatView({ thread, projectCwd, projectName, isLoading, onSend, o
   const displayedModel: ModelDef | null =
     selectedModel && selectedModel.provider === thread.provider
       ? selectedModel
-      : (isClaude ? claudeModels[0] : codexModels[0]) ?? null;
+      : ((isClaude ? claudeModels[0] : codexModels[0]) ?? null);
   const modelLabel = displayedModel?.label ?? "Loading models…";
   const baseEffortList = isCodex ? CODEX_EFFORT : CLAUDE_EFFORT;
   // Filter the provider's full effort list down to the ones the
   // selected model supports. While no model is resolved yet, show
   // the full base list so the picker isn't empty.
-  const effortList = !displayedModel || displayedModel.supportedEfforts === undefined
-    ? baseEffortList
-    : baseEffortList.filter((e) => displayedModel.supportedEfforts!.includes(e.id));
+  const effortList =
+    !displayedModel || displayedModel.supportedEfforts === undefined
+      ? baseEffortList
+      : baseEffortList.filter((e) =>
+          displayedModel.supportedEfforts!.includes(e.id),
+        );
   const selectedEffort = isCodex ? codexEffort : claudeEffort;
   const setSelectedEffort = isCodex ? setCodexEffort : setClaudeEffort;
   // Hide the effort picker entirely for models that don't support
@@ -1732,509 +2392,663 @@ export function ChatView({ thread, projectCwd, projectName, isLoading, onSend, o
   const showEffortPicker = effortList.length > 0;
 
   return (
-    <OpenFileContext.Provider value={{ open: handleOpenInEditor, editorLabel: editorLabel(preferredEditor) }}>
-    <div
-      className="flex-1 flex flex-col min-w-0 min-h-0"
+    <OpenFileContext.Provider
+      value={{
+        open: handleOpenInEditor,
+        editorLabel: editorLabel(preferredEditor),
+      }}
     >
-      {/* Title bar area */}
-      <div
-        className="h-[38px] shrink-0 flex items-center justify-center relative"
-        style={{
-          borderBottom: "1px solid var(--border-subtle)",
-          // @ts-expect-error -- webkit
-          WebkitAppRegion: "drag",
-        }}
-      >
-        <span
-          className="text-[12px] font-medium truncate max-w-[55%]"
-          style={{ color: "rgba(255,255,255,0.60)" }}
+      <div className="flex-1 flex flex-col min-w-0 min-h-0">
+        {/* Title bar area */}
+        <div
+          className="h-[38px] shrink-0 flex items-center justify-center relative"
+          style={{
+            borderBottom: "1px solid var(--border-subtle)",
+            // @ts-expect-error -- webkit
+            WebkitAppRegion: "drag",
+          }}
         >
-          {thread.name}
-        </span>
-        {projectCwd && (
-          <div
-            className="absolute right-3 top-1/2 -translate-y-1/2"
-            style={{
-              // @ts-expect-error -- webkit
-              WebkitAppRegion: "no-drag",
-            }}
+          <span
+            className="text-[12px] font-medium truncate max-w-[55%]"
+            style={{ color: "rgba(255,255,255,0.60)" }}
           >
+            {thread.name}
+          </span>
+          {projectCwd && (
             <div
-              className="inline-flex items-stretch h-[26px] rounded-xl overflow-hidden"
+              className="absolute right-3 top-1/2 -translate-y-1/2"
               style={{
-                background: "var(--surface-2)",
-                border: "1px solid var(--border-default)",
+                // @ts-expect-error -- webkit
+                WebkitAppRegion: "no-drag",
               }}
             >
-              <button
-                onClick={() => handleOpenInEditor(projectCwd, undefined, preferredEditor)}
-                title={`Open project in ${editorLabel(preferredEditor)}`}
-                className="flex items-center justify-center pl-2.5 pr-1 transition-colors"
-                onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.06)")}
-                onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-              >
-                <EditorTargetIcon target={preferredEditor} size={16} />
-              </button>
-              <button
-                ref={editorCaretRef}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  if (!editorDropdownOpen && editorCaretRef.current) {
-                    const rect = editorCaretRef.current.getBoundingClientRect();
-                    setEditorDropdownPos({
-                      top: rect.bottom + 4,
-                      right: window.innerWidth - rect.right,
-                    });
-                  }
-                  setEditorDropdownOpen((v) => !v);
+              <div
+                className="inline-flex items-stretch h-[26px] rounded-xl overflow-hidden"
+                style={{
+                  background: "var(--surface-2)",
+                  border: "1px solid var(--border-default)",
                 }}
-                title="Open project in…"
-                className="flex items-center justify-center pl-1 pr-2 transition-colors"
-                onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.06)")}
-                onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
               >
-                <CaretDown size={12} weight="bold" style={{ color: "var(--text-muted)" }} />
-              </button>
-            </div>
-            {editorDropdownOpen && editorDropdownPos && createPortal(
-              <>
-                <div
-                  className="fixed inset-0 z-[60]"
+                <button
+                  onClick={() =>
+                    handleOpenInEditor(projectCwd, undefined, preferredEditor)
+                  }
+                  title={`Open project in ${editorLabel(preferredEditor)}`}
+                  className="flex items-center justify-center pl-2.5 pr-1 transition-colors"
+                  onMouseEnter={(e) =>
+                    (e.currentTarget.style.background =
+                      "rgba(255,255,255,0.06)")
+                  }
+                  onMouseLeave={(e) =>
+                    (e.currentTarget.style.background = "transparent")
+                  }
+                >
+                  <EditorTargetIcon target={preferredEditor} size={16} />
+                </button>
+                <button
+                  ref={editorCaretRef}
                   onClick={(e) => {
                     e.stopPropagation();
-                    setEditorDropdownOpen(false);
-                  }}
-                />
-                <OpenInEditorDropdown
-                  top={editorDropdownPos.top}
-                  right={editorDropdownPos.right}
-                  onSelect={(editor) => {
-                    setEditorDropdownOpen(false);
-                    setPreferredEditor(editor);
-                    localStorage.setItem("preferredEditor", editor);
-                    handleOpenInEditor(projectCwd, undefined, editor);
-                  }}
-                />
-              </>,
-              document.body,
-            )}
-          </div>
-        )}
-      </div>
-
-      {/* Messages */}
-      <ScrollArea ref={scrollAreaRef} className="flex-1" onScroll={handleMessagesScroll}>
-        {thread.messages.length === 0 && thread.historyLoaded ? (
-          <div
-            key={thread.id}
-            className="flex items-center justify-center h-full text-[28px] font-medium tracking-tight px-8 text-center"
-            style={{ color: "var(--text-muted)", animation: "fadeIn 120ms ease" }}
-          >
-            {projectName ? (
-              <>
-                What are we building in
-                <span style={{ color: "rgba(255,255,255,0.95)" }}>{`\u00A0${projectName}`}</span>
-                ?
-              </>
-            ) : (
-              "What are we building today?"
-            )}
-          </div>
-        ) : (
-          <div
-            key={`${thread.id}-${thread.historyLoaded}`}
-            className="max-w-[720px] mx-auto px-5 pt-3 pb-16"
-            style={{ animation: "fadeIn 120ms ease" }}
-          >
-            {(() => {
-              const msgs = thread.messages;
-              const rendered: React.ReactNode[] = [];
-              // ID of the last assistant message (for streaming indicator)
-              const streamingMsgId =
-                thread.status === "running" && msgs[msgs.length - 1]?.role === "assistant"
-                  ? msgs[msgs.length - 1].id
-                  : null;
-
-              let i = 0;
-              while (i < msgs.length) {
-                const msg = msgs[i];
-
-                if (msg.collapsed || msg.role === "user") {
-                  rendered.push(
-                    <MessageBlock
-                      key={msg.id}
-                      message={msg}
-                      isStreaming={false}
-                      showHoverBar={msg.role === "user"}
-                      onImageClick={setLightboxUrl}
-                      onOpenFile={handleOpenInEditor}
-                    />
-                  );
-                  i++;
-                } else {
-                  // Collect full assistant turn (assistant + tool_use messages)
-                  const turnStart = i;
-                  while (
-                    i < msgs.length &&
-                    (msgs[i].role === "assistant" || msgs[i].role === "tool_use")
-                  ) {
-                    i++;
-                  }
-                  const turnMsgs = msgs.slice(turnStart, i);
-
-                  // Find the last assistant message for the hover bar
-                  const lastAssistantMsg = turnMsgs.reduce<Message | undefined>(
-                    (last, m) => (m.role === "assistant" ? m : last),
-                    undefined
-                  );
-                  // Turn is complete if there are more messages after it, or thread is idle
-                  const isTurnComplete = i < msgs.length || thread.status === "idle";
-
-                  rendered.push(
-                    <div key={`turn-${msg.id}`} className="group/turn">
-                      {turnMsgs.map((m) => {
-                        // Render AskUserQuestion tool calls as interactive cards
-                        if (m.role === "tool_use" && m.toolName === "AskUserQuestion") {
-                          const hasUserMsgAfter = msgs.slice(i).some((later) => later.role === "user");
-                          return (
-                            <QuestionCard
-                              key={m.id}
-                              toolInput={m.toolInput}
-                              alreadyAnswered={hasUserMsgAfter}
-                              onSubmit={(text) => {
-                                if (thread.pendingToolUseId) {
-                                  onRespondToTool(thread.id, thread.pendingToolUseId, text);
-                                } else {
-                                  onSend(thread.id, text);
-                                }
-                              }}
-                            />
-                          );
-                        }
-                        return (
-                          <MessageBlock
-                            key={m.id}
-                            message={m}
-                            isStreaming={m.id === streamingMsgId}
-                            showHoverBar={false}
-                            onImageClick={setLightboxUrl}
-                            onOpenFile={handleOpenInEditor}
-                          />
-                        );
-                      })}
-                      {lastAssistantMsg && isTurnComplete && (
-                        <div className="-mt-4 px-1 transition-opacity duration-300 opacity-0 group-hover/turn:opacity-100">
-                          <MessageHoverBar message={lastAssistantMsg} />
-                        </div>
-                      )}
-                    </div>
-                  );
-                }
-              }
-              return rendered;
-            })()}
-            {thread.status === "running" && thread.messages[thread.messages.length - 1]?.role !== "assistant" && (
-              <div className="py-4 px-1">
-                <ThinkingIndicator />
-              </div>
-            )}
-            <div ref={messagesEndRef} />
-          </div>
-        )}
-      </ScrollArea>
-
-      {/* Scroll to bottom */}
-      {showScrollBtn && thread.messages.length > 0 && (
-        <div className="relative shrink-0">
-          <button
-            onClick={() => scrollAreaRef.current?.scrollToBottom()}
-            className="absolute left-1/2 -translate-x-1/2 -top-14 w-[36px] h-[36px] flex items-center justify-center rounded-full transition-colors"
-            style={{
-              background: "var(--surface-2)",
-              border: "1px solid var(--border-emphasis)",
-              color: "var(--text-primary)",
-              boxShadow: "0 4px 12px rgba(0,0,0,0.4)",
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.background = "var(--surface-3)";
-              e.currentTarget.style.borderColor = "var(--text-muted)";
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = "var(--surface-2)";
-              e.currentTarget.style.borderColor = "var(--border-emphasis)";
-            }}
-          >
-            <ArrowDown size={18} weight="bold" />
-          </button>
-        </div>
-      )}
-
-      {/* Composer */}
-      <div className="shrink-0 px-5 pb-4 pt-1">
-        <div className="max-w-[720px] mx-auto">
-          <div
-            ref={composerRef}
-            className="rounded-2xl relative"
-            style={{
-              background: "var(--surface-2)",
-              border: isDragOver
-                ? "1px solid var(--accent)"
-                : "1px solid var(--border-default)",
-              transition: "border-color 150ms ease",
-            }}
-            onDragEnter={handleDragEnter}
-            onDragOver={handleDragOver}
-            onDragLeave={handleDragLeave}
-            onDrop={handleDrop}
-          >
-            {/* Drag overlay */}
-            {isDragOver && (
-              <div
-                className="absolute inset-0 rounded-2xl z-10 flex items-center justify-center pointer-events-none"
-                style={{
-                  background: "rgba(51, 156, 255, 0.08)",
-                }}
-              >
-                <span
-                  className="text-[13px] font-medium px-3 py-1.5 rounded-lg"
-                  style={{
-                    background: "var(--surface-3)",
-                    color: "var(--text-secondary)",
-                    border: "1px solid var(--border-emphasis)",
-                  }}
-                >
-                  Drop image to attach
-                </span>
-              </div>
-            )}
-            {/* Attachment chips */}
-            {attachments.length > 0 && (
-              <div className="flex flex-wrap gap-1.5 px-4 pt-3 pb-1">
-                {attachments.map((a) => (
-                  <div
-                    key={a.id}
-                    className="flex items-center gap-1.5 pl-1 pr-1 py-0.5 rounded-lg group/chip"
-                    style={{
-                      background: "var(--surface-3)",
-                      border: "1px solid var(--border-default)",
-                    }}
-                  >
-                    <img
-                      src={a.previewUrl}
-                      alt={a.name}
-                      className="w-5 h-5 rounded object-cover"
-                    />
-                    <span
-                      className="text-[12px] font-medium max-w-[140px] truncate"
-                      style={{ color: "var(--text-secondary)" }}
-                    >
-                      {a.name}
-                    </span>
-                    <button
-                      onClick={() => removeAttachment(a.id)}
-                      className="w-4 h-4 flex items-center justify-center rounded transition-colors"
-                      style={{ color: "var(--text-faint)" }}
-                      onMouseEnter={(e) => {
-                        e.currentTarget.style.color = "var(--text-primary)";
-                        e.currentTarget.style.background = "var(--surface-4)";
-                      }}
-                      onMouseLeave={(e) => {
-                        e.currentTarget.style.color = "var(--text-faint)";
-                        e.currentTarget.style.background = "transparent";
-                      }}
-                    >
-                      <X size={10} weight="bold" />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-            <TextareaWithScrollbar
-              textareaRef={textareaRef}
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  handleSubmit();
-                }
-              }}
-              onPaste={handlePaste}
-            />
-            {/* Controls */}
-            <div className="flex items-center justify-between px-2 pb-2">
-              <div className="flex items-center gap-0">
-<div className="relative" ref={modelDropdownRef}>
-                  <ControlButton
-                    onClick={() => !isStarted && setModelDropdownOpen((v) => !v)}
-                    tooltip={isStarted ? "Can't change model after thread has started" : undefined}
-                  >
-                    {isClaude
-                      ? <ClaudeIcon className="w-[14px] h-[14px] shrink-0 text-[#D97757]" />
-                      : <OpenAIIcon className="w-[13px] h-[13px] shrink-0 text-white/90" />
+                    if (!editorDropdownOpen && editorCaretRef.current) {
+                      const rect =
+                        editorCaretRef.current.getBoundingClientRect();
+                      setEditorDropdownPos({
+                        top: rect.bottom + 4,
+                        right: window.innerWidth - rect.right,
+                      });
                     }
-                    <span>
-                      {modelLabel}
-                      {displayedModel?.badge && (
-                        <span className="ml-1" style={{ color: "var(--text-faint)" }}>
-                          {displayedModel.badge}
-                        </span>
-                      )}
-                    </span>
-                    <CaretDown size={10} weight="bold" />
-                  </ControlButton>
-                  {modelDropdownOpen && !isStarted && displayedModel && (
-                    <ModelDropdown
-                      sections={[
-                        { label: "Anthropic", models: claudeModels },
-                        { label: "OpenAI", models: codexModels },
-                      ]}
-                      selected={displayedModel}
-                      onSelect={(m) => {
-                        setSelectedModel(m);
-                        // Persist the pick so new threads on app
-                        // restart default to the same model for this
-                        // provider.
-                        const selectionToSave = { provider: m.provider, modelId: m.id, effortId: (m.provider === "codex" ? codexEffort : claudeEffort).id };
-                        console.log("[model-save] saving lastSelection:", selectionToSave);
-                        localStorage.setItem("lastSelection", JSON.stringify(selectionToSave));
-                        // Flip the thread's provider to match the picked
-                        // model. Only effective on pending (uncommitted)
-                        // threads; committed threads already have
-                        // isStarted=true and the dropdown is disabled.
-                        if (m.provider !== thread.provider) {
-                          onUpdateThreadProvider?.(thread.id, m.provider);
-                        }
-                        setModelDropdownOpen(false);
-                      }}
-                    />
-                  )}
-                </div>
-                {showEffortPicker && (
-                  <div className="relative" ref={effortDropdownRef}>
-                    <ControlButton
-                      onClick={() => !isStarted && setEffortDropdownOpen((v) => !v)}
-                      tooltip={isStarted ? "Can't change effort after thread has started" : undefined}
-                    >
-                      <span>{selectedEffort.label}</span>
-                      <CaretDown size={10} weight="bold" />
-                    </ControlButton>
-                    {effortDropdownOpen && (
-                      <EffortDropdown
-                        levels={effortList}
-                        selected={selectedEffort}
-                        onSelect={(e) => {
-                          setSelectedEffort(e);
-                          // Remember this effort for the current
-                          // model so switching away and back restores
-                          // the same choice.
-                          if (displayedModel) {
-                            const selectionToSave = { provider: displayedModel.provider, modelId: displayedModel.id, effortId: e.id };
-                            console.log("[effort-save] saving lastSelection:", selectionToSave);
-                            localStorage.setItem("lastSelection", JSON.stringify(selectionToSave));
-                          }
-                          setEffortDropdownOpen(false);
-                        }}
-                      />
-                    )}
-                  </div>
-                )}
+                    setEditorDropdownOpen((v) => !v);
+                  }}
+                  title="Open project in…"
+                  className="flex items-center justify-center pl-1 pr-2 transition-colors"
+                  onMouseEnter={(e) =>
+                    (e.currentTarget.style.background =
+                      "rgba(255,255,255,0.06)")
+                  }
+                  onMouseLeave={(e) =>
+                    (e.currentTarget.style.background = "transparent")
+                  }
+                >
+                  <CaretDown
+                    size={12}
+                    weight="bold"
+                    style={{ color: "var(--text-muted)" }}
+                  />
+                </button>
               </div>
-              <div className="flex items-center gap-1.5">
-                <div className="relative" ref={modeDropdownRef}>
-                  <ControlButton onClick={() => setModeDropdownOpen((v) => !v)}>
-                    <span>{selectedMode.label}</span>
-                    <CaretDown size={10} weight="bold" />
-                  </ControlButton>
-                  {modeDropdownOpen && (
-                    <ModeDropdown
-                      modes={MODES}
-                      selected={selectedMode}
-                      onSelect={(m) => {
-                        setSelectedMode(m);
-                        setModeDropdownOpen(false);
+              {editorDropdownOpen &&
+                editorDropdownPos &&
+                createPortal(
+                  <>
+                    <div
+                      className="fixed inset-0 z-[60]"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setEditorDropdownOpen(false);
                       }}
                     />
-                  )}
-                </div>
-                {thread.status === "running" ? (
-                  <button
-                    onClick={() => onInterrupt(thread.id)}
-                    className="w-[30px] h-[30px] flex items-center justify-center rounded-full"
-                    style={{
-                      background: "var(--text-primary)",
-                    }}
-                  >
-                    <Stop size={14} weight="fill" style={{ color: "var(--surface-0)" }} />
-                  </button>
+                    <OpenInEditorDropdown
+                      top={editorDropdownPos.top}
+                      right={editorDropdownPos.right}
+                      onSelect={(editor) => {
+                        setEditorDropdownOpen(false);
+                        setPreferredEditor(editor);
+                        localStorage.setItem("preferredEditor", editor);
+                        handleOpenInEditor(projectCwd, undefined, editor);
+                      }}
+                    />
+                  </>,
+                  document.body,
+                )}
+            </div>
+          )}
+        </div>
+
+        {/* Messages */}
+        <ScrollArea
+          ref={scrollAreaRef}
+          className="flex-1"
+          onScroll={handleMessagesScroll}
+        >
+          {thread.messages.length === 0 && thread.historyLoaded ? (
+            <div
+              key={thread.id}
+              className="flex items-center justify-center h-full px-8"
+              style={{ animation: "fadeIn 120ms ease" }}
+            >
+              <div
+                className="text-[28px] font-medium tracking-tight text-center leading-tight"
+                style={{ color: "var(--text-muted)" }}
+              >
+                {projectName && thread ? (
+                  <>
+                    What are we building in
+                    <ProjectNameDropdown
+                      projectName={projectName}
+                      projects={projects ?? []}
+                      currentProjectId={thread.projectId}
+                      onSelect={(pid) => {
+                        if (pid !== thread.projectId) {
+                          onChangeThreadProject?.(thread.id, pid);
+                        }
+                      }}
+                      onCreateNew={async () => {
+                        if (!onCreateProject) return;
+                        const created = await onCreateProject();
+                        if (created)
+                          onChangeThreadProject?.(thread.id, created.id);
+                      }}
+                    />
+                    ?
+                  </>
                 ) : (
-                  <button
-                    onClick={handleSubmit}
-                    disabled={!input.trim() && attachments.length === 0}
-                    className="w-[30px] h-[30px] flex items-center justify-center rounded-full transition-colors"
-                    style={{
-                      background: input.trim() || attachments.length > 0
-                        ? "var(--text-primary)"
-                        : "var(--surface-3)",
-                      color: input.trim() || attachments.length > 0 ? "var(--surface-0)" : "var(--text-faint)",
-                    }}
-                  >
-                    <ArrowUp size={16} weight="bold" />
-                  </button>
+                  "What are we building today?"
                 )}
               </div>
             </div>
-          </div>
-          {/* Status info */}
-          <div className="flex items-center gap-1 mt-2 px-0.5">
-            <StatusButton tooltip="Coming soon">
-              <Monitor size={14} weight="regular" />
-              <span>Local</span>
-              {/* <CaretDown size={10} weight="bold" /> */}
-            </StatusButton>
-            {thread.branch && (
-              <StatusButton tooltip="Coming soon" fadeIn>
-                <GitBranch size={14} weight="regular" />
-                <span>{thread.branch}</span>
-                {/* <CaretDown size={10} weight="bold" /> */}
-              </StatusButton>
-            )}
-            {thread.contextStats && (
-              <TokenProgressIndicator stats={thread.contextStats} />
-            )}
-          </div>
-        </div>
-      </div>
+          ) : (
+            <div
+              key={`${thread.id}-${thread.historyLoaded}`}
+              className="max-w-[720px] mx-auto px-5 pt-3 pb-16"
+              style={{ animation: "fadeIn 120ms ease" }}
+            >
+              {(() => {
+                const msgs = thread.messages;
+                const rendered: React.ReactNode[] = [];
+                // ID of the last assistant message (for streaming indicator)
+                const streamingMsgId =
+                  thread.status === "running" &&
+                  msgs[msgs.length - 1]?.role === "assistant"
+                    ? msgs[msgs.length - 1].id
+                    : null;
 
-      {/* Image lightbox */}
-      {lightboxUrl && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center outline-none"
-          style={{ background: "rgba(0, 0, 0, 0.80)" }}
-          onClick={() => setLightboxUrl(null)}
-          onKeyDown={(e) => {
-            if (e.key === "Escape") setLightboxUrl(null);
-          }}
-          tabIndex={-1}
-          ref={(el) => el?.focus()}
-        >
-          <img
-            src={lightboxUrl}
-            alt="Preview"
-            className="max-w-[90vw] max-h-[90vh] rounded-2xl object-contain"
-            style={{ boxShadow: "0 8px 40px rgba(0, 0, 0, 0.5)" }}
-            onClick={(e) => e.stopPropagation()}
-          />
+                let i = 0;
+                while (i < msgs.length) {
+                  const msg = msgs[i];
+
+                  if (msg.collapsed || msg.role === "user") {
+                    rendered.push(
+                      <MessageBlock
+                        key={msg.id}
+                        message={msg}
+                        isStreaming={false}
+                        showHoverBar={msg.role === "user"}
+                        onImageClick={setLightboxUrl}
+                        onOpenFile={handleOpenInEditor}
+                      />,
+                    );
+                    i++;
+                  } else {
+                    // Collect full assistant turn (assistant + tool_use messages)
+                    const turnStart = i;
+                    while (
+                      i < msgs.length &&
+                      (msgs[i].role === "assistant" ||
+                        msgs[i].role === "tool_use")
+                    ) {
+                      i++;
+                    }
+                    const turnMsgs = msgs.slice(turnStart, i);
+
+                    // Find the last assistant message for the hover bar
+                    const lastAssistantMsg = turnMsgs.reduce<
+                      Message | undefined
+                    >(
+                      (last, m) => (m.role === "assistant" ? m : last),
+                      undefined,
+                    );
+                    // Turn is complete if there are more messages after it, or thread is idle
+                    const isTurnComplete =
+                      i < msgs.length || thread.status === "idle";
+
+                    rendered.push(
+                      <div key={`turn-${msg.id}`} className="group/turn">
+                        {turnMsgs.map((m) => {
+                          // Render AskUserQuestion tool calls as interactive cards
+                          if (
+                            m.role === "tool_use" &&
+                            m.toolName === "AskUserQuestion"
+                          ) {
+                            const hasUserMsgAfter = msgs
+                              .slice(i)
+                              .some((later) => later.role === "user");
+                            return (
+                              <QuestionCard
+                                key={m.id}
+                                toolInput={m.toolInput}
+                                alreadyAnswered={hasUserMsgAfter}
+                                onSubmit={(text) => {
+                                  if (thread.pendingToolUseId) {
+                                    onRespondToTool(
+                                      thread.id,
+                                      thread.pendingToolUseId,
+                                      text,
+                                    );
+                                  } else {
+                                    onSend(thread.id, text);
+                                  }
+                                }}
+                              />
+                            );
+                          }
+                          return (
+                            <MessageBlock
+                              key={m.id}
+                              message={m}
+                              isStreaming={m.id === streamingMsgId}
+                              showHoverBar={false}
+                              onImageClick={setLightboxUrl}
+                              onOpenFile={handleOpenInEditor}
+                            />
+                          );
+                        })}
+                        {lastAssistantMsg && isTurnComplete && (
+                          <div className="-mt-4 px-1 transition-opacity duration-300 opacity-0 group-hover/turn:opacity-100">
+                            <MessageHoverBar message={lastAssistantMsg} />
+                          </div>
+                        )}
+                      </div>,
+                    );
+                  }
+                }
+                return rendered;
+              })()}
+              {thread.status === "running" &&
+                thread.messages[thread.messages.length - 1]?.role !==
+                  "assistant" && (
+                  <div className="py-4 px-1">
+                    <ThinkingIndicator />
+                  </div>
+                )}
+              <div ref={messagesEndRef} />
+            </div>
+          )}
+        </ScrollArea>
+
+        {/* Scroll to bottom */}
+        {showScrollBtn && thread.messages.length > 0 && (
+          <div className="relative shrink-0">
+            <button
+              onClick={() => scrollAreaRef.current?.scrollToBottom()}
+              className="absolute left-1/2 -translate-x-1/2 -top-14 w-[36px] h-[36px] flex items-center justify-center rounded-full transition-colors"
+              style={{
+                background: "var(--surface-2)",
+                border: "1px solid var(--border-emphasis)",
+                color: "var(--text-primary)",
+                boxShadow: "0 4px 12px rgba(0,0,0,0.4)",
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = "var(--surface-3)";
+                e.currentTarget.style.borderColor = "var(--text-muted)";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = "var(--surface-2)";
+                e.currentTarget.style.borderColor = "var(--border-emphasis)";
+              }}
+            >
+              <ArrowDown size={18} weight="bold" />
+            </button>
+          </div>
+        )}
+
+        {/* Composer */}
+        <div className="shrink-0 px-5 pb-4 pt-1">
+          {bothMissing ? (
+            // No agent CLI on $PATH — there's literally nothing the
+            // composer can do, so we replace the whole input affordance
+            // with two prominent install links. Sits in the same bottom
+            // slot so the user's eyes don't have to hunt.
+            <div className="max-w-[720px] mx-auto flex items-center justify-center gap-2.5 py-3">
+              <InstallPromptButton
+                provider="claude"
+                label="Install Claude Code CLI"
+                url="https://code.claude.com/docs/en/quickstart#before-you-begin"
+              />
+              <InstallPromptButton
+                provider="codex"
+                label="Install Codex CLI"
+                url="https://developers.openai.com/codex/quickstart?setup=cli"
+              />
+            </div>
+          ) : (
+            <div className="max-w-[720px] mx-auto">
+              <div
+                ref={composerRef}
+                className="rounded-2xl relative"
+                style={{
+                  background: "var(--surface-2)",
+                  border: isDragOver
+                    ? "1px solid var(--accent)"
+                    : "1px solid var(--border-default)",
+                  transition: "border-color 150ms ease",
+                }}
+                onDragEnter={handleDragEnter}
+                onDragOver={handleDragOver}
+                onDragLeave={handleDragLeave}
+                onDrop={handleDrop}
+              >
+                {/* Drag overlay */}
+                {isDragOver && (
+                  <div
+                    className="absolute inset-0 rounded-2xl z-10 flex items-center justify-center pointer-events-none"
+                    style={{
+                      background: "rgba(51, 156, 255, 0.08)",
+                    }}
+                  >
+                    <span
+                      className="text-[13px] font-medium px-3 py-1.5 rounded-lg"
+                      style={{
+                        background: "var(--surface-3)",
+                        color: "var(--text-secondary)",
+                        border: "1px solid var(--border-emphasis)",
+                      }}
+                    >
+                      Drop image to attach
+                    </span>
+                  </div>
+                )}
+                {/* Attachment chips */}
+                {attachments.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 px-4 pt-3 pb-1">
+                    {attachments.map((a) => (
+                      <div
+                        key={a.id}
+                        className="flex items-center gap-1.5 pl-1 pr-1 py-0.5 rounded-lg group/chip"
+                        style={{
+                          background: "var(--surface-3)",
+                          border: "1px solid var(--border-default)",
+                        }}
+                      >
+                        <img
+                          src={a.previewUrl}
+                          alt={a.name}
+                          className="w-5 h-5 rounded object-cover"
+                        />
+                        <span
+                          className="text-[12px] font-medium max-w-[140px] truncate"
+                          style={{ color: "var(--text-secondary)" }}
+                        >
+                          {a.name}
+                        </span>
+                        <button
+                          onClick={() => removeAttachment(a.id)}
+                          className="w-4 h-4 flex items-center justify-center rounded transition-colors"
+                          style={{ color: "var(--text-faint)" }}
+                          onMouseEnter={(e) => {
+                            e.currentTarget.style.color = "var(--text-primary)";
+                            e.currentTarget.style.background =
+                              "var(--surface-4)";
+                          }}
+                          onMouseLeave={(e) => {
+                            e.currentTarget.style.color = "var(--text-faint)";
+                            e.currentTarget.style.background = "transparent";
+                          }}
+                        >
+                          <X size={10} weight="bold" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <TextareaWithScrollbar
+                  textareaRef={textareaRef}
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault();
+                      handleSubmit();
+                    }
+                  }}
+                  onPaste={handlePaste}
+                />
+                {/* Controls */}
+                <div className="flex items-center justify-between px-2 pb-2">
+                  <div className="flex items-center gap-0">
+                    <div className="relative" ref={modelDropdownRef}>
+                      <ControlButton
+                        onClick={() =>
+                          !isStarted && setModelDropdownOpen((v) => !v)
+                        }
+                        tooltip={
+                          isStarted
+                            ? "Can't change model after thread has started"
+                            : undefined
+                        }
+                      >
+                        {isClaude ? (
+                          <ClaudeIcon className="w-[14px] h-[14px] shrink-0 text-[#D97757]" />
+                        ) : (
+                          <OpenAIIcon className="w-[13px] h-[13px] shrink-0 text-white/90" />
+                        )}
+                        <span>
+                          {modelLabel}
+                          {displayedModel?.badge && (
+                            <span
+                              className="ml-1"
+                              style={{ color: "var(--text-faint)" }}
+                            >
+                              {displayedModel.badge}
+                            </span>
+                          )}
+                        </span>
+                        <CaretDown size={10} weight="bold" />
+                      </ControlButton>
+                      {modelDropdownOpen && !isStarted && displayedModel && (
+                        <ModelDropdown
+                          sections={[
+                            {
+                              label: "Anthropic",
+                              models: claudeModels,
+                              // `providers === null` → still probing; treat
+                              // as available to avoid a "Not installed"
+                              // flash on launch.
+                              available: providers?.claude !== false,
+                              installUrl:
+                                "https://code.claude.com/docs/en/quickstart#before-you-begin",
+                            },
+                            {
+                              label: "OpenAI",
+                              models: codexModels,
+                              available: providers?.codex !== false,
+                              installUrl:
+                                "https://developers.openai.com/codex/quickstart?setup=cli",
+                            },
+                          ]}
+                          selected={displayedModel}
+                          onSelect={(m) => {
+                            setSelectedModel(m);
+                            // Persist the pick so new threads on app
+                            // restart default to the same model for this
+                            // provider.
+                            const selectionToSave = {
+                              provider: m.provider,
+                              modelId: m.id,
+                              effortId: (m.provider === "codex"
+                                ? codexEffort
+                                : claudeEffort
+                              ).id,
+                            };
+                            localStorage.setItem(
+                              "lastSelection",
+                              JSON.stringify(selectionToSave),
+                            );
+                            // Flip the thread's provider to match the picked
+                            // model. Only effective on pending (uncommitted)
+                            // threads; committed threads already have
+                            // isStarted=true and the dropdown is disabled.
+                            if (m.provider !== thread.provider) {
+                              onUpdateThreadProvider?.(thread.id, m.provider);
+                            }
+                            setModelDropdownOpen(false);
+                          }}
+                        />
+                      )}
+                    </div>
+                    {showEffortPicker && (
+                      <div className="relative" ref={effortDropdownRef}>
+                        <ControlButton
+                          onClick={() =>
+                            !isStarted && setEffortDropdownOpen((v) => !v)
+                          }
+                          tooltip={
+                            isStarted
+                              ? "Can't change effort after thread has started"
+                              : undefined
+                          }
+                        >
+                          <span>{selectedEffort.label}</span>
+                          <CaretDown size={10} weight="bold" />
+                        </ControlButton>
+                        {effortDropdownOpen && (
+                          <EffortDropdown
+                            levels={effortList}
+                            selected={selectedEffort}
+                            onSelect={(e) => {
+                              setSelectedEffort(e);
+                              // Remember this effort for the current
+                              // model so switching away and back restores
+                              // the same choice.
+                              if (displayedModel) {
+                                const selectionToSave = {
+                                  provider: displayedModel.provider,
+                                  modelId: displayedModel.id,
+                                  effortId: e.id,
+                                };
+                                localStorage.setItem(
+                                  "lastSelection",
+                                  JSON.stringify(selectionToSave),
+                                );
+                              }
+                              setEffortDropdownOpen(false);
+                            }}
+                          />
+                        )}
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <div className="relative" ref={modeDropdownRef}>
+                      <ControlButton
+                        onClick={() => setModeDropdownOpen((v) => !v)}
+                      >
+                        <span>{selectedMode.label}</span>
+                        <CaretDown size={10} weight="bold" />
+                      </ControlButton>
+                      {modeDropdownOpen && (
+                        <ModeDropdown
+                          modes={MODES}
+                          selected={selectedMode}
+                          onSelect={(m) => {
+                            setSelectedMode(m);
+                            setModeDropdownOpen(false);
+                          }}
+                        />
+                      )}
+                    </div>
+                    {thread.status === "running" ? (
+                      <button
+                        onClick={() => onInterrupt(thread.id)}
+                        className="w-[30px] h-[30px] flex items-center justify-center rounded-full"
+                        style={{
+                          background: "var(--text-primary)",
+                        }}
+                      >
+                        <Stop
+                          size={14}
+                          weight="fill"
+                          style={{ color: "var(--surface-0)" }}
+                        />
+                      </button>
+                    ) : (
+                      <button
+                        onClick={handleSubmit}
+                        disabled={!input.trim() && attachments.length === 0}
+                        className="w-[30px] h-[30px] flex items-center justify-center rounded-full transition-colors"
+                        style={{
+                          background:
+                            input.trim() || attachments.length > 0
+                              ? "var(--text-primary)"
+                              : "var(--surface-3)",
+                          color:
+                            input.trim() || attachments.length > 0
+                              ? "var(--surface-0)"
+                              : "var(--text-faint)",
+                        }}
+                      >
+                        <ArrowUp size={16} weight="bold" />
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+              {/* Status info */}
+              <div className="flex items-center gap-1 mt-2 px-0.5">
+                <StatusButton tooltip="Coming soon">
+                  <Monitor size={14} weight="regular" />
+                  <span>Local</span>
+                  {/* <CaretDown size={10} weight="bold" /> */}
+                </StatusButton>
+                {thread.branch && (
+                  <StatusButton tooltip="Coming soon" fadeIn>
+                    <GitBranch size={14} weight="regular" />
+                    <span>{thread.branch}</span>
+                    {/* <CaretDown size={10} weight="bold" /> */}
+                  </StatusButton>
+                )}
+                {/* TODO(codex-context): Codex threads hide this entirely because
+                the SDK doesn't report a context-window limit and we refuse
+                to show "0% / N / 0 tokens". Reinstate once codex.ts can
+                compute a percentage — probably via a per-model max-tokens
+                table keyed on the selected Codex model. */}
+                {thread.contextStats && thread.provider !== "codex" && (
+                  <TokenProgressIndicator stats={thread.contextStats} />
+                )}
+              </div>
+            </div>
+          )}
         </div>
-      )}
-    </div>
+
+        {/* Image lightbox */}
+        {lightboxUrl && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center outline-none"
+            style={{ background: "rgba(0, 0, 0, 0.80)" }}
+            onClick={() => setLightboxUrl(null)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") setLightboxUrl(null);
+            }}
+            tabIndex={-1}
+            ref={(el) => el?.focus()}
+          >
+            <img
+              src={lightboxUrl}
+              alt="Preview"
+              className="max-w-[90vw] max-h-[90vh] rounded-2xl object-contain"
+              style={{ boxShadow: "0 8px 40px rgba(0, 0, 0, 0.5)" }}
+              onClick={(e) => e.stopPropagation()}
+            />
+          </div>
+        )}
+      </div>
     </OpenFileContext.Provider>
   );
 }
 
-function StatusButton({ children, tooltip, fadeIn }: { children: React.ReactNode; tooltip?: string; fadeIn?: boolean }) {
+function StatusButton({
+  children,
+  tooltip,
+  fadeIn,
+}: {
+  children: React.ReactNode;
+  tooltip?: string;
+  fadeIn?: boolean;
+}) {
   return (
-    <div className="relative group/status" style={fadeIn ? { animation: "fadeIn 200ms ease" } : undefined}>
+    <div
+      className="relative group/status"
+      style={fadeIn ? { animation: "fadeIn 200ms ease" } : undefined}
+    >
       <button
         className="flex items-center gap-1.5 px-2 py-[3px] rounded-lg text-[12px] font-medium transition-colors"
         style={{ color: "var(--text-muted)" }}
@@ -2252,7 +3066,11 @@ function StatusButton({ children, tooltip, fadeIn }: { children: React.ReactNode
       {tooltip && (
         <div
           className="absolute bottom-full left-0 mb-1.5 px-2.5 py-1.5 rounded-lg text-[12px] whitespace-nowrap opacity-0 group-hover/status:opacity-100 transition-opacity duration-150 pointer-events-none z-50"
-          style={{ background: "var(--surface-2)", color: "var(--text-secondary)", border: "1px solid var(--border-emphasis)" }}
+          style={{
+            background: "var(--surface-2)",
+            color: "var(--text-secondary)",
+            border: "1px solid var(--border-emphasis)",
+          }}
         >
           {tooltip}
         </div>
@@ -2261,7 +3079,61 @@ function StatusButton({ children, tooltip, fadeIn }: { children: React.ReactNode
   );
 }
 
-function ControlButton({ children, onClick, tooltip }: { children: React.ReactNode; onClick?: () => void; tooltip?: string }) {
+/** Prominent install-CLI button shown in place of the composer when
+ *  no agent CLI is installed. Larger than `ControlButton` — this is the
+ *  primary (and only) affordance at the bottom of the chat, so it
+ *  should read as a real CTA, not as composer chrome. */
+function InstallPromptButton({
+  provider,
+  label,
+  url,
+}: {
+  provider: Provider;
+  label: string;
+  url: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={() => window.openclawdex.openExternal(url)}
+      onMouseDown={(e) => e.preventDefault()}
+      className="flex items-center gap-2 px-3.5 py-2.5 rounded-xl text-[13px] font-medium transition-colors"
+      style={{
+        background: "var(--surface-2)",
+        border: "1px solid var(--border-default)",
+        color: "var(--text-primary)",
+      }}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.background = "var(--surface-3)";
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.background = "var(--surface-2)";
+      }}
+    >
+      {provider === "claude" ? (
+        <ClaudeIcon className="w-[15px] h-[15px] shrink-0 text-[#D97757]" />
+      ) : (
+        <OpenAIIcon className="w-[14px] h-[14px] shrink-0 text-white/90" />
+      )}
+      <span>{label}</span>
+      <ArrowSquareOut
+        size={12}
+        weight="regular"
+        style={{ color: "var(--text-muted)" }}
+      />
+    </button>
+  );
+}
+
+function ControlButton({
+  children,
+  onClick,
+  tooltip,
+}: {
+  children: React.ReactNode;
+  onClick?: () => void;
+  tooltip?: string;
+}) {
   return (
     <div className="relative group/ctrl">
       <button
@@ -2275,7 +3147,11 @@ function ControlButton({ children, onClick, tooltip }: { children: React.ReactNo
       {tooltip && (
         <div
           className="absolute bottom-full left-0 mb-1.5 px-2.5 py-1.5 rounded-lg text-[12px] whitespace-nowrap opacity-0 group-hover/ctrl:opacity-100 transition-opacity duration-150 pointer-events-none z-50"
-          style={{ background: "var(--surface-2)", color: "var(--text-secondary)", border: "1px solid var(--border-emphasis)" }}
+          style={{
+            background: "var(--surface-2)",
+            color: "var(--text-secondary)",
+            border: "1px solid var(--border-emphasis)",
+          }}
         >
           {tooltip}
         </div>
@@ -2299,52 +3175,174 @@ function OpenInEditorDropdown({
   const groups: Item[][] = [
     [
       { id: "vscode", label: "VSCode", icon: <VSCodeIcon size={14} /> },
-      { id: "cursor", label: "Cursor", icon: <span style={{ color: "var(--text-primary)" }}><CursorIcon size={14} /></span> },
+      {
+        id: "cursor",
+        label: "Cursor",
+        icon: (
+          <span style={{ color: "var(--text-primary)" }}>
+            <CursorIcon size={14} />
+          </span>
+        ),
+      },
     ],
     [
       { id: "terminal", label: "Terminal", icon: <TerminalIcon size={14} /> },
       { id: "iterm", label: "iTerm2", icon: <ITermIcon size={14} /> },
       { id: "ghostty", label: "Ghostty", icon: <GhosttyIcon size={14} /> },
     ],
-    [
-      { id: "finder", label: "Finder", icon: <FinderIcon size={14} /> },
-    ],
+    [{ id: "finder", label: "Finder", icon: <FinderIcon size={14} /> }],
   ];
   return (
-    <div
-      className="fixed z-[70] rounded-2xl overflow-hidden p-1.5"
+    <DropdownSurface
+      variant="floating"
+      className="fixed z-[70]"
+      style={{ top, right, minWidth: "160px" }}
       onClick={(e) => e.stopPropagation()}
-      style={{
-        top,
-        right,
-        minWidth: "160px",
-        background: "rgba(32,32,32,0.98)",
-        border: "1px solid rgba(255,255,255,0.08)",
-        boxShadow: "0 8px 30px rgba(0,0,0,0.55), 0 0 0 0.5px rgba(255,255,255,0.06)",
-        backdropFilter: "blur(20px)",
-      }}
     >
       {groups.map((group, gi) => (
         <div key={gi}>
-          {gi > 0 && (
-            <div className="my-1 mx-1.5" style={{ height: 1, background: "rgba(255,255,255,0.08)" }} />
-          )}
+          {gi > 0 && <DropdownDivider variant="floating" />}
           {group.map((it) => (
-            <button
+            <DropdownItem
               key={it.id}
+              variant="floating"
               onClick={() => onSelect(it.id)}
-              className="flex items-center gap-2.5 w-full px-3 py-[8px] text-[13px] font-medium text-left rounded-lg transition-colors"
-              style={{ color: "rgba(255,255,255,0.85)" }}
-              onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.07)")}
-              onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
             >
-              <span className="flex items-center justify-center w-[16px] h-[16px] shrink-0">{it.icon}</span>
+              <span className="flex items-center justify-center w-[16px] h-[16px] shrink-0">
+                {it.icon}
+              </span>
               {it.label}
-            </button>
+            </DropdownItem>
           ))}
         </div>
       ))}
-    </div>
+    </DropdownSurface>
+  );
+}
+
+/* ── Project-name dropdown (empty-hero) ─────────────────────── */
+
+/**
+ * Inline project-switcher rendered in place of the highlighted
+ * `{projectName}` inside the empty-thread hero ("What are we building
+ * in <projectName>?"). Lets the user pick a different project for the
+ * current thread, or create a new one. Font sizing is reset inside the
+ * menu because the hero's parent is 28px — dropdown items use the
+ * regular 13px UI scale.
+ */
+function ProjectNameDropdown({
+  projectName,
+  projects,
+  currentProjectId,
+  onSelect,
+  onCreateNew,
+}: {
+  projectName: string;
+  projects: ProjectInfo[];
+  currentProjectId: string | null;
+  onSelect: (projectId: string) => void;
+  onCreateNew: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLSpanElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const handleDown = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node))
+        setOpen(false);
+    };
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", handleDown);
+    document.addEventListener("keydown", handleKey);
+    return () => {
+      document.removeEventListener("mousedown", handleDown);
+      document.removeEventListener("keydown", handleKey);
+    };
+  }, [open]);
+
+  return (
+    <span ref={ref} className="relative inline-flex items-center">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="inline-flex items-center gap-1 mx-0.5 px-1.5 py-0.5 rounded-xl transition-colors"
+        style={{
+          color: "rgba(255,255,255,0.95)",
+          background: open ? "rgba(255,255,255,0.08)" : "transparent",
+        }}
+        onMouseEnter={(e) => {
+          if (!open)
+            e.currentTarget.style.background = "rgba(255,255,255,0.06)";
+        }}
+        onMouseLeave={(e) => {
+          if (!open) e.currentTarget.style.background = "transparent";
+        }}
+      >
+        <span>{projectName}</span>
+        <CaretDown size={14} weight="bold" style={{ opacity: 0.4 }} />
+      </button>
+      {open && (
+        <DropdownSurface
+          variant="composer"
+          className="absolute top-full left-1/2 -translate-x-1/2 mt-2 z-50"
+          style={{
+            minWidth: "240px",
+            // Reset typography — hero parent is 28px/tracking-tight/font-medium.
+            // Item weight is governed by DropdownItem (font-medium); this just
+            // neutralizes the inherited size/letter-spacing for any non-item
+            // content inside the menu.
+            fontSize: "13px",
+            letterSpacing: "normal",
+            color: "var(--text-primary)",
+          }}
+          onMouseDownCapture={(e) => e.stopPropagation()}
+        >
+          {projects.map((p) => {
+            const isSelected = p.id === currentProjectId;
+            return (
+              <DropdownItem
+                key={p.id}
+                variant="composer"
+                selected={isSelected}
+                onClick={() => {
+                  setOpen(false);
+                  onSelect(p.id);
+                }}
+              >
+                <Folder
+                  size={14}
+                  weight="light"
+                  style={{ color: "var(--text-muted)", flexShrink: 0 }}
+                />
+                <span className="flex-1 truncate">{p.name}</span>
+                {isSelected && (
+                  <Check
+                    size={13}
+                    weight="bold"
+                    style={{ color: "var(--text-primary)", flexShrink: 0 }}
+                  />
+                )}
+              </DropdownItem>
+            );
+          })}
+          {projects.length > 0 && <DropdownDivider variant="composer" />}
+          <DropdownItem
+            variant="composer"
+            onClick={() => {
+              setOpen(false);
+              onCreateNew();
+            }}
+            style={{ color: "var(--text-secondary)" }}
+          >
+            <Plus size={14} weight="light" style={{ flexShrink: 0 }} />
+            <span>New project…</span>
+          </DropdownItem>
+        </DropdownSurface>
+      )}
+    </span>
   );
 }
 
@@ -2353,6 +3351,65 @@ function OpenInEditorDropdown({
 interface ModelSection {
   label: string;
   models: ModelDef[];
+  /**
+   * Whether the backing CLI for this provider is installed on $PATH.
+   * Defaults to `true` when omitted so existing call sites that don't
+   * know about availability keep working. When `false`, the section
+   * renders an install CTA row in place of the (necessarily empty)
+   * model list.
+   */
+  available?: boolean;
+  /** URL to the provider's official install / setup page. */
+  installUrl?: string;
+}
+
+/** Single row shown in place of a provider's model list when its CLI
+ *  isn't installed. Clicking opens the provider's install docs in the
+ *  user's default browser via `shell.openExternal` (main side gates
+ *  to http(s) only). */
+function InstallCtaRow({
+  provider,
+  installUrl,
+}: {
+  provider: Provider;
+  installUrl: string;
+}) {
+  const productName = provider === "claude" ? "Claude Code" : "Codex CLI";
+  const displayHost = (() => {
+    try {
+      return new URL(installUrl).host;
+    } catch {
+      return installUrl;
+    }
+  })();
+  const handleOpen = () => {
+    if (!installUrl) return;
+    window.openclawdex.openExternal(installUrl);
+  };
+  return (
+    <DropdownItem variant="composer" align="start" onClick={handleOpen}>
+      {provider === "claude" ? (
+        <ClaudeIcon className="w-[20px] h-[20px] shrink-0 mt-0.5 text-[#D97757] opacity-60" />
+      ) : (
+        <OpenAIIcon className="w-[18px] h-[18px] shrink-0 mt-0.5 text-white/90 opacity-60" />
+      )}
+      <div className="flex flex-col gap-0.5 flex-1 min-w-0">
+        <span className="leading-tight">Install {productName}</span>
+        <span
+          className="text-[11px] leading-tight truncate"
+          style={{ color: "var(--text-muted)" }}
+        >
+          {displayHost}
+        </span>
+      </div>
+      <ArrowSquareOut
+        size={14}
+        weight="regular"
+        className="shrink-0 self-center"
+        style={{ color: "var(--text-muted)" }}
+      />
+    </DropdownItem>
+  );
 }
 
 function ModelDropdown({
@@ -2365,74 +3422,83 @@ function ModelDropdown({
   onSelect: (m: ModelDef) => void;
 }) {
   return (
-    <div
-      className="absolute bottom-full left-0 mb-2 rounded-2xl p-1.5 w-[300px] z-50 flex flex-col gap-[2px]"
-      style={{
-        background: "var(--surface-3)",
-        border: "1px solid var(--border-emphasis)",
-        boxShadow: "0 8px 24px rgba(0,0,0,0.4)",
-      }}
+    <DropdownSurface
+      variant="composer"
+      className="absolute bottom-full left-0 mb-2 w-[300px] z-50"
       onMouseDownCapture={(e) => e.preventDefault()}
     >
-      {sections.map((section, sIdx) => (
-        <div key={section.label} className="flex flex-col gap-[2px]">
-          {sIdx > 0 && (
-            <div className="my-1 h-px" style={{ background: "var(--border-subtle)" }} />
-          )}
-          <div
-            className="text-[10px] font-semibold uppercase tracking-wider px-2.5 pt-1 pb-0.5"
-            style={{ color: "var(--text-muted)" }}
-          >
-            {section.label}
-          </div>
-          {section.models.map((m) => {
-            const isSelected = m.id === selected.id;
-            return (
-              <button
-                key={m.id}
-                onClick={() => onSelect(m)}
-                className="w-full flex items-start gap-2.5 rounded-xl px-2.5 py-2 text-left transition-colors"
-                style={{
-                  background: isSelected ? "rgba(255,255,255,0.06)" : "transparent",
-                }}
-                onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.06)")}
-                onMouseLeave={(e) => (e.currentTarget.style.background = isSelected ? "rgba(255,255,255,0.06)" : "transparent")}
-              >
-                {m.provider === "claude"
-                  ? <ClaudeIcon className="w-[20px] h-[20px] shrink-0 mt-0.5 text-[#D97757]" />
-                  : <OpenAIIcon className="w-[18px] h-[18px] shrink-0 mt-0.5 text-white/90" />
-                }
-                <div className="flex flex-col gap-0.5 flex-1 min-w-0">
-                  <span
-                    className="text-[13px] font-medium leading-tight"
-                    style={{ color: "var(--text-primary)" }}
+      {sections.map((section, sIdx) => {
+        const available = section.available !== false;
+        const providerKey: Provider =
+          section.label === "Anthropic" ? "claude" : "codex";
+        return (
+          <div key={section.label} className="flex flex-col gap-[2px]">
+            {sIdx > 0 && <DropdownDivider variant="composer" />}
+            <DropdownSectionHeader>{section.label}</DropdownSectionHeader>
+            {!available ? (
+              // CLI isn't on $PATH → the models array is empty anyway
+              // (listClaudeModels/listCodexModels return [] when the CLI
+              // is missing). Render a single install CTA row instead of
+              // a bare, headers-only section. Clicking copies the install
+              // command to the clipboard — lightest-weight "click to fix"
+              // we can offer without shelling out to a terminal.
+              <InstallCtaRow
+                provider={providerKey}
+                installUrl={section.installUrl ?? ""}
+              />
+            ) : (
+              section.models.map((m) => {
+                const isSelected = m.id === selected.id;
+                return (
+                  <DropdownItem
+                    key={m.id}
+                    variant="composer"
+                    selected={isSelected}
+                    align="start"
+                    onClick={() => onSelect(m)}
                   >
-                    {m.provider === "claude" ? `Claude ${m.label}` : m.label}
-                    {m.badge && (
+                    {m.provider === "claude" ? (
+                      <ClaudeIcon className="w-[20px] h-[20px] shrink-0 mt-0.5 text-[#D97757]" />
+                    ) : (
+                      <OpenAIIcon className="w-[18px] h-[18px] shrink-0 mt-0.5 text-white/90" />
+                    )}
+                    <div className="flex flex-col gap-0.5 flex-1 min-w-0">
+                      <span className="leading-tight">
+                        {m.provider === "claude"
+                          ? `Claude ${m.label}`
+                          : m.label}
+                        {m.badge && (
+                          <span
+                            className="ml-1.5 text-[11px]"
+                            style={{ color: "var(--text-muted)" }}
+                          >
+                            {m.badge}
+                          </span>
+                        )}
+                      </span>
                       <span
-                        className="ml-1.5 text-[11px] font-medium"
+                        className="text-[11px] leading-tight truncate"
                         style={{ color: "var(--text-muted)" }}
                       >
-                        {m.badge}
+                        {m.subtitle}
                       </span>
+                    </div>
+                    {isSelected && (
+                      <Check
+                        size={14}
+                        weight="bold"
+                        className="shrink-0 self-center"
+                        style={{ color: "var(--text-primary)" }}
+                      />
                     )}
-                  </span>
-                  <span
-                    className="text-[11px] font-medium leading-tight truncate"
-                    style={{ color: "var(--text-muted)" }}
-                  >
-                    {m.subtitle}
-                  </span>
-                </div>
-                {isSelected && (
-                  <Check size={14} weight="bold" className="shrink-0 mt-0.5" style={{ color: "var(--text-primary)" }} />
-                )}
-              </button>
-            );
-          })}
-        </div>
-      ))}
-    </div>
+                  </DropdownItem>
+                );
+              })
+            )}
+          </div>
+        );
+      })}
+    </DropdownSurface>
   );
 }
 
@@ -2448,49 +3514,41 @@ function EffortDropdown({
   onSelect: (e: EffortDef) => void;
 }) {
   return (
-    <div
-      className="absolute bottom-full left-0 mb-2 rounded-2xl p-1.5 min-w-[280px] z-50 flex flex-col gap-[2px]"
-      style={{
-        background: "var(--surface-3)",
-        border: "1px solid var(--border-emphasis)",
-        boxShadow: "0 8px 24px rgba(0,0,0,0.4)",
-      }}
+    <DropdownSurface
+      variant="composer"
+      className="absolute bottom-full left-0 mb-2 min-w-[280px] z-50"
       onMouseDownCapture={(e) => e.preventDefault()}
     >
       {levels.map((lvl) => {
         const isSelected = lvl.id === selected.id;
         return (
-          <button
+          <DropdownItem
             key={lvl.id}
+            variant="composer"
+            selected={isSelected}
             onClick={() => onSelect(lvl)}
-            className="w-full flex items-center gap-2.5 rounded-xl px-2.5 py-2 text-left transition-colors"
-            style={{
-              background: isSelected ? "rgba(255,255,255,0.06)" : "transparent",
-            }}
-            onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.06)")}
-            onMouseLeave={(e) => (e.currentTarget.style.background = isSelected ? "rgba(255,255,255,0.06)" : "transparent")}
           >
             <div className="flex flex-col gap-0.5 flex-1 min-w-0">
+              <span className="leading-tight">{lvl.label}</span>
               <span
-                className="text-[13px] font-medium leading-tight"
-                style={{ color: "var(--text-primary)" }}
-              >
-                {lvl.label}
-              </span>
-              <span
-                className="text-[11px] font-medium leading-tight"
+                className="text-[11px] leading-tight"
                 style={{ color: "var(--text-muted)" }}
               >
                 {lvl.subtitle}
               </span>
             </div>
             {isSelected && (
-              <Check size={14} weight="bold" className="shrink-0" style={{ color: "var(--text-primary)" }} />
+              <Check
+                size={14}
+                weight="bold"
+                className="shrink-0"
+                style={{ color: "var(--text-primary)" }}
+              />
             )}
-          </button>
+          </DropdownItem>
         );
       })}
-    </div>
+    </DropdownSurface>
   );
 }
 
@@ -2506,43 +3564,25 @@ function ModeDropdown({
   onSelect: (m: ModeDef) => void;
 }) {
   return (
-    <div
-      className="absolute bottom-full right-0 mb-2 rounded-2xl p-1.5 min-w-[300px] z-50 flex flex-col gap-[2px]"
-      style={{
-        background: "var(--surface-3)",
-        border: "1px solid var(--border-emphasis)",
-        boxShadow: "0 8px 24px rgba(0,0,0,0.4)",
-      }}
+    <DropdownSurface
+      variant="composer"
+      className="absolute bottom-full right-0 mb-2 min-w-[300px] z-50"
       onMouseDownCapture={(e) => e.preventDefault()}
     >
       {modes.map((mode) => {
         const isSelected = mode.id === selected.id;
         const isDisabled = !!mode.comingSoon;
         return (
-          <button
+          <DropdownItem
             key={mode.id}
-            onClick={() => !isDisabled && onSelect(mode)}
-            className="w-full flex items-center gap-2.5 rounded-xl px-2.5 py-2 text-left transition-colors"
-            style={{
-              background: isSelected ? "rgba(255,255,255,0.06)" : "transparent",
-              cursor: isDisabled ? "default" : "pointer",
-              opacity: isDisabled ? 0.38 : 1,
-            }}
-            onMouseEnter={(e) => {
-              if (!isDisabled) e.currentTarget.style.background = "rgba(255,255,255,0.06)";
-            }}
-            onMouseLeave={(e) => {
-              if (!isDisabled) e.currentTarget.style.background = isSelected ? "rgba(255,255,255,0.06)" : "transparent";
-            }}
+            variant="composer"
+            selected={isSelected}
+            disabled={isDisabled}
+            onClick={() => onSelect(mode)}
           >
             <div className="flex flex-col gap-0.5 flex-1 min-w-0">
               <span className="flex items-center gap-2">
-                <span
-                  className="text-[13px] font-medium leading-tight"
-                  style={{ color: "var(--text-primary)" }}
-                >
-                  {mode.label}
-                </span>
+                <span className="leading-tight">{mode.label}</span>
                 {isDisabled && (
                   <span
                     className="text-[10px] font-semibold uppercase tracking-wide leading-none px-1.5 py-0.5 rounded-md"
@@ -2556,19 +3596,23 @@ function ModeDropdown({
                 )}
               </span>
               <span
-                className="text-[11px] font-medium leading-tight"
+                className="text-[11px] leading-tight"
                 style={{ color: "var(--text-muted)" }}
               >
                 {mode.subtitle}
               </span>
             </div>
             {isSelected && (
-              <Check size={14} weight="bold" className="shrink-0" style={{ color: "var(--text-primary)" }} />
+              <Check
+                size={14}
+                weight="bold"
+                className="shrink-0"
+                style={{ color: "var(--text-primary)" }}
+              />
             )}
-          </button>
+          </DropdownItem>
         );
       })}
-    </div>
+    </DropdownSurface>
   );
 }
-
