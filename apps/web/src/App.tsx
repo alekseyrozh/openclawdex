@@ -2,10 +2,8 @@ import { useState, useCallback, useRef, useEffect } from "react";
 import { Sidebar } from "./components/Sidebar";
 import { ChatView } from "./components/ChatView";
 import type { ImagePayload } from "./components/ChatView";
-import { IpcEvent, SessionInfo, HistoryMessage, ProjectInfo, ContextStats } from "@openclawdex/shared";
-export type { ContextStats };
-
-export type Provider = "claude" | "codex";
+import { IpcEvent, SessionInfo, HistoryMessage, ProjectInfo, ContextStats, type Provider } from "@openclawdex/shared";
+export type { ContextStats, Provider };
 
 export interface Thread {
   id: string;
@@ -15,14 +13,22 @@ export interface Thread {
   status: "idle" | "running" | "error" | "awaiting_input";
   messages: Message[];
   branch?: string;
-  claudeSessionId?: string;
+  // Populated once the backend assigns a session/thread id (post first turn).
+  // The column name is provider-neutral because both Claude and Codex use
+  // a single "session id" / "thread id" string that resumes the conversation.
+  sessionId?: string;
+  // Currently-selected model for this thread (from the unified model
+  // picker). Carried on the thread so resumes remember the choice.
+  model?: string;
+  // Reasoning effort, with provider-specific vocabulary (see ChatView).
+  effort?: string;
   historyLoaded?: boolean;
   lastModified: Date;
   contextStats?: ContextStats;
   archived?: boolean;
   pinned?: boolean;
   needsAttention?: boolean;
-  /** ID of a tool call waiting for user input (e.g. AskUserQuestion). */
+  /** ID of a tool call waiting for user input (e.g. AskUserQuestion). Claude-only. */
   pendingToolUseId?: string;
 }
 
@@ -39,6 +45,13 @@ export interface Message {
   collapsed?: number;
   toolName?: string;
   toolInput?: Record<string, unknown>;
+  /**
+   * Backend-provided stable id for a tool call (Codex `item.id`, or
+   * Claude's block id). When set, reconciliation in `applyIpcEvent`
+   * matches on this rather than appending — lets Codex update a
+   * "running" shell card in place when the command finishes.
+   */
+  toolUseId?: string;
   images?: MessageImage[];
 }
 
@@ -53,11 +66,44 @@ function msgId() {
   return `msg-${nextMsgId++}`;
 }
 
-function newThread(projectId: string | null): Thread {
+/**
+ * Uniform error handling for renderer→main IPC failures.
+ *
+ * `op` is a user-facing verb phrase ("Delete thread", "Move thread to
+ * project") — it appears in the alert, so phrase it from the user's POV.
+ * Use `reportIpcError` for user-initiated actions where the person
+ * should know the request didn't land; use `logIpcError` for background
+ * / cosmetic operations (git branch lookup, project listing on mount)
+ * where an alert would be more annoying than informative.
+ *
+ * Both funnel through `console.error` so Sentry-style log scrapers pick
+ * them up uniformly. No toast infra exists yet — `alert()` mirrors the
+ * fallback already used by `openInEditor` in ChatView.
+ */
+function logIpcError(op: string, err: unknown): void {
+  console.error(`[${op}] failed:`, err);
+}
+function reportIpcError(op: string, err: unknown): void {
+  logIpcError(op, err);
+  const msg = err instanceof Error ? err.message : String(err);
+  alert(`${op} failed: ${msg}`);
+}
+
+function lastSavedProvider(): Provider {
+  try {
+    const raw = localStorage.getItem("lastSelection");
+    if (!raw) return "claude";
+    const saved = JSON.parse(raw);
+    if (saved?.provider === "codex") return "codex";
+  } catch {}
+  return "claude";
+}
+
+function newThread(projectId: string | null, provider: Provider = lastSavedProvider()): Thread {
   return {
     id: crypto.randomUUID(),
     name: "New conversation",
-    provider: "claude",
+    provider,
     projectId,
     status: "idle",
     messages: [],
@@ -70,12 +116,12 @@ function sessionToThread(s: SessionInfo): Thread {
   return {
     id: s.sessionId,
     name: s.summary,
-    provider: "claude",
+    provider: s.provider,
     projectId: s.projectId ?? null,
     status: "idle",
     messages: [],
     branch: s.gitBranch,
-    claudeSessionId: s.sessionId,
+    sessionId: s.sessionId,
     historyLoaded: false,
     lastModified: new Date(s.lastModified),
     contextStats: s.contextStats,
@@ -119,22 +165,75 @@ function applyIpcEvent(thread: Thread, event: IpcEvent): Thread {
     }
     case "status":
       return { ...thread, status: event.status };
-    case "tool_use":
-      return { ...thread, messages: [...thread.messages, { id: msgId(), role: "tool_use" as const, content: "", timestamp: new Date(), toolName: event.toolName, toolInput: event.toolInput }] };
+    case "tool_use": {
+      // When the event carries a `toolUseId`, dedupe against any
+      // existing tool_use message with the same backing id — the
+      // backend is streaming a card update (e.g. Codex's shell command
+      // transitioning from "running" to "completed with output").
+      // Without a toolUseId we just append, matching Claude's
+      // once-per-call semantics.
+      if (event.toolUseId) {
+        const existingIdx = thread.messages.findIndex(
+          (m) => m.role === "tool_use" && m.toolUseId === event.toolUseId,
+        );
+        if (existingIdx !== -1) {
+          const msgs = [...thread.messages];
+          msgs[existingIdx] = {
+            ...msgs[existingIdx],
+            toolName: event.toolName,
+            toolInput: event.toolInput,
+          };
+          return { ...thread, messages: msgs };
+        }
+        return {
+          ...thread,
+          messages: [
+            ...thread.messages,
+            {
+              id: msgId(),
+              role: "tool_use" as const,
+              content: "",
+              timestamp: new Date(),
+              toolUseId: event.toolUseId,
+              toolName: event.toolName,
+              toolInput: event.toolInput,
+            },
+          ],
+        };
+      }
+      return {
+        ...thread,
+        messages: [
+          ...thread.messages,
+          {
+            id: msgId(),
+            role: "tool_use" as const,
+            content: "",
+            timestamp: new Date(),
+            toolName: event.toolName,
+            toolInput: event.toolInput,
+          },
+        ],
+      };
+    }
     case "error":
       return { ...thread, status: "error" as const, messages: [...thread.messages, { id: msgId(), role: "assistant" as const, content: `Error: ${event.message}`, timestamp: new Date() }] };
     case "result": {
+      // GOTCHA: costUsd and durationMs are optional in the IPC schema
+      // because Codex's turn.completed event does not report them.
+      // Must spread conditionally or downstream consumers get `undefined`
+      // where they expected a number.
       const contextStats: ContextStats = {
         ...(event.totalTokens != null && { totalTokens: event.totalTokens }),
         ...(event.maxTokens != null && { maxTokens: event.maxTokens }),
         ...(event.percentage != null && { percentage: event.percentage }),
-        costUsd: event.costUsd,
-        durationMs: event.durationMs,
+        ...(event.costUsd != null && { costUsd: event.costUsd }),
+        ...(event.durationMs != null && { durationMs: event.durationMs }),
       };
       return { ...thread, contextStats };
     }
     case "session_init": {
-      return { ...thread, claudeSessionId: event.sessionId, historyLoaded: true };
+      return { ...thread, sessionId: event.sessionId, provider: event.provider, historyLoaded: true };
     }
     case "deferred_tool_use": {
       return { ...thread, pendingToolUseId: event.toolUseId };
@@ -179,36 +278,77 @@ export function App() {
       const parsed = raw.map((p) => ProjectInfo.safeParse(p)).flatMap((r) => r.success ? [r.data] : []);
       setProjects(parsed);
     }).catch((err) => {
-      console.error("[listProjects] failed:", err);
+      logIpcError("List projects", err);
     });
   }, []);
 
-  // ── Load past sessions on mount ───────────────────────────────
+  // ── Initial bootstrap on mount ────────────────────────────────
+  //
+  // Load projects and sessions together via `Promise.all` so all
+  // the derived state (projects list, thread list, default pending
+  // thread, active id) commits in a single React render. If we
+  // fired them independently the hero could briefly render "What
+  // are we building today?" — its no-project fallback — before
+  // `projects` populated and it re-rendered with the project name.
+  // One `.then` means one render, no flash.
 
   useEffect(() => {
-    refreshProjects();
-
-    if (!window.openclawdex?.listSessions) {
+    const bridge = window.openclawdex;
+    if (!bridge?.listProjects || !bridge?.listSessions) {
       setThreadsLoading(false);
       return;
     }
-    window.openclawdex.listSessions().then((sessions) => {
-      const parsed = sessions.map((s) => SessionInfo.safeParse(s)).flatMap((r) => r.success ? [r.data] : []);
-      if (parsed.length > 0) {
-        const historyThreads = parsed
-          .sort((a, b) => b.lastModified - a.lastModified)
-          .map(sessionToThread);
-        setThreads((prev) => {
-          const inProgress = prev.filter((t) => !t.claudeSessionId);
-          return [...inProgress, ...historyThreads];
-        });
-        setActiveThreadId((prev) => prev ?? historyThreads[0]?.id ?? null);
-      }
-      setThreadsLoading(false);
-    }).catch((err) => {
-      console.error("[listSessions] failed:", err);
-      setThreadsLoading(false);
-    });
+
+    Promise.all([bridge.listProjects(), bridge.listSessions()])
+      .then(([rawProjects, rawSessions]) => {
+        const parsedProjects = rawProjects
+          .map((p) => ProjectInfo.safeParse(p))
+          .flatMap((r) => (r.success ? [r.data] : []));
+        setProjects(parsedProjects);
+
+        const parsedSessions = rawSessions
+          .map((s) => SessionInfo.safeParse(s))
+          .flatMap((r) => (r.success ? [r.data] : []));
+
+        if (parsedSessions.length > 0) {
+          const historyThreads = parsedSessions
+            .sort((a, b) => b.lastModified - a.lastModified)
+            .map(sessionToThread);
+          setThreads((prev) => {
+            const inProgress = prev.filter((t) => !t.sessionId);
+            return [...inProgress, ...historyThreads];
+          });
+
+          // Default landing view: open an unsent "new chat" scoped
+          // to the most-recently-interacted project, so the user
+          // can start typing without first hunting through the
+          // sidebar. The hero's built-in project-switcher dropdown
+          // lets them retarget if this guess is wrong.
+          //
+          // Respect a selection the user may have made while the
+          // bootstrap was in flight (e.g. clicked a sidebar row).
+          // If no history thread carries a projectId — rare, but
+          // possible for legacy sessions — fall back to opening the
+          // most recent thread so we don't regress the old behavior.
+          //
+          // The no-projects-at-all bootstrap is handled separately.
+          if (!activeThreadIdRef.current) {
+            const recentProjectId = historyThreads.find((t) => t.projectId)?.projectId ?? null;
+            if (recentProjectId) {
+              const pending = newThread(recentProjectId);
+              setPendingThread(pending);
+              setActiveThreadId(pending.id);
+            } else {
+              setActiveThreadId(historyThreads[0].id);
+            }
+          }
+        }
+        setThreadsLoading(false);
+      })
+      .catch((err) => {
+        logIpcError("Initial bootstrap", err);
+        setThreadsLoading(false);
+      });
   }, []);
 
   // ── IPC event listener ────────────────────────────────────────
@@ -230,7 +370,7 @@ export function App() {
           // Commit the pending thread to the sidebar.
           const committed = {
             ...pendingThreadRef.current,
-            claudeSessionId: event.sessionId,
+            sessionId: event.sessionId,
             historyLoaded: true,
           };
           setThreads((prev) => [committed, ...prev]);
@@ -260,16 +400,26 @@ export function App() {
   // ── Lazy-load history when switching to a history thread ──
 
   useEffect(() => {
-    if (!activeThread || activeThread.historyLoaded || !activeThread.claudeSessionId) return;
+    if (!activeThread || activeThread.historyLoaded || !activeThread.sessionId) return;
     if (!window.openclawdex?.loadHistory) return;
 
-    const { claudeSessionId } = activeThread;
-    window.openclawdex.loadHistory(claudeSessionId).then((items) => {
+    const { sessionId } = activeThread;
+    window.openclawdex.loadHistory(sessionId).then((items) => {
       setThreads((prev) =>
         prev.map((t) =>
           t.id === activeThread.id
             ? { ...t, messages: historyToMessages(items), historyLoaded: true }
             : t,
+        ),
+      );
+    }).catch((err) => {
+      // Mark historyLoaded so the empty-state hero appears instead of an
+      // indefinite loading shell, but surface the failure — the user
+      // opened this thread and is now looking at an empty pane.
+      reportIpcError("Load conversation history", err);
+      setThreads((prev) =>
+        prev.map((t) =>
+          t.id === activeThread.id ? { ...t, historyLoaded: true } : t,
         ),
       );
     });
@@ -288,13 +438,16 @@ export function App() {
       if (!branch) return;
       setPendingThread((prev) => prev && prev.id === threadId ? { ...prev, branch } : prev);
       setThreads((prev) => prev.map((t) => t.id === threadId ? { ...t, branch } : t));
+    }).catch((err) => {
+      // Branch label is purely cosmetic — don't alert.
+      logIpcError("Resolve git branch", err);
     });
   }, [activeThread?.id, activeThread?.branch, projects]);
 
   // ── Send message handler ──────────────────────────────────────
 
   const handleSend = useCallback(
-    (threadId: string, text: string, images?: ImagePayload[]) => {
+    (threadId: string, text: string, images?: ImagePayload[], opts?: { model?: string; effort?: string }) => {
       const msgImages: MessageImage[] | undefined = images?.map((img) => ({
         url: `data:${img.mediaType};base64,${img.base64}`,
       }));
@@ -309,23 +462,47 @@ export function App() {
 
       const pending = pendingThreadRef.current;
       if (pending && threadId === pending.id) {
-        // First message on pending thread — update it, send with projectId
+        // First message on pending thread — update it, send with provider/model/effort
         const name = text.length > 40 ? text.slice(0, 40) + "…" : text;
-        setPendingThread((prev) => prev ? { ...prev, name, status: "running", messages: [userMsg] } : prev);
-        window.openclawdex?.send(pending.id, text, { projectId: pending.projectId ?? undefined, images });
+        setPendingThread((prev) => prev ? { ...prev, name, status: "running", messages: [userMsg], ...(opts?.model && { model: opts.model }), ...(opts?.effort && { effort: opts.effort }) } : prev);
+        // The Promise resolves when main dispatches; stream errors are
+        // surfaced separately as IpcError events. A Promise-rejection
+        // here means the IPC plumbing itself failed (unexpected).
+        window.openclawdex?.send(pending.id, text, {
+          provider: pending.provider,
+          projectId: pending.projectId ?? undefined,
+          images,
+          model: opts?.model,
+          effort: opts?.effort,
+        })?.catch((err) => reportIpcError("Send message", err));
       } else {
         setThreads((prev) =>
           prev.map((t) => {
             if (t.id !== threadId) return t;
-            return { ...t, status: "running" as const, messages: [...t.messages, userMsg] };
+            return { ...t, status: "running" as const, messages: [...t.messages, userMsg], ...(opts?.model && { model: opts.model }), ...(opts?.effort && { effort: opts.effort }) };
           }),
         );
         const thread = threadsRef.current.find((t) => t.id === threadId);
-        window.openclawdex?.send(threadId, text, { resumeSessionId: thread?.claudeSessionId, projectId: thread?.projectId ?? undefined, images });
+        window.openclawdex?.send(threadId, text, {
+          provider: thread?.provider,
+          resumeSessionId: thread?.sessionId,
+          projectId: thread?.projectId ?? undefined,
+          images,
+          model: opts?.model,
+          effort: opts?.effort,
+        })?.catch((err) => reportIpcError("Send message", err));
       }
     },
     [],
   );
+
+  // ── Change provider on pending thread (before first turn commits) ──
+  //
+  // Once the first turn lands and session_init fires, `provider` becomes
+  // authoritative in the DB and we no longer allow flipping it here.
+  const handleUpdateThreadProvider = useCallback((threadId: string, provider: Provider) => {
+    setPendingThread((prev) => prev && prev.id === threadId ? { ...prev, provider } : prev);
+  }, []);
 
   // ── Select thread (clears attention badge) ────────────────────
 
@@ -358,8 +535,91 @@ export function App() {
         setActiveThreadId(thread.id);
         // Git branch is resolved by the useEffect once this thread becomes active.
       }
+    }).catch((err) => reportIpcError("Create project", err));
+  }, []);
+
+  /**
+   * Create a project via folder picker and return it, WITHOUT spawning
+   * a new thread. Used by the in-chat project-switcher dropdown to
+   * create-and-reassign the current thread in one flow.
+   */
+  const handleCreateProjectBare = useCallback((): Promise<ProjectInfo | null> => {
+    if (!window.openclawdex?.createProject) return Promise.resolve(null);
+    return window.openclawdex.createProject().then((project) => {
+      if (!project) return null;
+      const parsed = ProjectInfo.safeParse(project);
+      if (!parsed.success) return null;
+      setProjects((prev) => [...prev, parsed.data]);
+      return parsed.data;
+    }).catch((err) => {
+      reportIpcError("Create project", err);
+      return null;
     });
   }, []);
+
+  // ── Top-level "New chat" (no project specified) ──────────────
+  //
+  // Resolves the target project using this priority:
+  //   1. Active thread's project (you're viewing repo X → new chat in X)
+  //   2. Most-recently-modified thread's project
+  //   3. First available project
+  //   4. Fall back to the folder picker (which auto-starts a thread)
+  const handleNewChat = useCallback(() => {
+    const activeId = activeThreadIdRef.current;
+    const active =
+      activeId && activeId === pendingThreadRef.current?.id
+        ? pendingThreadRef.current
+        : threadsRef.current.find((t) => t.id === activeId) ?? null;
+
+    let projectId: string | null = active?.projectId ?? null;
+
+    if (!projectId) {
+      const mostRecent = [...threadsRef.current]
+        .filter((t) => t.projectId)
+        .sort((a, b) => b.lastModified.getTime() - a.lastModified.getTime())[0];
+      projectId = mostRecent?.projectId ?? null;
+    }
+
+    if (!projectId && projects.length > 0) {
+      projectId = projects[0].id;
+    }
+
+    if (projectId) {
+      handleNewThread(projectId);
+    } else {
+      handleCreateProject();
+    }
+  }, [projects, handleNewThread, handleCreateProject]);
+
+  /**
+   * Reassign a thread to a different project. Pending threads (no
+   * session row yet) live in renderer state only — just update
+   * `pendingThread`. For saved threads we update optimistically and
+   * revert on DB failure.
+   */
+  const handleChangeThreadProject = useCallback(
+    (threadId: string, projectId: string | null) => {
+      if (pendingThreadRef.current?.id === threadId) {
+        setPendingThread((prev) => (prev ? { ...prev, projectId } : prev));
+        return;
+      }
+      const thread = threadsRef.current.find((t) => t.id === threadId);
+      if (!thread) return;
+      const prevProjectId = thread.projectId;
+      if (prevProjectId === projectId) return;
+      setThreads((prev) => prev.map((t) => (t.id === threadId ? { ...t, projectId } : t)));
+      if (thread.sessionId && window.openclawdex?.changeThreadProject) {
+        window.openclawdex.changeThreadProject(thread.sessionId, projectId).catch((err) => {
+          reportIpcError("Move thread to project", err);
+          // Roll back optimistic UI so sidebar matches DB.
+          setThreads((prev) =>
+            prev.map((t) => (t.id === threadId ? { ...t, projectId: prevProjectId } : t)),
+          );
+        });
+      }
+    },
+    [],
+  );
 
   // ── Respond to deferred tool (e.g. AskUserQuestion) ──────────
 
@@ -384,7 +644,9 @@ export function App() {
         setThreads((prev) => prev.map(updateThread));
       }
 
-      window.openclawdex?.respondToTool(threadId, toolUseId, text);
+      window.openclawdex?.respondToTool(threadId, toolUseId, text)?.catch((err) =>
+        reportIpcError("Submit tool response", err),
+      );
     },
     [],
   );
@@ -392,81 +654,137 @@ export function App() {
   // ── Interrupt handler ─────────────────────────────────────────
 
   const handleInterrupt = useCallback((threadId: string) => {
-    window.openclawdex?.interrupt(threadId);
+    window.openclawdex?.interrupt(threadId)?.catch((err) =>
+      reportIpcError("Interrupt", err),
+    );
   }, []);
 
   // ── Project rename/delete handlers ────────────────────────────
 
   const handleRenameProject = useCallback((projectId: string, name: string) => {
-    window.openclawdex?.renameProject(projectId, name).then(refreshProjects);
+    window.openclawdex?.renameProject(projectId, name)
+      .then(refreshProjects)
+      .catch((err) => reportIpcError("Rename project", err));
   }, [refreshProjects]);
 
   const handleDeleteProject = useCallback((projectId: string) => {
     window.openclawdex?.deleteProject(projectId).then(() => {
-      setThreads((prev) => {
-        const removed = prev.filter((t) => t.projectId === projectId);
-        if (removed.some((t) => t.id === activeThreadId)) {
-          setActiveThreadId(null);
+      // Snapshot survivors/removed from the ref so the pending-thread
+      // fallback below can reason about what's left without waiting
+      // for a re-render.
+      const survivors = threadsRef.current.filter((t) => t.projectId !== projectId);
+      const removed = threadsRef.current.filter((t) => t.projectId === projectId);
+
+      setThreads(survivors);
+
+      if (removed.some((t) => t.id === activeThreadIdRef.current)) {
+        setActiveThreadId(null);
+      }
+
+      // If the user is sitting in a "new chat" pending thread scoped
+      // to the project we just deleted, its projectId is now dangling
+      // and the ChatView hero falls back to "What are we building
+      // today?" with a broken project-switcher dropdown. Repoint it
+      // at the most-recently-touched surviving project so the hero
+      // re-renders with a real project name. If no projects survive
+      // at all, drop the pending thread entirely — the zero-state
+      // empty panel in ChatView takes over from here.
+      const prevPending = pendingThreadRef.current;
+      if (prevPending && prevPending.projectId === projectId) {
+        const fallback =
+          [...survivors]
+            .filter((t) => t.projectId)
+            .sort((a, b) => b.lastModified.getTime() - a.lastModified.getTime())[0]
+            ?.projectId ?? null;
+        if (fallback) {
+          setPendingThread({ ...prevPending, projectId: fallback });
+        } else {
+          setPendingThread(null);
+          if (activeThreadIdRef.current === prevPending.id) {
+            setActiveThreadId(null);
+          }
         }
-        return prev.filter((t) => t.projectId !== projectId);
-      });
+      }
+
       refreshProjects();
-    });
-  }, [refreshProjects, activeThreadId]);
+    }).catch((err) => reportIpcError("Delete project", err));
+  }, [refreshProjects]);
 
   // ── Thread rename/delete handlers ─────────────────────────────
 
   const handleRenameThread = useCallback((threadId: string, name: string) => {
-    setThreads((prev) => prev.map((t) => t.id === threadId ? { ...t, name } : t));
     const thread = threadsRef.current.find((t) => t.id === threadId);
-    if (thread?.claudeSessionId) {
-      window.openclawdex?.renameThread(thread.claudeSessionId, name);
+    if (!thread) return;
+    const prevName = thread.name;
+    setThreads((prev) => prev.map((t) => t.id === threadId ? { ...t, name } : t));
+    if (thread.sessionId) {
+      window.openclawdex?.renameThread(thread.sessionId, name)?.catch((err) => {
+        reportIpcError("Rename thread", err);
+        setThreads((prev) => prev.map((t) => t.id === threadId ? { ...t, name: prevName } : t));
+      });
     }
   }, []);
 
   const handleDeleteThread = useCallback((threadId: string) => {
     const thread = threadsRef.current.find((t) => t.id === threadId);
+    if (!thread) return;
+    // Snapshot position so we can restore into the same slot on failure.
+    const prevIndex = threadsRef.current.findIndex((t) => t.id === threadId);
+    const wasActive = activeThreadId === threadId;
     setThreads((prev) => prev.filter((t) => t.id !== threadId));
-    if (activeThreadId === threadId) {
-      setActiveThreadId(null);
-    }
-    if (thread?.claudeSessionId) {
-      window.openclawdex?.deleteThread(thread.claudeSessionId);
+    if (wasActive) setActiveThreadId(null);
+    if (thread.sessionId) {
+      window.openclawdex?.deleteThread(thread.sessionId)?.catch((err) => {
+        reportIpcError("Delete thread", err);
+        setThreads((prev) => {
+          if (prev.some((t) => t.id === threadId)) return prev;
+          const next = [...prev];
+          next.splice(Math.min(prevIndex, next.length), 0, thread);
+          return next;
+        });
+        if (wasActive) setActiveThreadId(threadId);
+      });
     }
   }, [activeThreadId]);
 
   const handleArchiveThread = useCallback((threadId: string) => {
+    const thread = threadsRef.current.find((t) => t.id === threadId);
+    if (!thread) return;
+    const prevArchived = thread.archived ?? false;
+    const archived = !prevArchived;
     setThreads((prev) =>
-      prev.map((t) => {
-        if (t.id !== threadId) return t;
-        const archived = !t.archived;
-        if (t.claudeSessionId) {
-          window.openclawdex?.archiveThread(t.claudeSessionId, archived);
-        }
-        return { ...t, archived };
-      }),
+      prev.map((t) => (t.id === threadId ? { ...t, archived } : t)),
     );
-    // If archiving the active thread, deselect it
-    if (activeThreadId === threadId) {
-      const thread = threadsRef.current.find((t) => t.id === threadId);
-      if (!thread?.archived) {
-        // Currently not archived → about to be archived → deselect
-        setActiveThreadId(null);
-      }
+    // Deselect if we just archived the active thread
+    if (activeThreadId === threadId && archived) {
+      setActiveThreadId(null);
+    }
+    if (thread.sessionId) {
+      window.openclawdex?.archiveThread(thread.sessionId, archived)?.catch((err) => {
+        reportIpcError(archived ? "Archive thread" : "Unarchive thread", err);
+        setThreads((prev) =>
+          prev.map((t) => (t.id === threadId ? { ...t, archived: prevArchived } : t)),
+        );
+      });
     }
   }, [activeThreadId]);
 
   const handlePinThread = useCallback((threadId: string) => {
+    const thread = threadsRef.current.find((t) => t.id === threadId);
+    if (!thread) return;
+    const prevPinned = thread.pinned ?? false;
+    const pinned = !prevPinned;
     setThreads((prev) =>
-      prev.map((t) => {
-        if (t.id !== threadId) return t;
-        const pinned = !t.pinned;
-        if (t.claudeSessionId) {
-          window.openclawdex?.pinThread(t.claudeSessionId, pinned);
-        }
-        return { ...t, pinned };
-      }),
+      prev.map((t) => (t.id === threadId ? { ...t, pinned } : t)),
     );
+    if (thread.sessionId) {
+      window.openclawdex?.pinThread(thread.sessionId, pinned)?.catch((err) => {
+        reportIpcError(pinned ? "Pin thread" : "Unpin thread", err);
+        setThreads((prev) =>
+          prev.map((t) => (t.id === threadId ? { ...t, pinned: prevPinned } : t)),
+        );
+      });
+    }
   }, []);
 
   // ── Sidebar drag ──────────────────────────────────────────────
@@ -510,6 +828,7 @@ export function App() {
           activeThreadId={activeThreadId}
           onSelectThread={handleSelectThread}
           onNewThread={handleNewThread}
+          onNewChat={handleNewChat}
           onCreateProject={handleCreateProject}
           onRenameProject={handleRenameProject}
           onDeleteProject={handleDeleteProject}
@@ -544,10 +863,17 @@ export function App() {
       >
         <ChatView
           thread={activeThread}
+          projects={projects}
           projectCwd={projects.find((p) => p.id === activeThread?.projectId)?.folders[0]?.path}
+          projectName={projects.find((p) => p.id === activeThread?.projectId)?.name}
+          isLoading={threadsLoading}
           onSend={handleSend}
           onInterrupt={handleInterrupt}
           onRespondToTool={handleRespondToTool}
+          onUpdateThreadProvider={handleUpdateThreadProvider}
+          onChangeThreadProject={handleChangeThreadProject}
+          onCreateProject={handleCreateProjectBare}
+          onNewChat={handleNewChat}
         />
       </div>
     </div>

@@ -5,6 +5,18 @@ import {
   type SDKUserMessage,
   type Options as ClaudeQueryOptions,
 } from "@anthropic-ai/claude-agent-sdk";
+import type { ClaudeEffortLevel } from "@openclawdex/shared";
+import type {
+  AgentSession,
+  ContextUsage,
+  DeferredToolUse,
+  ImageInput,
+  SessionEvent,
+} from "./agent-session";
+
+// Re-export the shared types so existing imports from "./claude" keep working
+// while we migrate call sites over to "./agent-session".
+export type { AgentSession, ContextUsage, DeferredToolUse, ImageInput, SessionEvent };
 
 /**
  * Locate the `claude` binary on the system.
@@ -18,29 +30,23 @@ export function findClaudeBinary(): string | null {
   }
 }
 
-export type ContextUsage = { totalTokens: number; maxTokens: number; percentage: number };
-
-export type DeferredToolUse = { id: string; name: string; input: Record<string, unknown> };
-
-export type ImageInput = { name: string; base64: string; mediaType: string };
-
-export type SessionEvent =
-  | { kind: "init"; sessionId: string; model: string }
-  | { kind: "text_delta"; text: string }
-  | { kind: "tool_use"; toolName: string; toolInput: Record<string, unknown> }
-  | { kind: "result"; costUsd: number; durationMs: number; isError: boolean; contextUsage: ContextUsage | null; deferredToolUse: DeferredToolUse | null }
-  | { kind: "error"; message: string }
-  | { kind: "done" };
-
 /**
  * One multi-turn conversation with Claude Code via the Agent SDK.
  *
  * Uses `query()` with an async-iterable prompt so we can push
  * follow-up messages into the same session.
+ *
+ * Implements {@link AgentSession} so it can be stored alongside
+ * {@link CodexSession} in a single `Map<threadId, AgentSession>` in
+ * `main.ts`.
  */
-export class ClaudeSession {
+export class ClaudeSession implements AgentSession {
+  readonly provider = "claude" as const;
+
   private claudePath: string;
   private resumeSessionId: string | undefined;
+  private model: string | undefined;
+  private effort: ClaudeEffortLevel | undefined;
   private queryInstance: ReturnType<typeof query> | null = null;
   private streamLoopRunning = false;
 
@@ -51,10 +57,20 @@ export class ClaudeSession {
 
   private cwd: string | undefined;
 
-  constructor(claudePath: string, opts?: { resumeSessionId?: string; cwd?: string }) {
+  constructor(
+    claudePath: string,
+    opts?: {
+      resumeSessionId?: string;
+      cwd?: string;
+      model?: string;
+      effort?: ClaudeEffortLevel;
+    },
+  ) {
     this.claudePath = claudePath;
     this.resumeSessionId = opts?.resumeSessionId;
     this.cwd = opts?.cwd;
+    this.model = opts?.model;
+    this.effort = opts?.effort;
   }
 
   private static toUserMessage(text: string, images?: ImageInput[]): SDKUserMessage {
@@ -160,6 +176,8 @@ export class ClaudeSession {
       allowDangerouslySkipPermissions: true,
       resume: this.resumeSessionId,
       cwd: this.cwd,
+      ...(this.model && { model: this.model }),
+      ...(this.effort && { effort: this.effort }),
     };
 
     this.queryInstance = query({
@@ -186,15 +204,17 @@ export class ClaudeSession {
             console.error("[claude] getContextUsage failed:", err);
           }
 
-          // Check for deferred tool use (e.g. AskUserQuestion)
+          // Check for deferred tool use (e.g. AskUserQuestion). The SDK
+          // surfaces this on the `result` message under `deferred_tool_use`
+          // but the TS types don't expose it — hence the untyped cast.
+          // We forward it through to the renderer via the `result` event
+          // below; the renderer then shows the QuestionCard and pauses
+          // the thread on `awaiting_input`.
           const msgRecord = msg as Record<string, unknown>;
           const rawDeferred = msgRecord.deferred_tool_use as { id: string; name: string; input: Record<string, unknown> } | undefined;
           const deferredToolUse: DeferredToolUse | null = rawDeferred
             ? { id: rawDeferred.id, name: rawDeferred.name, input: rawDeferred.input }
             : null;
-
-          if (deferredToolUse) {
-          }
 
           onEvent({
             kind: "result",

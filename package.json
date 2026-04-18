@@ -4,11 +4,14 @@
   "description": "Desktop UI for orchestrating Claude and Codex agents",
   "scripts": {
     "dev": "pnpm --filter @openclawdex/web dev",
-    "dev:desktop": "pnpm --filter @openclawdex/shared build && pnpm --filter @openclawdex/web dev & pnpm --filter @openclawdex/shared build && pnpm --filter @openclawdex/desktop dev",
+    "dev:desktop": "concurrently -n web,desktop \"pnpm --filter @openclawdex/web dev\" \"pnpm --filter @openclawdex/desktop dev\"",
     "build": "pnpm --filter @openclawdex/web build",
-    "build:dist": "pnpm --filter @openclawdex/shared build && pnpm --filter @openclawdex/web build && mkdir -p apps/desktop/web && cp -r apps/web/dist apps/desktop/web/ && pnpm --filter @openclawdex/desktop build",
+    "build:dist": "pnpm --filter @openclawdex/web build && mkdir -p apps/desktop/web && cp -r apps/web/dist apps/desktop/web/ && pnpm --filter @openclawdex/desktop build",
     "dist": "pnpm run build:dist && pnpm --filter @openclawdex/desktop dist",
     "db:studio": "pnpm --filter @openclawdex/desktop db:studio",
     "db:generate": "pnpm --filter @openclawdex/desktop db:generate"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
   }
 }

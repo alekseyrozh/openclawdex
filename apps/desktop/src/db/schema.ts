@@ -21,4 +21,8 @@ export const knownThreads = sqliteTable("known_threads", {
   contextStats: text("context_stats"),
   pinned: integer("pinned", { mode: "boolean" }).default(false),
   archived: integer("archived", { mode: "boolean" }).default(false),
+  // Which agent backend this thread runs on. Defaults to 'claude' so
+  // rows that existed before multi-provider support get backfilled correctly
+  // by the ALTER TABLE … DEFAULT migration.
+  provider: text("provider").notNull().default("claude"),
 });

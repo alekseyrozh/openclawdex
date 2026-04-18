@@ -16,6 +16,7 @@ import {
 import type { Thread } from "../App";
 import type { ProjectInfo } from "@openclawdex/shared";
 import { ScrollArea } from "./ScrollArea";
+import { DropdownSurface, DropdownItem } from "./Dropdown";
 
 function timeAgo(date: Date): string {
   const s = Math.floor((Date.now() - date.getTime()) / 1000);
@@ -35,6 +36,7 @@ interface SidebarProps {
   activeThreadId: string | null;
   onSelectThread: (id: string) => void;
   onNewThread: (projectId: string) => void;
+  onNewChat: () => void;
   onCreateProject: () => void;
   onRenameProject: (projectId: string, name: string) => void;
   onDeleteProject: (projectId: string) => void;
@@ -51,6 +53,7 @@ export function Sidebar({
   activeThreadId,
   onSelectThread,
   onNewThread,
+  onNewChat,
   onCreateProject,
   onRenameProject,
   onDeleteProject,
@@ -97,70 +100,109 @@ export function Sidebar({
         }}
       />
 
-      {/* Header */}
-      <div className="shrink-0 flex items-center justify-between pl-5 pr-3 pb-2 pt-1">
-        <span
-          className="text-[13px] font-medium"
-          style={{ color: "rgba(255, 255, 255, 0.35)" }}
-        >
-          Projects
-        </span>
+      {/* Primary "New thread" action — always visible, pinned above the
+          scrolling thread list. Target project resolves in App.handleNewChat
+          (active thread → most recent → first project → folder picker). */}
+      <div className="px-3 pt-3 pb-2 shrink-0">
         <button
-          onClick={onCreateProject}
-          title="New project"
-          className="p-[4px] rounded-lg transition-colors"
-          style={{ color: "rgba(255,255,255,0.5)" }}
+          onClick={onNewChat}
+          className="flex items-center gap-2 w-full px-3 py-[10px] rounded-xl text-[13px] font-medium transition-colors"
+          style={{
+            background: "rgba(255, 255, 255, 0.06)",
+            color: "var(--text-primary)",
+            border: "1px solid rgba(255, 255, 255, 0.1)",
+          }}
           onMouseEnter={(e) => {
-            e.currentTarget.style.background = "rgba(255,255,255,0.06)";
-            e.currentTarget.style.color = "var(--text-primary)";
+            e.currentTarget.style.background = "rgba(255, 255, 255, 0.12)";
+            e.currentTarget.style.borderColor = "rgba(255, 255, 255, 0.16)";
           }}
           onMouseLeave={(e) => {
-            e.currentTarget.style.background = "transparent";
-            e.currentTarget.style.color = "rgba(255,255,255,0.5)";
+            e.currentTarget.style.background = "rgba(255, 255, 255, 0.06)";
+            e.currentTarget.style.borderColor = "rgba(255, 255, 255, 0.1)";
           }}
         >
-          <FolderPlus size={17} weight="regular" />
+          <Plus size={15} weight="bold" />
+          New thread
         </button>
       </div>
 
       <ScrollArea className="flex-1">
-        <div className="px-3 pb-2">
+        <div className="pb-2">
           {isLoading ? (
-            <ThreadSkeleton />
+            <div className="px-3">
+              <ThreadSkeleton />
+            </div>
           ) : (
             <>
-              {/* Pinned threads */}
+              {/* Pinned section — top-level, sibling to Projects */}
               {pinnedThreads.length > 0 && (
-                <div className="mb-1">
-                  <div className="flex items-center gap-1.5 px-2 py-[5px] mb-[2px]">
-                    <PushPin
-                      size={13}
-                      weight="fill"
-                      style={{ color: "rgba(255, 255, 255, 0.35)", flexShrink: 0 }}
-                    />
+                <>
+                  <div className="flex items-center justify-between pl-5 pr-3 pb-2 pt-2">
                     <span
-                      className="text-[12px] font-medium"
+                      className="text-[13px] font-medium"
                       style={{ color: "rgba(255, 255, 255, 0.35)" }}
                     >
                       Pinned
                     </span>
                   </div>
-                  {pinnedThreads.map((thread) => (
-                    <ThreadRow
-                      key={thread.id}
-                      thread={thread}
-                      active={thread.id === activeThreadId}
-                      onSelect={onSelectThread}
-                      onRename={(name) => onRenameThread(thread.id, name)}
-                      onDelete={() => onDeleteThread(thread.id)}
-                      onArchive={() => onArchiveThread(thread.id)}
-                      onPin={() => onPinThread(thread.id)}
-                      indent
-                    />
-                  ))}
-                </div>
+                  <div className="px-3 mb-2">
+                    {pinnedThreads.map((thread) => (
+                      <ThreadRow
+                        key={thread.id}
+                        thread={thread}
+                        active={thread.id === activeThreadId}
+                        onSelect={onSelectThread}
+                        onRename={(name) => onRenameThread(thread.id, name)}
+                        onDelete={() => onDeleteThread(thread.id)}
+                        onArchive={() => onArchiveThread(thread.id)}
+                        onPin={() => onPinThread(thread.id)}
+                      />
+                    ))}
+                  </div>
+                </>
               )}
 
+              {/* Projects header */}
+              <div className="flex items-center justify-between pl-5 pr-3 pb-2 pt-2">
+                <span
+                  className="text-[13px] font-medium"
+                  style={{ color: "rgba(255, 255, 255, 0.35)" }}
+                >
+                  Projects
+                </span>
+                {/* "Add a project" button — hidden for now because the in-chat
+                    project picker (ChatView) already has a "New project…"
+                    entry, and the sidebar "New thread" button falls back to
+                    the folder picker when no projects exist. Kept here so we
+                    can restore it easily if discoverability becomes an issue. */}
+                {/*
+                <div className="relative group/addproj">
+                  <button
+                    onClick={onCreateProject}
+                    className="p-[4px] rounded-lg transition-colors"
+                    style={{ color: "rgba(255,255,255,0.5)" }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.background = "rgba(255,255,255,0.06)";
+                      e.currentTarget.style.color = "var(--text-primary)";
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.background = "transparent";
+                      e.currentTarget.style.color = "rgba(255,255,255,0.5)";
+                    }}
+                  >
+                    <FolderPlus size={17} weight="regular" />
+                  </button>
+                  <div
+                    className="absolute right-full top-1/2 -translate-y-1/2 mr-1.5 px-2.5 py-1.5 rounded-lg text-[12px] whitespace-nowrap opacity-0 group-hover/addproj:opacity-100 transition-opacity duration-150 pointer-events-none z-50"
+                    style={{ background: "var(--surface-2)", color: "var(--text-secondary)", border: "1px solid var(--border-emphasis)" }}
+                  >
+                    Add a project
+                  </div>
+                </div>
+                */}
+              </div>
+
+              <div className="px-3">
               {/* Project groups */}
               {projects.map((project) => {
                 const projectThreads = threadsByProject.get(project.id) ?? [];
@@ -209,6 +251,7 @@ export function Sidebar({
                   Add a project
                 </button>
               )}
+              </div>
 
             </>
           )}
@@ -311,7 +354,7 @@ export function Sidebar({
   );
 }
 
-function ThreadStatusIndicator({ thread }: { thread: Thread }) {
+function ThreadStatusIndicator({ thread, onPin }: { thread: Thread; onPin?: () => void }) {
   let dot: React.ReactNode = null;
 
   if (thread.status === "running") {
@@ -342,9 +385,46 @@ function ThreadStatusIndicator({ thread }: { thread: Thread }) {
     );
   }
 
+  if (!onPin) {
+    return (
+      <span className="shrink-0 flex items-center justify-center ml-1 mr-2" style={{ width: 14 }}>
+        {dot}
+      </span>
+    );
+  }
+
   return (
-    <span className="shrink-0 flex items-center justify-center ml-1 mr-2" style={{ width: 14 }}>
-      {dot}
+    <span
+      className="shrink-0 relative flex items-center justify-center ml-1 mr-2"
+      style={{ width: 14, height: 14 }}
+    >
+      <span className="absolute inset-0 flex items-center justify-center group-hover:opacity-0 transition-opacity">
+        {dot}
+      </span>
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          onPin();
+        }}
+        title={thread.pinned ? "Unpin" : "Pin to top"}
+        className="absolute flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+        style={{
+          width: 20,
+          height: 20,
+          left: "50%",
+          top: "50%",
+          transform: "translate(-50%, -50%)",
+          color: "rgba(255,255,255,0.55)",
+        }}
+        onMouseEnter={(e) => {
+          e.currentTarget.style.color = "rgba(255,255,255,1)";
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.color = "rgba(255,255,255,0.55)";
+        }}
+      >
+        <PushPin size={15} weight="regular" />
+      </button>
     </span>
   );
 }
@@ -357,7 +437,6 @@ function ThreadRow({
   onDelete,
   onArchive,
   onPin,
-  indent = false,
 }: {
   thread: Thread;
   active: boolean;
@@ -366,7 +445,6 @@ function ThreadRow({
   onDelete: () => void;
   onArchive: () => void;
   onPin?: () => void;
-  indent?: boolean;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(null);
@@ -386,10 +464,13 @@ function ThreadRow({
 
   return (
     <div
-      className={`group relative flex items-center w-full ${indent ? "pl-2" : "pl-1"} pr-2 py-[7px] mb-[2px] rounded-xl text-left transition-all duration-100`}
+      className="group relative flex items-center w-full pl-1 pr-2 py-[7px] mb-[2px] rounded-xl text-left transition-all duration-100"
       style={{
         background: active ? "rgba(255,255,255,0.09)" : "transparent",
-        color: active ? "var(--text-primary)" : "var(--text-secondary)",
+        // Inactive threads sit at 0.92 (not --text-secondary/0.75) so they
+        // read clearly brighter than project headers (0.6) — otherwise the
+        // two levels blend into a single muted tier.
+        color: active ? "var(--text-primary)" : "rgba(255,255,255,0.92)",
       }}
       onClick={() => {
         if (!renaming) onSelect(thread.id);
@@ -401,7 +482,7 @@ function ThreadRow({
         if (!active && !menuOpen) e.currentTarget.style.background = "transparent";
       }}
     >
-      {thread.archived ? <span className="w-2 shrink-0" /> : <ThreadStatusIndicator thread={thread} />}
+      {thread.archived ? <span className="w-2 shrink-0" /> : <ThreadStatusIndicator thread={thread} onPin={onPin} />}
       {renaming ? (
         <input
           value={renameValue}
@@ -455,75 +536,63 @@ function ThreadRow({
             {menuOpen && menuPos && (
               <>
                 <div className="fixed inset-0 z-[60]" onClick={(e) => { e.stopPropagation(); setMenuOpen(false); }} />
-                <div
-                  className="fixed z-[70] rounded-2xl overflow-hidden p-1.5"
+                <DropdownSurface
+                  variant="floating"
+                  className="fixed z-[70]"
                   style={{
                     top: menuPos.top,
                     left: menuPos.left,
-                    background: "rgba(32,32,32,0.98)",
-                    border: "1px solid rgba(255,255,255,0.08)",
-                    boxShadow: "0 8px 30px rgba(0,0,0,0.55), 0 0 0 0.5px rgba(255,255,255,0.06)",
                     minWidth: "160px",
-                    backdropFilter: "blur(20px)",
                   }}
                   onClick={(e) => e.stopPropagation()}
                 >
-                  <button
+                  <DropdownItem
+                    variant="floating"
                     onClick={() => {
                       setMenuOpen(false);
                       setRenaming(true);
                       setRenameValue(thread.name);
                     }}
-                    className="flex items-center gap-2.5 w-full px-3 py-[8px] text-[13px] text-left rounded-lg transition-colors"
-                    style={{ color: "rgba(255,255,255,0.85)" }}
-                    onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.07)")}
-                    onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
                   >
                     <PencilSimple size={16} weight="regular" />
                     Rename
-                  </button>
+                  </DropdownItem>
                   {onPin && (
-                    <button
+                    <DropdownItem
+                      variant="floating"
                       onClick={() => {
                         setMenuOpen(false);
                         onPin();
                       }}
-                      className="flex items-center gap-2.5 w-full px-3 py-[8px] text-[13px] text-left rounded-lg transition-colors"
-                      style={{ color: "rgba(255,255,255,0.85)" }}
-                      onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.07)")}
-                      onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
                     >
-                      <PushPin size={15} weight={thread.pinned ? "fill" : "regular"} />
+                      {/* Outline glyph in both states — the label carries the
+                          state ("Pin" vs "Unpin"); a filled glyph was
+                          overloading the signal and reading as "active". */}
+                      <PushPin size={15} weight="regular" />
                       {thread.pinned ? "Unpin" : "Pin to top"}
-                    </button>
+                    </DropdownItem>
                   )}
-                  <button
+                  <DropdownItem
+                    variant="floating"
                     onClick={() => {
                       setMenuOpen(false);
                       onArchive();
                     }}
-                    className="flex items-center gap-2.5 w-full px-3 py-[8px] text-[13px] text-left rounded-lg transition-colors"
-                    style={{ color: "rgba(255,255,255,0.85)" }}
-                    onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.07)")}
-                    onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
                   >
                     <Archive size={15} weight="regular" />
                     {thread.archived ? "Unarchive" : "Archive"}
-                  </button>
-                  <button
+                  </DropdownItem>
+                  <DropdownItem
+                    variant="floating"
                     onClick={() => {
                       setMenuOpen(false);
                       onDelete();
                     }}
-                    className="flex items-center gap-2.5 w-full px-3 py-[8px] text-[13px] text-left rounded-lg transition-colors"
-                    style={{ color: "rgba(255,255,255,0.85)" }}
-                    onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.07)")}
-                    onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
                   >
                     <Trash size={14} weight="regular" />
                     Delete
-                  </button>
-                </div>
+                  </DropdownItem>
+                </DropdownSurface>
               </>
             )}
           </div>
@@ -558,12 +627,23 @@ function ProjectGroup({
   onArchiveThread: (threadId: string) => void;
   onPinThread: (threadId: string) => void;
 }) {
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(
+    () => localStorage.getItem(`project:collapsed:${project.id}`) === "true"
+  );
+
+  function toggleCollapsed() {
+    const next = !collapsed;
+    setCollapsed(next);
+    if (next) {
+      localStorage.setItem(`project:collapsed:${project.id}`, "true");
+    } else {
+      localStorage.removeItem(`project:collapsed:${project.id}`);
+    }
+  }
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(null);
   const [renaming, setRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState(project.name);
-  const menuRef = useRef<HTMLDivElement>(null);
   const menuBtnRef = useRef<HTMLButtonElement>(null);
 
   function handleRenameSubmit() {
@@ -581,7 +661,7 @@ function ProjectGroup({
       <div
         className="group flex items-center w-full px-2 py-[5px] mb-[2px] rounded-xl transition-colors"
         onClick={() => {
-          if (!renaming) setCollapsed(!collapsed);
+          if (!renaming) toggleCollapsed();
         }}
         onMouseEnter={(e) =>
           (e.currentTarget.style.background = "rgba(255,255,255,0.04)")
@@ -594,32 +674,49 @@ function ProjectGroup({
         <div
           className="flex items-center gap-1.5 flex-1 min-w-0"
         >
-          {collapsed ? (
-            <CaretRight
-              size={12}
-              weight="bold"
-              style={{ color: "rgba(255, 255, 255, 0.6)", flexShrink: 0 }}
-            />
-          ) : (
-            <CaretDown
-              size={12}
-              weight="bold"
-              style={{ color: "rgba(255, 255, 255, 0.6)", flexShrink: 0 }}
-            />
-          )}
-          {collapsed ? (
-            <Folder
-              size={15}
-              weight="regular"
-              style={{ color: "rgba(255, 255, 255, 0.6)", flexShrink: 0, marginLeft: 8 }}
-            />
-          ) : (
-            <FolderOpen
-              size={15}
-              weight="regular"
-              style={{ color: "rgba(255, 255, 255, 0.6)", flexShrink: 0, marginLeft: 8 }}
-            />
-          )}
+          <span
+            className="shrink-0 relative flex items-center justify-center"
+            style={{ width: 16, height: 16 }}
+          >
+            {/* Folder at rest — fades out on row hover/focus */}
+            <span
+              className="absolute inset-0 flex items-center justify-center transition-opacity opacity-100 group-hover:opacity-0 group-focus-within:opacity-0"
+              aria-hidden
+            >
+              {collapsed ? (
+                <Folder
+                  size={16}
+                  weight="regular"
+                  style={{ color: "rgba(255, 255, 255, 0.6)" }}
+                />
+              ) : (
+                <FolderOpen
+                  size={16}
+                  weight="regular"
+                  style={{ color: "rgba(255, 255, 255, 0.6)" }}
+                />
+              )}
+            </span>
+            {/* Chevron on hover/focus — communicates the expand affordance */}
+            <span
+              className="absolute inset-0 flex items-center justify-center transition-opacity opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
+              aria-hidden
+            >
+              {collapsed ? (
+                <CaretRight
+                  size={12}
+                  weight="bold"
+                  style={{ color: "rgba(255, 255, 255, 0.75)" }}
+                />
+              ) : (
+                <CaretDown
+                  size={12}
+                  weight="bold"
+                  style={{ color: "rgba(255, 255, 255, 0.75)" }}
+                />
+              )}
+            </span>
+          </span>
           {renaming ? (
             <input
               value={renameValue}
@@ -675,47 +772,37 @@ function ProjectGroup({
                 className="fixed inset-0 z-[60]"
                 onClick={(e) => { e.stopPropagation(); setMenuOpen(false); }}
               />
-              <div
-                ref={menuRef}
-                className="fixed z-[70] rounded-2xl overflow-hidden p-1.5"
+              <DropdownSurface
+                variant="floating"
+                className="fixed z-[70]"
                 style={{
                   top: menuPos.top,
                   left: menuPos.left,
-                  background: "rgba(32,32,32,0.98)",
-                  border: "1px solid rgba(255,255,255,0.08)",
-                  boxShadow: "0 8px 30px rgba(0,0,0,0.55), 0 0 0 0.5px rgba(255,255,255,0.06)",
                   minWidth: "160px",
-                  backdropFilter: "blur(20px)",
                 }}
               >
-                <button
+                <DropdownItem
+                  variant="floating"
                   onClick={() => {
                     setMenuOpen(false);
                     setRenaming(true);
                     setRenameValue(project.name);
                   }}
-                  className="flex items-center gap-2.5 w-full px-3 py-[8px] text-[13px] text-left rounded-lg transition-colors"
-                  style={{ color: "rgba(255,255,255,0.85)" }}
-                  onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.07)")}
-                  onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
                 >
                   <PencilSimple size={16} weight="regular" />
                   Rename
-                </button>
-                <button
+                </DropdownItem>
+                <DropdownItem
+                  variant="floating"
                   onClick={() => {
                     setMenuOpen(false);
                     onDelete();
                   }}
-                  className="flex items-center gap-2.5 w-full px-3 py-[8px] text-[13px] text-left rounded-lg transition-colors"
-                  style={{ color: "rgba(255,255,255,0.85)" }}
-                  onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.07)")}
-                  onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
                 >
                   <Trash size={16} weight="regular" />
                   Delete project
-                </button>
-              </div>
+                </DropdownItem>
+              </DropdownSurface>
             </>
           )}
         </div>
@@ -746,7 +833,6 @@ function ProjectGroup({
               onDelete={() => onDeleteThread(thread.id)}
               onArchive={() => onArchiveThread(thread.id)}
               onPin={() => onPinThread(thread.id)}
-              indent
             />
           ))
         ) : (

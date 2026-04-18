@@ -9,6 +9,7 @@ export {
 } from "./schemas/claude-events";
 
 export {
+  Provider,
   EditorTarget,
   ProjectFolder,
   ProjectInfo,
@@ -18,6 +19,11 @@ export {
   AskUserOption,
   AskUserQuestionItem,
   AskUserInput,
+  CodexReasoningEffort,
+  CodexReasoningEffortOption,
+  CodexModel,
+  ClaudeEffortLevel,
+  ClaudeModel,
   IpcAssistantText,
   IpcStatus,
   IpcResult,
@@ -26,4 +32,9 @@ export {
   IpcToolUse,
   IpcDeferredToolUse,
   IpcEvent,
+  ThreadsRenameInput,
+  ThreadsPinInput,
+  ThreadsArchiveInput,
+  ThreadsDeleteInput,
+  ThreadsChangeProjectInput,
 } from "./schemas/ipc";

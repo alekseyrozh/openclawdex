@@ -18,5 +18,5 @@ export async function initDb(): Promise<void> {
   const dbPath = path.join(app.getPath("userData"), "openclawdex.db");
   const client = createClient({ url: `file:${dbPath}` });
   _db = drizzle(client, { schema });
-  await migrate(_db, { migrationsFolder: path.join(__dirname, "../../drizzle") });
+  await migrate(_db, { migrationsFolder: path.join(app.getAppPath(), "drizzle") });
 }
