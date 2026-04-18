@@ -665,11 +665,15 @@ export function App() {
   // ── Resolve a pending request (e.g. AskUserQuestion answer) ──
 
   const handleResolveRequest = useCallback(
-    (threadId: string, request: PendingRequest, text: string) => {
+    (
+      threadId: string,
+      request: PendingRequest,
+      payload: { answers: Record<string, string>; displayText: string },
+    ) => {
       const userMsg: Message = {
         id: msgId(),
         role: "user",
-        content: text,
+        content: payload.displayText,
         timestamp: new Date(),
       };
 
@@ -693,7 +697,8 @@ export function App() {
           window.openclawdex?.resolveRequest(threadId, {
             kind: "ask_user_question",
             requestId: request.requestId,
-            text,
+            answers: payload.answers,
+            displayText: payload.displayText,
           })?.catch((err) => reportIpcError("Submit question answer", err));
           return;
       }

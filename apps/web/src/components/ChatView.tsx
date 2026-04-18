@@ -1998,7 +1998,11 @@ interface ChatViewProps {
     opts?: { model?: string; effort?: string },
   ) => void;
   onInterrupt: (threadId: string) => void;
-  onResolveRequest: (threadId: string, request: PendingRequest, text: string) => void;
+  onResolveRequest: (
+    threadId: string,
+    request: PendingRequest,
+    payload: { answers: Record<string, string>; displayText: string },
+  ) => void;
   /**
    * Flip the pending thread's provider when the user picks a Codex model
    * on a brand-new (uncommitted) conversation. No-op for already-started
@@ -3117,17 +3121,18 @@ export function ChatView({
                                 key={m.id}
                                 toolInput={m.toolInput}
                                 alreadyAnswered={hasUserMsgAfter}
-                                onSubmit={(text) => {
+                                onSubmit={(payload) => {
                                   // If we have an open pending request matching
                                   // this question, route through the resolver
                                   // so the backend can continue the paused
                                   // turn. Otherwise (e.g. viewing old history),
-                                  // fall back to starting a new turn.
+                                  // fall back to starting a new turn with the
+                                  // human-readable rendering of the answers.
                                   const pending = thread.pendingRequest;
                                   if (pending && pending.kind === "ask_user_question") {
-                                    onResolveRequest(thread.id, pending, text);
+                                    onResolveRequest(thread.id, pending, payload);
                                   } else {
-                                    onSend(thread.id, text);
+                                    onSend(thread.id, payload.displayText);
                                   }
                                 }}
                               />

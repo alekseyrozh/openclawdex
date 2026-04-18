@@ -509,7 +509,6 @@ export class CodexSession implements AgentSession {
       durationMs: null,
       isError: turnError !== null,
       contextUsage: lastUsage,
-      pendingRequest: null,
     });
     if (turnError) onEvent({ kind: "error", message: turnError });
     onEvent({ kind: "done" });

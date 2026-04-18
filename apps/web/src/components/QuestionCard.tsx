@@ -56,7 +56,16 @@ function ClaudeIconSmall() {
 
 interface QuestionCardProps {
   toolInput: Record<string, unknown> | undefined;
-  onSubmit: (formattedText: string) => void;
+  /**
+   * Submit the user's selections.
+   *
+   * - `answers` is keyed by the question text (matches the SDK's
+   *   `AskUserQuestionOutput.answers` shape so the desktop side can feed
+   *   it back as the tool's `updatedInput` via `canUseTool`).
+   * - `displayText` is a human-readable rendering for the chat bubble,
+   *   composed the same way a user-typed reply would look.
+   */
+  onSubmit: (payload: { answers: Record<string, string>; displayText: string }) => void;
   /** Whether a user message exists after this tool call (already answered). */
   alreadyAnswered: boolean;
 }
@@ -131,8 +140,14 @@ export function QuestionCard({ toolInput, onSubmit, alreadyAnswered }: QuestionC
     if (!allAnswered || submitted) return;
     setSubmitted(true);
 
-    // Format answers as readable text
+    // Build two parallel views of the user's choices:
+    //   - `answersByQuestion` keyed by the full question text (what the
+    //     SDK's AskUserQuestion tool expects in its `answers` field).
+    //   - `lines` formatted for the chat bubble, keyed by the short
+    //     `header` chip label for readability.
+    const answersByQuestion: Record<string, string> = {};
     const lines: string[] = [];
+
     for (const q of questions) {
       const ans = answers[q.header];
       if (!ans) continue;
@@ -147,10 +162,15 @@ export function QuestionCard({ toolInput, onSubmit, alreadyAnswered }: QuestionC
       } else {
         value = ans === OTHER_KEY ? otherTexts[q.header] ?? "" : (ans as string);
       }
+
+      answersByQuestion[q.question] = value;
       lines.push(`**${q.header}**: ${value}`);
     }
 
-    onSubmit(lines.join("\n"));
+    onSubmit({
+      answers: answersByQuestion,
+      displayText: lines.join("\n"),
+    });
   }
 
   return (

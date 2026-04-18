@@ -249,8 +249,9 @@ export const IpcToolUse = z.object({
 //      `RequestResolution` variant (same `kind` + `requestId`).
 //   4. Main routes the resolution to the session's `resolveRequest`.
 //   5. Each backend translates the resolution into its native mechanism
-//      (Claude: user message with `parent_tool_use_id`; Codex: reply to
-//      the paused JSON-RPC approval request — future).
+//      (Claude: resolve the `canUseTool` Promise with `updatedInput`
+//      carrying the answers; Codex: reply to the paused JSON-RPC
+//      approval request — future).
 
 export const PendingAskUserQuestion = z.object({
   kind: z.literal("ask_user_question"),
@@ -264,10 +265,20 @@ export const PendingRequest = z.discriminatedUnion("kind", [
 ]);
 export type PendingRequest = z.infer<typeof PendingRequest>;
 
+// `answers` is keyed by the question text (the `question` field of
+// each AskUserQuestionItem) with values being the selected label, or a
+// comma-joined string for multi-select questions. This matches the
+// `AskUserQuestionOutput.answers` shape the Claude CLI's tool expects,
+// so we can feed it straight back as the tool's `updatedInput` via the
+// SDK's `canUseTool` callback. `displayText` is an opaque human-
+// readable rendering of the same answers — used to render the user's
+// reply bubble in chat, kept separate so the renderer owns its
+// presentation.
 export const AskUserQuestionResolution = z.object({
   kind: z.literal("ask_user_question"),
   requestId: z.string(),
-  text: z.string(),
+  answers: z.record(z.string(), z.string()),
+  displayText: z.string(),
 });
 
 export const RequestResolution = z.discriminatedUnion("kind", [

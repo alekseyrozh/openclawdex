@@ -380,25 +380,27 @@ function setupIpcHandlers(): void {
             }
 
             emitToRenderer({ type: "result", threadId, ...contextStats });
+            // Turn is complete — mark thread as idle so user can send follow-ups
+            emitToRenderer({ type: "status", threadId, status: "idle" });
+            break;
+          }
 
-            if (e.pendingRequest) {
-              // Agent is paused waiting on the user (AskUserQuestion today;
-              // approvals/plan-mode in the future). Renderer reads
-              // `pending_request.request.kind` to decide what UI to show.
-              emitToRenderer({
-                type: "pending_request",
-                threadId,
-                request: e.pendingRequest,
-              });
-              emitToRenderer({
-                type: "status",
-                threadId,
-                status: "awaiting_input",
-              });
-            } else {
-              // Turn is complete — mark thread as idle so user can send follow-ups
-              emitToRenderer({ type: "status", threadId, status: "idle" });
-            }
+          case "pending_request": {
+            // Agent is paused waiting on the user (AskUserQuestion today;
+            // approvals/plan-mode in the future). The SDK's `canUseTool`
+            // callback has blocked on a Promise that the session's
+            // `resolveRequest` method will fulfill. Renderer reads
+            // `pending_request.request.kind` to decide what UI to show.
+            emitToRenderer({
+              type: "pending_request",
+              threadId,
+              request: e.request,
+            });
+            emitToRenderer({
+              type: "status",
+              threadId,
+              status: "awaiting_input",
+            });
             break;
           }
 

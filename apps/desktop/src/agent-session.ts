@@ -72,10 +72,16 @@ export type SessionEvent =
       durationMs: number | null;
       isError: boolean;
       contextUsage: ContextUsage | null;
-      // Always `null` for Codex today (no AskUserQuestion analogue, and
-      // approval requests aren't wired through yet).
-      pendingRequest: PendingRequest | null;
     }
+  /**
+   * The agent has paused and is waiting on the user. Emitted mid-turn
+   * (NOT inside a `result` event) because the pause happens inside the
+   * SDK's `canUseTool` callback — before the turn's `result` is
+   * produced. The renderer stashes the request on the thread, shows
+   * the appropriate UI, and eventually calls `resolveRequest` on the
+   * session to unblock the backend.
+   */
+  | { kind: "pending_request"; request: PendingRequest }
   | { kind: "error"; message: string }
   | { kind: "done" };
 

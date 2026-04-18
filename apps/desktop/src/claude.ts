@@ -1,9 +1,12 @@
 import { execSync } from "child_process";
+import { randomUUID } from "crypto";
 import {
   query,
   type SDKMessage,
   type SDKUserMessage,
   type Options as ClaudeQueryOptions,
+  type CanUseTool,
+  type PermissionResult,
 } from "@anthropic-ai/claude-agent-sdk";
 import type { ClaudeEffortLevel } from "@openclawdex/shared";
 import type {
@@ -55,6 +58,23 @@ export class ClaudeSession implements AgentSession {
   private messageQueue: SDKUserMessage[] = [];
   private messageResolve: ((value: IteratorResult<SDKUserMessage>) => void) | null = null;
   private closed = false;
+
+  // Pending AskUserQuestion Promises keyed by the requestId we emitted
+  // to the renderer. The SDK's canUseTool callback stores a resolver
+  // here and awaits it; resolveRequest() looks it up and fulfills the
+  // Promise with the answers the user picked in the UI. This is the
+  // ONLY correct way to feed AskUserQuestion answers back to the CLI —
+  // the older "push a user message with parent_tool_use_id" approach
+  // looks plausible but actually bypasses the tool, which then self-
+  // reports as dismissed in its synthetic tool_result ("It looks like
+  // the questions were dismissed.").
+  private pendingAskQuestions = new Map<
+    string,
+    {
+      resolve: (r: PermissionResult) => void;
+      rawQuestions: unknown;
+    }
+  >();
 
   private cwd: string | undefined;
 
@@ -160,6 +180,69 @@ export class ClaudeSession implements AgentSession {
   }
 
   /**
+   * Build the `canUseTool` callback passed to `query()`. The callback
+   * is invoked by the SDK once per tool call the model wants to make.
+   *
+   * For `AskUserQuestion`: we stash a resolver keyed by a fresh
+   * `requestId`, emit a `pending_request` session event so the
+   * renderer can present the QuestionCard, and return a Promise that
+   * the `resolveRequest` method will fulfill once the user submits.
+   * The SDK then runs the tool with `updatedInput` containing both the
+   * original questions and the user's answers — the tool echoes those
+   * answers in its `tool_result`, and the model sees them as the
+   * normal tool output.
+   *
+   * For every other tool: return `{behavior: "allow"}` immediately so
+   * `permissionMode: "bypassPermissions"` is preserved — we're only
+   * intercepting to handle AskUserQuestion, not to gate anything.
+   */
+  private buildCanUseTool(onEvent: (e: SessionEvent) => void): CanUseTool {
+    return async (toolName, toolInput, options): Promise<PermissionResult> => {
+      if (toolName !== "AskUserQuestion") {
+        // Every other tool is pre-approved (we ship with
+        // `permissionMode: "bypassPermissions"`). We're only
+        // intercepting to handle AskUserQuestion, so fall through to
+        // allow with the unmodified input.
+        return { behavior: "allow" };
+      }
+
+      const requestId = randomUUID();
+      const request: PendingRequest = {
+        kind: "ask_user_question",
+        requestId,
+        toolName,
+        input: toolInput,
+      };
+
+      const answerPromise = new Promise<PermissionResult>((resolve) => {
+        this.pendingAskQuestions.set(requestId, {
+          resolve,
+          rawQuestions: toolInput.questions,
+        });
+      });
+
+      // If the SDK's abort signal fires (e.g. the user interrupted the
+      // turn while we were waiting for answers), resolve with `deny` so
+      // the SDK can unwind cleanly instead of hanging forever.
+      const onAbort = () => {
+        const pending = this.pendingAskQuestions.get(requestId);
+        if (!pending) return;
+        this.pendingAskQuestions.delete(requestId);
+        pending.resolve({
+          behavior: "deny",
+          message: "User cancelled before answering.",
+          interrupt: true,
+        });
+      };
+      options.signal.addEventListener("abort", onAbort, { once: true });
+
+      onEvent({ kind: "pending_request", request });
+
+      return answerPromise;
+    };
+  }
+
+  /**
    * Send a user message. Streamed events come back via `onEvent`.
    * On the first call, starts the SDK query. Follow-up calls push
    * into the same session.
@@ -175,6 +258,7 @@ export class ClaudeSession implements AgentSession {
       includePartialMessages: true,
       permissionMode: "bypassPermissions",
       allowDangerouslySkipPermissions: true,
+      canUseTool: this.buildCanUseTool(onEvent),
       resume: this.resumeSessionId,
       cwd: this.cwd,
       ...(this.model && { model: this.model }),
@@ -205,31 +289,12 @@ export class ClaudeSession implements AgentSession {
             console.error("[claude] getContextUsage failed:", err);
           }
 
-          // Check for deferred tool use (e.g. AskUserQuestion). The SDK
-          // surfaces this on the `result` message under `deferred_tool_use`
-          // but the TS types don't expose it — hence the untyped cast.
-          // We project it into the generalized `PendingRequest` shape
-          // (kind: "ask_user_question"), which the main process forwards
-          // as an IPC `pending_request` event; the renderer renders a
-          // QuestionCard and the thread goes into `awaiting_input`.
-          const msgRecord = msg as Record<string, unknown>;
-          const rawDeferred = msgRecord.deferred_tool_use as { id: string; name: string; input: Record<string, unknown> } | undefined;
-          const pendingRequest: PendingRequest | null = rawDeferred
-            ? {
-                kind: "ask_user_question",
-                requestId: rawDeferred.id,
-                toolName: rawDeferred.name,
-                input: rawDeferred.input,
-              }
-            : null;
-
           onEvent({
             kind: "result",
             costUsd: msg.total_cost_usd,
             durationMs: msg.duration_ms,
             isError: msg.is_error,
             contextUsage,
-            pendingRequest,
           });
         } else {
           this.handleMessage(msg, onEvent);
@@ -274,7 +339,15 @@ export class ClaudeSession implements AgentSession {
       }
 
       case "assistant": {
-        // Complete assistant message — extract tool_use blocks (text already sent via deltas)
+        // Complete assistant message — extract tool_use blocks (text already sent via deltas).
+        // Note: AskUserQuestion is surfaced here like any other tool use
+        // so the renderer can render the QuestionCard in the chat
+        // transcript; the accompanying `pending_request` event (emitted
+        // from the canUseTool callback) only carries the opaque
+        // `requestId` the renderer needs to route answers back. Both
+        // events reference the same question, so the renderer keys the
+        // card on the tool_use entry and resolves via the pending
+        // request.
         const content = (msg as { message?: { content?: unknown } }).message?.content;
         if (Array.isArray(content)) {
           for (const block of content) {
@@ -293,20 +366,28 @@ export class ClaudeSession implements AgentSession {
   }
 
   /**
-   * Resolve a pending request. For `ask_user_question` we push a user
-   * message with `parent_tool_use_id` so the SDK routes it as the tool
-   * result, allowing Claude to continue. Other kinds (approvals, plan)
-   * are not yet surfaced on Claude and fall through to a no-op.
+   * Resolve a pending request. For `ask_user_question` we fulfill the
+   * stored `canUseTool` Promise with `{behavior: "allow", updatedInput:
+   * {questions, answers}}` — the SDK then runs AskUserQuestion with
+   * those pre-filled answers and the model sees them as the tool's
+   * normal output. If no resolver exists for the requestId (e.g. the
+   * renderer is replaying an old thread) this is a silent no-op.
    */
   resolveRequest(resolution: RequestResolution): void {
     switch (resolution.kind) {
-      case "ask_user_question":
-        this.enqueueMessage({
-          type: "user",
-          message: { role: "user", content: resolution.text },
-          parent_tool_use_id: resolution.requestId,
+      case "ask_user_question": {
+        const pending = this.pendingAskQuestions.get(resolution.requestId);
+        if (!pending) return;
+        this.pendingAskQuestions.delete(resolution.requestId);
+        pending.resolve({
+          behavior: "allow",
+          updatedInput: {
+            questions: pending.rawQuestions,
+            answers: resolution.answers,
+          },
         });
         return;
+      }
     }
   }
 
@@ -322,6 +403,16 @@ export class ClaudeSession implements AgentSession {
   /** Close the session entirely. */
   close(): void {
     this.closeQueue();
+    // Fail any in-flight AskUserQuestion Promises so the SDK unwinds
+    // cleanly rather than leaking hung canUseTool callbacks.
+    for (const [, pending] of this.pendingAskQuestions) {
+      pending.resolve({
+        behavior: "deny",
+        message: "Session closed.",
+        interrupt: true,
+      });
+    }
+    this.pendingAskQuestions.clear();
     try {
       this.queryInstance?.return(undefined);
     } catch {
