@@ -1340,6 +1340,8 @@ function TextareaWithScrollbar({
 interface ChatViewProps {
   thread: Thread | null;
   projectCwd?: string;
+  projectName?: string;
+  isLoading?: boolean;
   onSend: (threadId: string, text: string, images?: ImagePayload[], opts?: { model?: string; effort?: string }) => void;
   onInterrupt: (threadId: string) => void;
   onRespondToTool: (threadId: string, toolUseId: string, text: string) => void;
@@ -1351,7 +1353,7 @@ interface ChatViewProps {
   onUpdateThreadProvider?: (threadId: string, provider: Provider) => void;
 }
 
-export function ChatView({ thread, projectCwd, onSend, onInterrupt, onRespondToTool, onUpdateThreadProvider }: ChatViewProps) {
+export function ChatView({ thread, projectCwd, projectName, isLoading, onSend, onInterrupt, onRespondToTool, onUpdateThreadProvider }: ChatViewProps) {
   const [input, setInput] = useState("");
   // GOTCHA: `selectedModel` is the unified picker state. When the user
   // picks a Codex model on a pending thread, we also call
@@ -1678,11 +1680,20 @@ export function ChatView({ thread, projectCwd, onSend, onInterrupt, onRespondToT
 
   if (!thread) {
     return (
-      <div
-        className="flex-1 flex items-center justify-center text-[13px]"
-        style={{ color: "var(--text-muted)" }}
-      >
-        No thread selected
+      <div className="flex-1 flex items-center justify-center">
+        {isLoading ? (
+          <svg
+            width="20" height="20" viewBox="0 0 20 20"
+            fill="none"
+            className="animate-spin"
+            style={{ color: "var(--text-muted)" }}
+          >
+            <circle cx="10" cy="10" r="8" stroke="currentColor" strokeWidth="2" strokeOpacity="0.2" />
+            <path d="M10 2a8 8 0 0 1 8 8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+          </svg>
+        ) : (
+          <span className="text-[13px]" style={{ color: "var(--text-muted)" }}>No thread selected</span>
+        )}
       </div>
     );
   }
@@ -1816,10 +1827,18 @@ export function ChatView({ thread, projectCwd, onSend, onInterrupt, onRespondToT
         {thread.messages.length === 0 && thread.historyLoaded ? (
           <div
             key={thread.id}
-            className="flex items-center justify-center h-full text-[13px]"
+            className="flex items-center justify-center h-full text-[28px] font-medium tracking-tight px-8 text-center"
             style={{ color: "var(--text-muted)", animation: "fadeIn 120ms ease" }}
           >
-            Start a conversation
+            {projectName ? (
+              <>
+                What are we building in
+                <span style={{ color: "rgba(255,255,255,0.95)" }}>{`\u00A0${projectName}`}</span>
+                ?
+              </>
+            ) : (
+              "What are we building today?"
+            )}
           </div>
         ) : (
           <div

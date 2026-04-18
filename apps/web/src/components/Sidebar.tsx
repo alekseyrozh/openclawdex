@@ -105,22 +105,29 @@ export function Sidebar({
         >
           Projects
         </span>
-        <button
-          onClick={onCreateProject}
-          title="New project"
-          className="p-[4px] rounded-lg transition-colors"
-          style={{ color: "rgba(255,255,255,0.5)" }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.background = "rgba(255,255,255,0.06)";
-            e.currentTarget.style.color = "var(--text-primary)";
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.background = "transparent";
-            e.currentTarget.style.color = "rgba(255,255,255,0.5)";
-          }}
-        >
-          <FolderPlus size={17} weight="regular" />
-        </button>
+        <div className="relative group/addproj">
+          <button
+            onClick={onCreateProject}
+            className="p-[4px] rounded-lg transition-colors"
+            style={{ color: "rgba(255,255,255,0.5)" }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = "rgba(255,255,255,0.06)";
+              e.currentTarget.style.color = "var(--text-primary)";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = "transparent";
+              e.currentTarget.style.color = "rgba(255,255,255,0.5)";
+            }}
+          >
+            <FolderPlus size={17} weight="regular" />
+          </button>
+          <div
+            className="absolute right-full top-1/2 -translate-y-1/2 mr-1.5 px-2.5 py-1.5 rounded-lg text-[12px] whitespace-nowrap opacity-0 group-hover/addproj:opacity-100 transition-opacity duration-150 pointer-events-none z-50"
+            style={{ background: "var(--surface-2)", color: "var(--text-secondary)", border: "1px solid var(--border-emphasis)" }}
+          >
+            Add a project
+          </div>
+        </div>
       </div>
 
       <ScrollArea className="flex-1">
