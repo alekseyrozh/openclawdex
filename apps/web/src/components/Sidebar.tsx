@@ -106,7 +106,7 @@ export function Sidebar({
       <div className="px-3 pt-3 pb-2 shrink-0">
         <button
           onClick={onNewChat}
-          className="flex items-center gap-2 w-full px-3 py-[10px] rounded-xl text-[13px] font-medium transition-colors"
+          className="group/newthread flex items-center gap-2 w-full px-3 py-[10px] rounded-xl text-[13px] font-medium transition-colors"
           style={{
             background: "rgba(255, 255, 255, 0.06)",
             color: "var(--text-primary)",
@@ -123,6 +123,14 @@ export function Sidebar({
         >
           <Plus size={15} weight="bold" />
           New thread
+          {/* Shortcut hint — revealed on hover. Uses ⌘ on macOS-style
+              UI; the handler in App.tsx also accepts Ctrl+N for parity. */}
+          <span
+            className="ml-auto text-[11px] font-medium opacity-0 group-hover/newthread:opacity-100 transition-opacity"
+            style={{ color: "rgba(255, 255, 255, 0.45)" }}
+          >
+            ⌘N
+          </span>
         </button>
       </div>
 

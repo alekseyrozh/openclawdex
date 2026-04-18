@@ -591,6 +591,25 @@ export function App() {
     }
   }, [projects, handleNewThread, handleCreateProject]);
 
+  // ── Keyboard shortcut: Cmd/Ctrl+N → new thread ────────────────
+  //
+  // Mirrors the sidebar's "New thread" button. Scoped globally so it
+  // fires regardless of which pane has focus; we skip while the user
+  // is typing in an editable field so the native browser shortcut
+  // (if any) still wins, and we ignore when a modifier-less `n` would
+  // otherwise collide.
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      const mod = e.metaKey || e.ctrlKey;
+      if (!mod || e.shiftKey || e.altKey) return;
+      if (e.key !== "n" && e.key !== "N") return;
+      e.preventDefault();
+      handleNewChat();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [handleNewChat]);
+
   /**
    * Reassign a thread to a different project. Pending threads (no
    * session row yet) live in renderer state only — just update

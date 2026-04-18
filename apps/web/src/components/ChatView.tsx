@@ -4,6 +4,9 @@ import {
   useEffect,
   useLayoutEffect,
   useCallback,
+  useImperativeHandle,
+  forwardRef,
+  memo,
   createContext,
   useContext,
 } from "react";
@@ -1401,7 +1404,11 @@ const LANG_LABELS: Record<string, string> = {
   text: "Text",
 };
 
-function CodeBlock({
+// PERF: wrapped in React.memo so every unrelated ChatView re-render
+// (attachment add/remove, status change, thread switch, etc.) doesn't force
+// react-syntax-highlighter to re-tokenize every code block. Props are a
+// plain string + string | undefined, so default shallow equality works.
+const CodeBlock = memo(function CodeBlock({
   language,
   children,
 }: {
@@ -1491,7 +1498,7 @@ function CodeBlock({
       </div>
     </div>
   );
-}
+});
 
 function FileRefCode({ inner }: { inner: string }) {
   const ctx = useContext(OpenFileContext);
@@ -1942,6 +1949,57 @@ interface ChatViewProps {
   onNewChat?: () => void;
 }
 
+/* ── SendButton ──────────────────────────────────────────────
+ *
+ * PERF: the send button's "is there text?" signal used to live in
+ * `hasText` state inside ChatView. Every bulk edit to the composer
+ * (select-all + delete, undo of a paste, clearing on submit) flipped
+ * that boolean and re-rendered the whole 3k-line ChatView — which
+ * forced every CodeBlock / syntax-highlighted block to re-render.
+ *
+ * Pulling the state *inside* a dedicated leaf component keeps the
+ * expensive parent tree still. The parent drives updates
+ * imperatively via a ref; React.memo on CodeBlock (a separate change)
+ * handles the still-possible re-renders from other causes.
+ *
+ * We intentionally don't pass `hasText` as a prop — that would defeat
+ * the whole point, since a parent prop change means a parent render.
+ */
+export interface SendButtonHandle {
+  setHasText: (hasText: boolean) => void;
+}
+
+const SendButton = forwardRef<
+  SendButtonHandle,
+  {
+    hasAttachments: boolean;
+    onClick: () => void;
+  }
+>(function SendButton({ hasAttachments, onClick }, ref) {
+  const [hasText, setHasText] = useState(false);
+  useImperativeHandle(ref, () => ({
+    setHasText(next: boolean) {
+      // Functional updater bails out when unchanged — most keystrokes
+      // within a non-empty draft (or within an empty one) no-op.
+      setHasText((prev) => (prev === next ? prev : next));
+    },
+  }), []);
+  const active = hasText || hasAttachments;
+  return (
+    <button
+      onClick={onClick}
+      disabled={!active}
+      className="w-[30px] h-[30px] flex items-center justify-center rounded-full transition-colors"
+      style={{
+        background: active ? "var(--text-primary)" : "var(--surface-3)",
+        color: active ? "var(--surface-0)" : "var(--text-faint)",
+      }}
+    >
+      <ArrowUp size={16} weight="bold" />
+    </button>
+  );
+});
+
 export function ChatView({
   thread,
   projects,
@@ -1957,18 +2015,15 @@ export function ChatView({
   onNewChat,
 }: ChatViewProps) {
   // PERF: the textarea is uncontrolled — its text lives in the DOM, read at
-  // submit time via `textareaRef.current.value`. We only mirror a boolean
-  // into React state so the send button's disabled/active style can react to
-  // "is there text?". With a functional updater that bails out when the value
-  // is unchanged, React re-renders ChatView at most twice per message (first
-  // char typed, last char deleted) instead of on every keystroke. Typing into
-  // a 3k-line ChatView rendering a long message list was visibly laggy when
-  // the full string was held in state here.
-  const [hasText, setHasText] = useState(false);
+  // submit time via `textareaRef.current.value`. The "is there text?" signal
+  // that drives the send-button style is kept *inside* SendButton (see its
+  // definition above) and updated imperatively via this ref. That way even
+  // hard flips (select-all + delete, undo a paste) don't re-render ChatView
+  // or the message list — only the 30×30 send button.
+  const sendButtonRef = useRef<SendButtonHandle>(null);
   const handleTextChange = useCallback<React.ChangeEventHandler<HTMLTextAreaElement>>(
     (e) => {
-      const next = e.target.value.trim().length > 0;
-      setHasText((prev) => (prev === next ? prev : next));
+      sendButtonRef.current?.setHasText(e.target.value.trim().length > 0);
     },
     [],
   );
@@ -2261,7 +2316,7 @@ export function ChatView({
     // `field-sizing: content` on the element handles the reflow.
     const el = textareaRef.current;
     if (el) el.value = "";
-    setHasText(false);
+    sendButtonRef.current?.setHasText(false);
     setAttachments((prev) => {
       prev.forEach((a) => URL.revokeObjectURL(a.previewUrl));
       return [];
@@ -3123,23 +3178,11 @@ export function ChatView({
                         />
                       </button>
                     ) : (
-                      <button
+                      <SendButton
+                        ref={sendButtonRef}
+                        hasAttachments={attachments.length > 0}
                         onClick={handleSubmit}
-                        disabled={!hasText && attachments.length === 0}
-                        className="w-[30px] h-[30px] flex items-center justify-center rounded-full transition-colors"
-                        style={{
-                          background:
-                            hasText || attachments.length > 0
-                              ? "var(--text-primary)"
-                              : "var(--surface-3)",
-                          color:
-                            hasText || attachments.length > 0
-                              ? "var(--surface-0)"
-                              : "var(--text-faint)",
-                        }}
-                      >
-                        <ArrowUp size={16} weight="bold" />
-                      </button>
+                      />
                     )}
                   </div>
                 </div>
