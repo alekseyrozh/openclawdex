@@ -1,6 +1,6 @@
 /** Type declarations for the preload bridge exposed on `window.openclawdex`. */
 
-import type { SessionInfo, HistoryMessage, ProjectInfo, EditorTarget, Provider, CodexModel, ClaudeModel } from "@openclawdex/shared";
+import type { SessionInfo, HistoryMessage, ProjectInfo, EditorTarget, Provider, CodexModel, ClaudeModel, ImagePayload } from "@openclawdex/shared";
 
 export {};
 
@@ -24,7 +24,7 @@ declare global {
         provider?: Provider;
         resumeSessionId?: string;
         projectId?: string;
-        images?: { name: string; base64: string; mediaType: string; path?: string }[];
+        images?: ImagePayload[];
         model?: string;
         effort?: string;
       },

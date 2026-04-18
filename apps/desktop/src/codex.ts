@@ -92,10 +92,6 @@ export class CodexSession implements AgentSession {
   // Live controller for the currently-streaming turn, so `interrupt()`
   // can abort mid-turn.
   private currentAbort: AbortController | null = null;
-  // Tracks the last full text snapshot seen for each in-flight
-  // `agent_message` item so we can emit only appended suffixes on
-  // `item.updated` and `item.completed`.
-  private agentMessageTextById = new Map<string, string>();
 
   // Has the renderer seen an `init` event yet for this session?
   //
@@ -281,7 +277,6 @@ export class CodexSession implements AgentSession {
     // only carries stderr (e.g. "Reading prompt from stdin...") while
     // the real reason (rate limit, auth, etc.) is in the JSON event.
     let turnError: string | null = null;
-    this.agentMessageTextById.clear();
 
     try {
       const { events } = await this.thread.runStreamed(input, { signal: abort.signal });
@@ -301,7 +296,6 @@ export class CodexSession implements AgentSession {
         turnError = err instanceof Error ? err.message : String(err);
       }
     } finally {
-      this.agentMessageTextById.clear();
       this.currentAbort = null;
     }
 
@@ -324,10 +318,15 @@ export class CodexSession implements AgentSession {
    * Translate one Codex `ThreadEvent` into our provider-neutral
    * {@link SessionEvent} stream.
    *
-   * GOTCHA: the SDK's `agent_message` payload carries the full text
-   * snapshot on every `item.updated` / `item.completed`, not a token
-   * delta. We track the previous snapshot per item id and emit only
-   * the newly appended suffix so the renderer can stream incrementally.
+   * GOTCHA: Codex emits many item.* lifecycle events per item
+   * (started → updated* → completed). For text we only forward
+   * `agent_message`'s COMPLETED event as one big `text_delta`,
+   * because the SDK doesn't expose per-token deltas in a shape we
+   * can stream incrementally. This means Codex responses appear
+   * "chunked by message" in the UI, where Claude responses stream
+   * character-by-character — that's a real UX difference worth
+   * keeping in mind when debugging "why isn't my Codex reply
+   * streaming?".
    *
    * TOOL CARDS: for tool-shaped items (shell, file_change, mcp, web
    * search, todo list) we emit a `tool_use` on BOTH `item.started`
@@ -362,10 +361,10 @@ export class CodexSession implements AgentSession {
         const item = ev.item;
         switch (item.type) {
           case "agent_message":
-            if (ev.type === "item.started") {
-              this.agentMessageTextById.set(item.id, item.text);
-            } else {
-              this.emitAgentMessageDelta(item.id, item.text, onEvent);
+            // Only the final text is useful — `item.started` fires
+            // before any content is streamed (item.text === "").
+            if (ev.type === "item.completed") {
+              onEvent({ kind: "text_delta", text: item.text });
             }
             break;
 
@@ -443,40 +442,14 @@ export class CodexSession implements AgentSession {
       case "turn.started":
       case "turn.completed":
       case "turn.failed":
+      case "item.updated":
       case "error":
         // Lifecycle events we handle in runOneTurn (or explicitly
-        // ignore).
+        // ignore — `item.updated` fires many times per streaming
+        // command and we'd rather not redraw the card for every
+        // `aggregated_output` byte).
         break;
-
-      case "item.updated": {
-        const item = ev.item;
-        if (item.type === "agent_message") {
-          this.emitAgentMessageDelta(item.id, item.text, onEvent);
-        }
-        break;
-      }
     }
-  }
-
-  private emitAgentMessageDelta(
-    itemId: string,
-    nextText: string,
-    onEvent: (e: SessionEvent) => void,
-  ): void {
-    const prevText = this.agentMessageTextById.get(itemId) ?? "";
-    if (nextText.length === 0 || nextText === prevText) return;
-
-    if (nextText.startsWith(prevText)) {
-      const delta = nextText.slice(prevText.length);
-      this.agentMessageTextById.set(itemId, nextText);
-      if (delta.length > 0) onEvent({ kind: "text_delta", text: delta });
-      return;
-    }
-
-    // Unexpected non-append update shape. Fall back to emitting the
-    // current snapshot once rather than stalling the transcript.
-    this.agentMessageTextById.set(itemId, nextText);
-    onEvent({ kind: "text_delta", text: nextText });
   }
 
   /**

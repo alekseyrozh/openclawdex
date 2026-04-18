@@ -171,31 +171,29 @@ export function buildCodexSessionIndex(): Map<string, string> {
 }
 
 /**
- * TTL-cached wrapper around {@link buildCodexSessionIndex}.
+ * Cached wrapper around {@link buildCodexSessionIndex}.
  *
  * `session:load-history` is called once per thread-open and the naive
- * implementation re-walks `~/.codex/sessions/**` on every call. With
- * hundreds of rollouts that adds up. A short TTL is safe because new
- * Codex rollouts only appear after `thread.started`, which goes
- * through our own event stream and explicitly calls
- * {@link invalidateCodexSessionIndex}.
+ * implementation re-walks `~/.codex/sessions/**` on every call — with
+ * hundreds of rollouts that adds up. The cache is held forever and
+ * invalidated in two places:
+ *
+ *   1. main.ts calls {@link invalidateCodexSessionIndex} on every
+ *      `init` event, because that's when a brand-new rollout file
+ *      appears on disk for a thread we just started.
+ *   2. {@link readCodexHistory} invalidates on a cache miss before
+ *      retrying, so Codex sessions started outside this app (e.g.
+ *      from a terminal `codex` invocation) are picked up too.
  */
-const INDEX_TTL_MS = 10_000;
 let cachedIndex: Map<string, string> | null = null;
-let cachedIndexAt = 0;
 
 export function getCodexSessionIndex(): Map<string, string> {
-  const now = Date.now();
-  if (!cachedIndex || now - cachedIndexAt > INDEX_TTL_MS) {
-    cachedIndex = buildCodexSessionIndex();
-    cachedIndexAt = now;
-  }
+  if (!cachedIndex) cachedIndex = buildCodexSessionIndex();
   return cachedIndex;
 }
 
 export function invalidateCodexSessionIndex(): void {
   cachedIndex = null;
-  cachedIndexAt = 0;
 }
 
 function safeReaddir(p: string): string[] {

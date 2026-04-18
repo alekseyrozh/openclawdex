@@ -252,6 +252,8 @@ export function App() {
   const [threadsLoading, setThreadsLoading] = useState(true);
   const threadsRef = useRef(threads);
   threadsRef.current = threads;
+  const projectsRef = useRef(projects);
+  projectsRef.current = projects;
   const pendingThreadRef = useRef(pendingThread);
   pendingThreadRef.current = pendingThread;
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
@@ -708,23 +710,30 @@ export function App() {
       // for a re-render.
       const survivors = threadsRef.current.filter((t) => t.projectId !== projectId);
       const removed = threadsRef.current.filter((t) => t.projectId === projectId);
+      const remainingProjects = projectsRef.current.filter((p) => p.id !== projectId);
 
+      // Keep renderer state in sync immediately so the "auto-spawn a
+      // pending thread" effect sees the real post-delete project count.
+      // Otherwise it can race and create a draft thread for a project
+      // that was just deleted.
+      setProjects(remainingProjects);
       setThreads(survivors);
 
       if (removed.some((t) => t.id === activeThreadIdRef.current)) {
         setActiveThreadId(null);
       }
 
-      // If the user is sitting in a "new chat" pending thread scoped
-      // to the project we just deleted, its projectId is now dangling
-      // and the ChatView hero falls back to "What are we building
-      // today?" with a broken project-switcher dropdown. Repoint it
-      // at the most-recently-touched surviving project so the hero
-      // re-renders with a real project name. If no projects survive
-      // at all, drop the pending thread entirely — the zero-state
-      // empty panel in ChatView takes over from here.
+      // Pending "new chat" drafts are only meaningful while at least
+      // one project exists. When the last project disappears, clear
+      // the draft unconditionally so ChatView can enter its true
+      // zero-project state instead of showing an empty composer.
       const prevPending = pendingThreadRef.current;
-      if (prevPending && prevPending.projectId === projectId) {
+      if (prevPending && remainingProjects.length === 0) {
+        setPendingThread(null);
+        if (activeThreadIdRef.current === prevPending.id) {
+          setActiveThreadId(null);
+        }
+      } else if (prevPending && prevPending.projectId === projectId) {
         const fallback =
           [...survivors]
             .filter((t) => t.projectId)

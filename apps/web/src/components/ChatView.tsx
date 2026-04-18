@@ -241,19 +241,42 @@ const OpenFileContext = createContext<OpenFileCtx | null>(null);
  * Also handles lists/ranges after the first line number, e.g.
  * `file.tsx:85, 116, 128` or `file.tsx:190–191` — the first number wins.
  */
+function isLikelyFilePath(text: string): boolean {
+  if (!/[\/]/.test(text)) return false;
+  if (
+    /^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(text) &&
+    !text.startsWith("file://")
+  ) {
+    return false;
+  }
+  if (/["'`()\[\]{};*?]/.test(text)) return false;
+  if (!/\s/.test(text)) return true;
+  return /^(\/|\.{1,2}\/|~\/|file:\/\/)/.test(text);
+}
+
 function parseFileRef(text: string): { path: string; line?: number } | null {
   const trimmed = text.trim();
+  if (!trimmed) return null;
+  let decoded = trimmed;
+  try {
+    decoded = decodeURIComponent(trimmed);
+  } catch {
+    // Keep the original text if it is not valid URI encoding.
+  }
+  const normalized = decoded.startsWith("file://") ? decoded.slice(7) : decoded;
   // "file (line 42)" or "file (lines 42-50)"
-  const parenMatch = trimmed.match(/^(.+?)\s*\(lines?\s+(\d+)(?:-\d+)?\)$/i);
-  if (parenMatch) return { path: parenMatch[1], line: Number(parenMatch[2]) };
+  const parenMatch = normalized.match(/^(.+?)\s*\(lines?\s+(\d+)(?:-\d+)?\)$/i);
+  if (parenMatch && isLikelyFilePath(parenMatch[1])) {
+    return { path: parenMatch[1], line: Number(parenMatch[2]) };
+  }
   // "file:42", "file:42:5", "file:42, 50, 60", "file:190–191", etc.
   // Accept any non-digit trailer after the first line number so comma lists
   // and en/em-dash ranges don't poison the path.
-  const colonMatch = trimmed.match(/^(.+?):(\d+)(?:\D.*)?$/);
-  if (colonMatch && colonMatch[1].includes("/")) {
+  const colonMatch = normalized.match(/^(.+?):(\d+)(?:\D.*)?$/);
+  if (colonMatch && isLikelyFilePath(colonMatch[1])) {
     return { path: colonMatch[1], line: Number(colonMatch[2]) };
   }
-  if (trimmed.includes("/")) return { path: trimmed };
+  if (isLikelyFilePath(normalized)) return { path: normalized };
   return null;
 }
 
@@ -282,9 +305,20 @@ export interface ImagePayload {
 
 /* ── Claude sparkle icon ────────────────────────────────────── */
 
-function ClaudeIcon({ className }: { className?: string }) {
+function ClaudeIcon({
+  className,
+  style,
+}: {
+  className?: string;
+  style?: React.CSSProperties;
+}) {
   return (
-    <svg viewBox="0 0 248 248" fill="currentColor" className={className}>
+    <svg
+      viewBox="0 0 248 248"
+      fill="currentColor"
+      className={className}
+      style={style}
+    >
       <path d="M52.4285 162.873L98.7844 136.879L99.5485 134.602L98.7844 133.334H96.4921L88.7237 132.862L62.2346 132.153L39.3113 131.207L17.0249 130.026L11.4214 128.844L6.2 121.873L6.7094 118.447L11.4214 115.257L18.171 115.847L33.0711 116.911L55.485 118.447L71.6586 119.392L95.728 121.873H99.5485L100.058 120.337L98.7844 119.392L97.7656 118.447L74.5877 102.732L49.4995 86.1905L36.3823 76.62L29.3779 71.7757L25.8121 67.2858L24.2839 57.3608L30.6515 50.2716L39.3113 50.8623L41.4763 51.4531L50.2636 58.1879L68.9842 72.7209L93.4357 90.6804L97.0015 93.6343L98.4374 92.6652L98.6571 91.9801L97.0015 89.2625L83.757 65.2772L69.621 40.8192L63.2534 30.6579L61.5978 24.632C60.9565 22.1032 60.579 20.0111 60.579 17.4246L67.8381 7.49965L71.9133 6.19995L81.7193 7.49965L85.7946 11.0443L91.9074 24.9865L101.714 46.8451L116.996 76.62L121.453 85.4816L123.873 93.6343L124.764 96.1155H126.292V94.6976L127.566 77.9197L129.858 57.3608L132.15 30.8942L132.915 23.4505L136.608 14.4708L143.994 9.62643L149.725 12.344L154.437 19.0788L153.8 23.4505L150.998 41.6463L145.522 70.1215L141.957 89.2625H143.994L146.414 86.7813L156.093 74.0206L172.266 53.698L179.398 45.6635L187.803 36.802L193.152 32.5484H203.34L210.726 43.6549L207.415 55.1159L196.972 68.3492L188.312 79.5739L175.896 96.2095L168.191 109.585L168.882 110.689L170.738 110.53L198.755 104.504L213.91 101.787L231.994 98.7149L240.144 102.496L241.036 106.395L237.852 114.311L218.495 119.037L195.826 123.645L162.07 131.592L161.696 131.893L162.137 132.547L177.36 133.925L183.855 134.279H199.774L229.447 136.524L237.215 141.605L241.8 147.867L241.036 152.711L229.065 158.737L213.019 154.956L175.45 145.977L162.587 142.787H160.805V143.85L171.502 154.366L191.242 172.089L215.82 195.011L217.094 200.682L213.91 205.172L210.599 204.699L188.949 188.394L180.544 181.069L161.696 165.118H160.422V166.772L164.752 173.152L187.803 207.771L188.949 218.405L187.294 221.832L181.308 223.959L174.813 222.777L161.187 203.754L147.305 182.486L136.098 163.345L134.745 164.2L128.075 235.42L125.019 239.082L117.887 241.8L111.902 237.31L108.718 229.984L111.902 215.452L115.722 196.547L118.779 181.541L121.58 162.873L123.291 156.636L123.14 156.219L121.773 156.449L107.699 175.752L86.304 204.699L69.3663 222.777L65.291 224.431L58.2867 220.768L58.9235 214.27L62.8713 208.48L86.304 178.705L100.44 160.155L109.551 149.507L109.462 147.967L108.959 147.924L46.6977 188.512L35.6182 189.93L30.7788 185.44L31.4156 178.115L33.7079 175.752L52.4285 162.873Z" />
     </svg>
   );
@@ -292,9 +326,20 @@ function ClaudeIcon({ className }: { className?: string }) {
 
 /* ── OpenAI blossom icon ────────────────────────────────────── */
 
-function OpenAIIcon({ className }: { className?: string }) {
+function OpenAIIcon({
+  className,
+  style,
+}: {
+  className?: string;
+  style?: React.CSSProperties;
+}) {
   return (
-    <svg viewBox="0 0 24 24" fill="currentColor" className={className}>
+    <svg
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      className={className}
+      style={style}
+    >
       <path d="M22.2819 9.8211a5.9847 5.9847 0 0 0-.5157-4.9108 6.0462 6.0462 0 0 0-6.5098-2.9A6.0651 6.0651 0 0 0 4.9807 4.1818a5.9847 5.9847 0 0 0-3.9977 2.9 6.0462 6.0462 0 0 0 .7427 7.0966 5.98 5.98 0 0 0 .511 4.9107 6.051 6.051 0 0 0 6.5146 2.9001A5.9847 5.9847 0 0 0 13.2599 24a6.0557 6.0557 0 0 0 5.7718-4.2058 5.9894 5.9894 0 0 0 3.9977-2.9001 6.0557 6.0557 0 0 0-.7475-7.0729zm-9.022 12.6081a4.4755 4.4755 0 0 1-2.8764-1.0408l.1419-.0804 4.7783-2.7582a.7948.7948 0 0 0 .3927-.6813v-6.7369l2.02 1.1686a.071.071 0 0 1 .038.052v5.5826a4.504 4.504 0 0 1-4.4945 4.4944zm-9.6607-4.1254a4.4708 4.4708 0 0 1-.5346-3.0137l.142.0852 4.783 2.7582a.7712.7712 0 0 0 .7806 0l5.8428-3.3685v2.3324a.0804.0804 0 0 1-.0332.0615L9.74 19.9502a4.4992 4.4992 0 0 1-6.1408-1.6464zM2.3408 7.8956a4.485 4.485 0 0 1 2.3655-1.9728V11.6a.7664.7664 0 0 0 .3879.6765l5.8144 3.3543-2.0201 1.1685a.0757.0757 0 0 1-.071 0l-4.8303-2.7865A4.504 4.504 0 0 1 2.3408 7.872zm16.5963 3.8558L13.1038 8.364 15.1192 7.2a.0757.0757 0 0 1 .071 0l4.8303 2.7913a4.4944 4.4944 0 0 1-.6765 8.1042v-5.6772a.79.79 0 0 0-.3927-.667zm2.0107-3.0231l-.142-.0852-4.7735-2.7818a.7759.7759 0 0 0-.7854 0L9.409 9.2297V6.8974a.0662.0662 0 0 1 .0284-.0615l4.8303-2.7866a4.4992 4.4992 0 0 1 6.6802 4.66zM8.3065 12.863l-2.02-1.1638a.0804.0804 0 0 1-.038-.0567V6.0742a4.4992 4.4992 0 0 1 7.3757-3.4537l-.142.0805L8.704 5.459a.7948.7948 0 0 0-.3927.6813zm1.0976-2.3654l2.602-1.4998 2.6069 1.4998v2.9994l-2.5974 1.4997-2.6067-1.4997Z" />
     </svg>
   );
@@ -1535,6 +1580,8 @@ function FileRefCode({ inner }: { inner: string }) {
 }
 
 function MarkdownContent({ text }: { text: string }) {
+  const ctx = useContext(OpenFileContext);
+
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
@@ -1566,6 +1613,8 @@ function MarkdownContent({ text }: { text: string }) {
         a: ({ href, children }) => {
           const url = typeof href === "string" ? href : "";
           const isHttp = /^https?:\/\//i.test(url);
+          const fileRef = parseFileRef(url);
+          const isFileRef = !!ctx && !!fileRef;
           return (
             <a
               href={url || "#"}
@@ -1573,15 +1622,28 @@ function MarkdownContent({ text }: { text: string }) {
                 e.preventDefault();
                 if (isHttp && window.openclawdex?.openExternal) {
                   void window.openclawdex.openExternal(url);
+                  return;
+                }
+                if (ctx && fileRef) {
+                  ctx.open(fileRef.path, fileRef.line);
                 }
               }}
+              title={
+                isHttp
+                  ? `Open in browser: ${url}`
+                  : isFileRef
+                    ? `Open in ${ctx.editorLabel}`
+                    : undefined
+              }
               style={{
-                color: "var(--accent)",
+                color: isFileRef ? "#6DC6FF" : "var(--accent)",
                 textDecoration: "underline",
                 textUnderlineOffset: "2px",
                 textDecorationThickness: "1px",
-                textDecorationColor: "rgba(51, 156, 255, 0.4)",
-                cursor: isHttp ? "pointer" : "default",
+                textDecorationColor: isFileRef
+                  ? "rgba(109, 198, 255, 0.35)"
+                  : "rgba(51, 156, 255, 0.4)",
+                cursor: isHttp || isFileRef ? "pointer" : "default",
               }}
             >
               {children}
@@ -1700,8 +1762,7 @@ function MarkdownContent({ text }: { text: string }) {
             return <CodeBlock language={language}>{codeString}</CodeBlock>;
           }
           const inner = String(children);
-          const isFileRef = inner.includes("/") || inner.includes("(line");
-          if (isFileRef) {
+          if (parseFileRef(inner)) {
             return <FileRefCode inner={inner} />;
           }
           return (
@@ -1792,6 +1853,9 @@ function TextareaWithScrollbar({
   onChange,
   onKeyDown,
   onPaste,
+  disabled,
+  placeholder,
+  onClick,
 }: {
   textareaRef: React.RefObject<HTMLTextAreaElement | null>;
   // Uncontrolled: the textarea owns its text. `onChange` is still fired so
@@ -1801,6 +1865,9 @@ function TextareaWithScrollbar({
   onChange: React.ChangeEventHandler<HTMLTextAreaElement>;
   onKeyDown: React.KeyboardEventHandler<HTMLTextAreaElement>;
   onPaste?: React.ClipboardEventHandler<HTMLTextAreaElement>;
+  disabled?: boolean;
+  placeholder?: string;
+  onClick?: React.MouseEventHandler<HTMLTextAreaElement>;
 }) {
   const [thumb, setThumb] = useState<{ top: number; height: number } | null>(
     null,
@@ -1860,6 +1927,9 @@ function TextareaWithScrollbar({
     <div className="relative">
       <textarea
         ref={textareaRef}
+        disabled={disabled && !onClick}
+        readOnly={disabled}
+        onClick={onClick}
         onChange={onChange}
         onScroll={onScroll}
         onPaste={onPaste}
@@ -1873,7 +1943,7 @@ function TextareaWithScrollbar({
           updateThumb(e.currentTarget);
         }}
         onKeyDown={onKeyDown}
-        placeholder="Ask for follow-up changes"
+        placeholder={placeholder ?? "Describe a task or ask a question"}
         rows={1}
         className="w-full bg-transparent text-[14px] font-medium px-4 pt-3 pb-1 resize-none outline-none placeholder:text-[var(--text-faint)] hide-native-scrollbar"
         style={
@@ -1887,6 +1957,7 @@ function TextareaWithScrollbar({
             fieldSizing: "content",
             overflowY: "auto",
             scrollbarWidth: "none",
+            cursor: disabled ? "default" : "text",
           } as React.CSSProperties
         }
       />
@@ -1975,8 +2046,9 @@ const SendButton = forwardRef<
   {
     hasAttachments: boolean;
     onClick: () => void;
+    disabled?: boolean;
   }
->(function SendButton({ hasAttachments, onClick }, ref) {
+>(function SendButton({ hasAttachments, onClick, disabled }, ref) {
   const [hasText, setHasText] = useState(false);
   useImperativeHandle(
     ref,
@@ -1989,7 +2061,7 @@ const SendButton = forwardRef<
     }),
     [],
   );
-  const active = hasText || hasAttachments;
+  const active = !disabled && (hasText || hasAttachments);
   return (
     <button
       onClick={onClick}
@@ -2233,14 +2305,17 @@ export function ChatView({
     [bumpHeartbeat],
   );
 
-  const handleDragLeave = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    dragCounter.current--;
-    if (dragCounter.current <= 0) {
-      resetDragState();
-    }
-  }, [resetDragState]);
+  const handleDragLeave = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      dragCounter.current--;
+      if (dragCounter.current <= 0) {
+        resetDragState();
+      }
+    },
+    [resetDragState],
+  );
 
   // Format a dropped path as a chat-ready reference.
   //
@@ -2264,9 +2339,16 @@ export function ChatView({
 
   // Insert text at the textarea's current caret, adding surrounding
   // spaces only where needed so dropped refs don't fuse with adjacent
-  // tokens. Keeps the send button's "has text" flag in sync because the
-  // textarea is uncontrolled (no onChange fires for programmatic
-  // mutations).
+  // tokens.
+  //
+  // GOTCHA: the textarea is uncontrolled (see SendButton's PERF note),
+  // so a plain `el.value = ...` assignment skips React's synthetic
+  // event pipeline — `onChange` doesn't fire and any consumer that
+  // depends on it (today: SendButton's "has text" flag; tomorrow:
+  // anything else we wire up) silently desyncs. The standard fix is
+  // to call the prototype's value setter and dispatch a bubbling
+  // `input` event, which React picks up and routes through
+  // `handleTextChange` exactly as if the user had typed.
   const insertAtCursor = useCallback((text: string) => {
     const el = textareaRef.current;
     if (!el) return;
@@ -2277,11 +2359,17 @@ export function ChatView({
     const needsLead = before.length > 0 && !/\s$/.test(before);
     const needsTrail = after.length === 0 || !/^\s/.test(after);
     const insertion = (needsLead ? " " : "") + text + (needsTrail ? " " : "");
-    el.value = before + insertion + after;
+    const nextValue = before + insertion + after;
+    const setter = Object.getOwnPropertyDescriptor(
+      window.HTMLTextAreaElement.prototype,
+      "value",
+    )?.set;
+    if (setter) setter.call(el, nextValue);
+    else el.value = nextValue; // pathological fallback; never seen in Chromium
+    el.dispatchEvent(new Event("input", { bubbles: true }));
     const caret = before.length + insertion.length;
     el.setSelectionRange(caret, caret);
     el.focus();
-    sendButtonRef.current?.setHasText(el.value.trim().length > 0);
   }, []);
 
   const handleDrop = useCallback(
@@ -2646,62 +2734,67 @@ export function ChatView({
     // handled by an effect in App.tsx that auto-spawns a pending
     // thread, so it never reaches this render.
     return (
-      <div className="flex-1 flex items-center justify-center px-8">
+      <div className="flex-1 flex flex-col min-h-0 px-8 pt-10 pb-4 relative">
         {isLoading ? (
-          <svg
-            width="20"
-            height="20"
-            viewBox="0 0 20 20"
-            fill="none"
-            className="animate-spin"
-            style={{ color: "var(--text-muted)" }}
-          >
-            <circle
-              cx="10"
-              cy="10"
-              r="8"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeOpacity="0.2"
-            />
-            <path
-              d="M10 2a8 8 0 0 1 8 8"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-            />
-          </svg>
-        ) : (projects?.length ?? 0) === 0 ? (
-          <div
-            className="flex flex-col items-center gap-6 text-center mb-10"
-            style={{ animation: "fadeIn 120ms ease" }}
-          >
-            <div
-              className="text-[28px] font-medium tracking-tight leading-tight"
+          <div className="flex-1 flex items-center justify-center">
+            <svg
+              width="20"
+              height="20"
+              viewBox="0 0 20 20"
+              fill="none"
+              className="animate-spin"
               style={{ color: "var(--text-muted)" }}
             >
-              What are we building today?
-            </div>
-            {onNewChat && (
-              <button
-                onClick={onNewChat}
-                className="flex items-center gap-1.5 pl-3 pr-4 py-[10px] rounded-full text-[13px] font-medium transition-colors"
-                style={{
-                  background: "#ffffff",
-                  color: "#181818",
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.background =
-                    "rgba(255, 255, 255, 0.88)";
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.background = "#ffffff";
-                }}
+              <circle
+                cx="10"
+                cy="10"
+                r="8"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeOpacity="0.2"
+              />
+              <path
+                d="M10 2a8 8 0 0 1 8 8"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+              />
+            </svg>
+          </div>
+        ) : (projects?.length ?? 0) === 0 ? (
+          <div
+            className="flex-1 flex items-center justify-center px-8 text-center"
+            style={{ animation: "fadeIn 120ms ease" }}
+          >
+            <div className="relative px-8 py-7 mb-18">
+              <div
+                className="text-[28px] font-medium tracking-tight leading-tight"
+                style={{ color: "var(--text-muted)" }}
               >
-                <Plus size={15} weight="bold" />
-                Add a project
-              </button>
-            )}
+                What are we building today?
+              </div>
+              {onNewChat && (
+                <button
+                  onClick={onNewChat}
+                  className="mt-6 flex items-center gap-1.5 pl-3 pr-4 py-[10px] rounded-full text-[13px] font-medium transition-colors z-10 mx-auto"
+                  style={{
+                    background: "#ffffff",
+                    color: "#181818",
+                    boxShadow: "0 8px 30px rgba(0,0,0,0.28)",
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.background =
+                      "rgba(255, 255, 255, 0.88)";
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = "#ffffff";
+                  }}
+                >
+                  <Plus size={15} weight="bold" />
+                  Add a project
+                </button>
+              )}
+            </div>
           </div>
         ) : null}
       </div>
@@ -3118,264 +3211,103 @@ export function ChatView({
               />
             </div>
           ) : (
-            <div className="max-w-[720px] mx-auto">
-              <div
-                ref={composerRef}
-                className="rounded-2xl relative"
-                style={{
-                  background: "var(--surface-2)",
-                  border: isDragOver
-                    ? "1px solid var(--border-emphasis)"
-                    : "1px solid var(--border-default)",
-                  transition: "border-color 150ms ease",
-                }}
-              >
-                {/* Attachment chips */}
-                {attachments.length > 0 && (
-                  <div className="flex flex-wrap gap-1.5 px-4 pt-3 pb-1">
-                    {attachments.map((a) => (
-                      <div
-                        key={a.id}
-                        className="flex items-center gap-1.5 pl-1 pr-1 py-0.5 rounded-lg group/chip"
-                        style={{
-                          background: "var(--surface-3)",
-                          border: "1px solid var(--border-default)",
-                        }}
-                      >
-                        <img
-                          src={a.previewUrl}
-                          alt={a.name}
-                          className="w-5 h-5 rounded object-cover"
-                        />
-                        <span
-                          className="text-[12px] font-medium max-w-[140px] truncate"
-                          style={{ color: "var(--text-secondary)" }}
-                        >
-                          {a.name}
-                        </span>
-                        <button
-                          onClick={() => removeAttachment(a.id)}
-                          className="w-4 h-4 flex items-center justify-center rounded transition-colors"
-                          style={{ color: "var(--text-faint)" }}
-                          onMouseEnter={(e) => {
-                            e.currentTarget.style.color = "var(--text-primary)";
-                            e.currentTarget.style.background =
-                              "var(--surface-4)";
-                          }}
-                          onMouseLeave={(e) => {
-                            e.currentTarget.style.color = "var(--text-faint)";
-                            e.currentTarget.style.background = "transparent";
-                          }}
-                        >
-                          <X size={10} weight="bold" />
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-                <TextareaWithScrollbar
-                  textareaRef={textareaRef}
-                  onChange={handleTextChange}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && !e.shiftKey) {
-                      e.preventDefault();
-                      handleSubmit();
-                    }
-                  }}
-                  onPaste={handlePaste}
-                />
-                {/* Controls */}
-                <div className="flex items-center justify-between px-2 pb-2">
-                  <div className="flex items-center gap-0">
-                    <div className="relative" ref={modelDropdownRef}>
-                      <ControlButton
-                        onClick={() =>
-                          !isStarted && setModelDropdownOpen((v) => !v)
-                        }
-                        tooltip={
-                          isStarted
-                            ? "Can't change model after thread has started"
-                            : undefined
-                        }
-                      >
-                        {isClaude ? (
-                          <ClaudeIcon className="w-[14px] h-[14px] shrink-0 text-[#D97757]" />
-                        ) : (
-                          <OpenAIIcon className="w-[13px] h-[13px] shrink-0 text-white/90" />
-                        )}
-                        <span>
-                          {modelLabel}
-                          {displayedModel?.badge && (
-                            <span
-                              className="ml-1"
-                              style={{ color: "var(--text-faint)" }}
-                            >
-                              {displayedModel.badge}
-                            </span>
-                          )}
-                        </span>
-                        <CaretDown size={10} weight="bold" />
-                      </ControlButton>
-                      {modelDropdownOpen && !isStarted && displayedModel && (
-                        <ModelDropdown
-                          sections={[
-                            {
-                              label: "Anthropic",
-                              models: claudeModels,
-                              // `providers === null` → still probing; treat
-                              // as available to avoid a "Not installed"
-                              // flash on launch.
-                              available: providers?.claude !== false,
-                              installUrl:
-                                "https://code.claude.com/docs/en/quickstart#before-you-begin",
-                            },
-                            {
-                              label: "OpenAI",
-                              models: codexModels,
-                              available: providers?.codex !== false,
-                              installUrl:
-                                "https://developers.openai.com/codex/quickstart?setup=cli",
-                            },
-                          ]}
-                          selected={displayedModel}
-                          onSelect={(m) => {
-                            setSelectedModel(m);
-                            // Persist the pick so new threads on app
-                            // restart default to the same model for this
-                            // provider.
-                            const selectionToSave = {
-                              provider: m.provider,
-                              modelId: m.id,
-                              effortId: (m.provider === "codex"
-                                ? codexEffort
-                                : claudeEffort
-                              ).id,
-                            };
-                            localStorage.setItem(
-                              "lastSelection",
-                              JSON.stringify(selectionToSave),
-                            );
-                            // Flip the thread's provider to match the picked
-                            // model. Only effective on pending (uncommitted)
-                            // threads; committed threads already have
-                            // isStarted=true and the dropdown is disabled.
-                            if (m.provider !== thread.provider) {
-                              onUpdateThreadProvider?.(thread.id, m.provider);
-                            }
-                            setModelDropdownOpen(false);
-                          }}
-                        />
-                      )}
-                    </div>
-                    {showEffortPicker && (
-                      <div className="relative" ref={effortDropdownRef}>
-                        <ControlButton
-                          onClick={() =>
-                            !isStarted && setEffortDropdownOpen((v) => !v)
-                          }
-                          tooltip={
-                            isStarted
-                              ? "Can't change effort after thread has started"
-                              : undefined
-                          }
-                        >
-                          <span>{selectedEffort.label}</span>
-                          <CaretDown size={10} weight="bold" />
-                        </ControlButton>
-                        {effortDropdownOpen && (
-                          <EffortDropdown
-                            levels={effortList}
-                            selected={selectedEffort}
-                            onSelect={(e) => {
-                              setSelectedEffort(e);
-                              // Remember this effort for the current
-                              // model so switching away and back restores
-                              // the same choice.
-                              if (displayedModel) {
-                                const selectionToSave = {
-                                  provider: displayedModel.provider,
-                                  modelId: displayedModel.id,
-                                  effortId: e.id,
-                                };
-                                localStorage.setItem(
-                                  "lastSelection",
-                                  JSON.stringify(selectionToSave),
-                                );
-                              }
-                              setEffortDropdownOpen(false);
-                            }}
-                          />
-                        )}
-                      </div>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-1.5">
-                    <div className="relative" ref={modeDropdownRef}>
-                      <ControlButton
-                        onClick={() => setModeDropdownOpen((v) => !v)}
-                      >
-                        <span>{selectedMode.label}</span>
-                        <CaretDown size={10} weight="bold" />
-                      </ControlButton>
-                      {modeDropdownOpen && (
-                        <ModeDropdown
-                          modes={MODES}
-                          selected={selectedMode}
-                          onSelect={(m) => {
-                            setSelectedMode(m);
-                            setModeDropdownOpen(false);
-                          }}
-                        />
-                      )}
-                    </div>
-                    {thread.status === "running" ? (
-                      <button
-                        onClick={() => onInterrupt(thread.id)}
-                        className="w-[30px] h-[30px] flex items-center justify-center rounded-full"
-                        style={{
-                          background: "var(--text-primary)",
-                        }}
-                      >
-                        <Stop
-                          size={14}
-                          weight="fill"
-                          style={{ color: "var(--surface-0)" }}
-                        />
-                      </button>
-                    ) : (
-                      <SendButton
-                        ref={sendButtonRef}
-                        hasAttachments={attachments.length > 0}
-                        onClick={handleSubmit}
-                      />
-                    )}
-                  </div>
-                </div>
-              </div>
-              {/* Status info */}
-              <div className="flex items-center gap-1 mt-2 px-0.5">
-                <StatusButton tooltip="Coming soon">
-                  <Monitor size={14} weight="regular" />
-                  <span>Local</span>
-                  {/* <CaretDown size={10} weight="bold" /> */}
-                </StatusButton>
-                {thread.branch && (
-                  <StatusButton tooltip="Coming soon" fadeIn>
-                    <GitBranch size={14} weight="regular" />
-                    <span>{thread.branch}</span>
-                    {/* <CaretDown size={10} weight="bold" /> */}
+            <ChatComposer
+              composerRef={composerRef}
+              textareaRef={textareaRef}
+              sendButtonRef={sendButtonRef}
+              attachments={attachments}
+              removeAttachment={removeAttachment}
+              onTextChange={handleTextChange}
+              onTextKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  handleSubmit();
+                }
+              }}
+              onTextPaste={handlePaste}
+              isDragOver={isDragOver}
+              displayedModel={displayedModel}
+              provider={thread.provider}
+              isStarted={isStarted}
+              providers={providers}
+              claudeModels={claudeModels}
+              codexModels={codexModels}
+              selectedEffort={selectedEffort}
+              effortList={effortList}
+              showEffortPicker={showEffortPicker}
+              selectedMode={selectedMode}
+              modelDropdownOpen={modelDropdownOpen}
+              effortDropdownOpen={effortDropdownOpen}
+              modeDropdownOpen={modeDropdownOpen}
+              modelDropdownRef={modelDropdownRef}
+              effortDropdownRef={effortDropdownRef}
+              modeDropdownRef={modeDropdownRef}
+              onToggleModelDropdown={() =>
+                !isStarted && setModelDropdownOpen((v) => !v)
+              }
+              onToggleEffortDropdown={() =>
+                !isStarted && setEffortDropdownOpen((v) => !v)
+              }
+              onToggleModeDropdown={() => setModeDropdownOpen((v) => !v)}
+              onSelectModel={(m) => {
+                setSelectedModel(m);
+                const selectionToSave = {
+                  provider: m.provider,
+                  modelId: m.id,
+                  effortId: (m.provider === "codex"
+                    ? codexEffort
+                    : claudeEffort
+                  ).id,
+                };
+                localStorage.setItem(
+                  "lastSelection",
+                  JSON.stringify(selectionToSave),
+                );
+                if (m.provider !== thread.provider) {
+                  onUpdateThreadProvider?.(thread.id, m.provider);
+                }
+                setModelDropdownOpen(false);
+              }}
+              onSelectEffort={(e) => {
+                setSelectedEffort(e);
+                if (displayedModel) {
+                  const selectionToSave = {
+                    provider: displayedModel.provider,
+                    modelId: displayedModel.id,
+                    effortId: e.id,
+                  };
+                  localStorage.setItem(
+                    "lastSelection",
+                    JSON.stringify(selectionToSave),
+                  );
+                }
+                setEffortDropdownOpen(false);
+              }}
+              onSelectMode={(m) => {
+                setSelectedMode(m);
+                setModeDropdownOpen(false);
+              }}
+              isRunning={thread.status === "running"}
+              onInterrupt={() => onInterrupt(thread.id)}
+              onSubmit={handleSubmit}
+              footer={
+                <div className="flex items-center gap-1 mt-2 px-0.5">
+                  <StatusButton tooltip="Coming soon">
+                    <Monitor size={14} weight="regular" />
+                    <span>Local</span>
                   </StatusButton>
-                )}
-                {/* TODO(codex-context): Codex threads hide this entirely because
-                the SDK doesn't report a context-window limit and we refuse
-                to show "0% / N / 0 tokens". Reinstate once codex.ts can
-                compute a percentage — probably via a per-model max-tokens
-                table keyed on the selected Codex model. */}
-                {thread.contextStats && thread.provider !== "codex" && (
-                  <TokenProgressIndicator stats={thread.contextStats} />
-                )}
-              </div>
-            </div>
+                  {thread.branch && (
+                    <StatusButton tooltip="Coming soon" fadeIn>
+                      <GitBranch size={14} weight="regular" />
+                      <span>{thread.branch}</span>
+                    </StatusButton>
+                  )}
+                  {thread.contextStats && thread.provider !== "codex" && (
+                    <TokenProgressIndicator stats={thread.contextStats} />
+                  )}
+                </div>
+              }
+            />
           )}
         </div>
 
@@ -3449,6 +3381,323 @@ function StatusButton({
   );
 }
 
+function ChatComposer({
+  composerRef,
+  textareaRef,
+  sendButtonRef,
+  attachments,
+  removeAttachment,
+  onTextChange,
+  onTextKeyDown,
+  onTextPaste,
+  isDragOver,
+  displayedModel,
+  provider,
+  isStarted,
+  providers,
+  claudeModels,
+  codexModels,
+  selectedEffort,
+  effortList,
+  showEffortPicker,
+  selectedMode,
+  modelDropdownOpen,
+  effortDropdownOpen,
+  modeDropdownOpen,
+  modelDropdownRef,
+  effortDropdownRef,
+  modeDropdownRef,
+  onToggleModelDropdown,
+  onToggleEffortDropdown,
+  onToggleModeDropdown,
+  onSelectModel,
+  onSelectEffort,
+  onSelectMode,
+  isRunning,
+  onInterrupt,
+  onSubmit,
+  disabled,
+  placeholder,
+  containerStyle,
+  footer,
+  animateModelLabel,
+  actionButton,
+  onActivate,
+}: {
+  composerRef?: React.RefObject<HTMLDivElement | null>;
+  textareaRef: React.RefObject<HTMLTextAreaElement | null>;
+  sendButtonRef?: React.RefObject<SendButtonHandle | null>;
+  attachments: ImageAttachment[];
+  removeAttachment: (id: string) => void;
+  onTextChange: React.ChangeEventHandler<HTMLTextAreaElement>;
+  onTextKeyDown: React.KeyboardEventHandler<HTMLTextAreaElement>;
+  onTextPaste?: React.ClipboardEventHandler<HTMLTextAreaElement>;
+  isDragOver?: boolean;
+  displayedModel: ModelDef | null;
+  provider: Provider;
+  isStarted: boolean;
+  providers: { claude: boolean; codex: boolean } | null;
+  claudeModels: ModelDef[];
+  codexModels: ModelDef[];
+  selectedEffort: EffortDef;
+  effortList: EffortDef[];
+  showEffortPicker: boolean;
+  selectedMode: ModeDef;
+  modelDropdownOpen: boolean;
+  effortDropdownOpen: boolean;
+  modeDropdownOpen: boolean;
+  modelDropdownRef?: React.RefObject<HTMLDivElement | null>;
+  effortDropdownRef?: React.RefObject<HTMLDivElement | null>;
+  modeDropdownRef?: React.RefObject<HTMLDivElement | null>;
+  onToggleModelDropdown: () => void;
+  onToggleEffortDropdown: () => void;
+  onToggleModeDropdown: () => void;
+  onSelectModel: (model: ModelDef) => void;
+  onSelectEffort: (effort: EffortDef) => void;
+  onSelectMode: (mode: ModeDef) => void;
+  isRunning?: boolean;
+  onInterrupt?: () => void;
+  onSubmit: () => void;
+  disabled?: boolean;
+  placeholder?: string;
+  containerStyle?: React.CSSProperties;
+  footer?: React.ReactNode;
+  animateModelLabel?: boolean;
+  actionButton?: React.ReactNode;
+  onActivate?: () => void;
+}) {
+  const modelLabelRef = useRef<HTMLSpanElement>(null);
+  const [modelLabelWidth, setModelLabelWidth] = useState<number | null>(null);
+
+  useLayoutEffect(() => {
+    if (!animateModelLabel || !modelLabelRef.current) return;
+    setModelLabelWidth(modelLabelRef.current.offsetWidth);
+  }, [
+    animateModelLabel,
+    displayedModel?.id,
+    displayedModel?.badge,
+    displayedModel?.label,
+  ]);
+
+  return (
+    <div className="max-w-[720px] mx-auto">
+      <div
+        ref={composerRef}
+        className="rounded-2xl relative"
+        style={{
+          background: "var(--surface-2)",
+          border: isDragOver
+            ? "1px solid var(--border-emphasis)"
+            : "1px solid var(--border-default)",
+          transition: "border-color 150ms ease",
+          cursor:
+            disabled && onActivate
+              ? "pointer"
+              : disabled
+                ? "default"
+                : undefined,
+          ...containerStyle,
+        }}
+      >
+        {actionButton && (
+          <div className="absolute right-3 top-3 z-[2]">{actionButton}</div>
+        )}
+        {attachments.length > 0 && (
+          <div className="flex flex-wrap gap-1.5 px-4 pt-3 pb-1">
+            {attachments.map((a) => (
+              <div
+                key={a.id}
+                className="flex items-center gap-1.5 pl-1 pr-1 py-0.5 rounded-lg group/chip"
+                style={{
+                  background: "var(--surface-3)",
+                  border: "1px solid var(--border-default)",
+                }}
+              >
+                <img
+                  src={a.previewUrl}
+                  alt={a.name}
+                  className="w-5 h-5 rounded object-cover"
+                />
+                <span
+                  className="text-[12px] font-medium max-w-[140px] truncate"
+                  style={{ color: "var(--text-secondary)" }}
+                >
+                  {a.name}
+                </span>
+                <button
+                  onClick={() => removeAttachment(a.id)}
+                  disabled={disabled}
+                  className="w-4 h-4 flex items-center justify-center rounded transition-colors"
+                  style={{ color: "var(--text-faint)" }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.color = "var(--text-primary)";
+                    e.currentTarget.style.background = "var(--surface-4)";
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.color = "var(--text-faint)";
+                    e.currentTarget.style.background = "transparent";
+                  }}
+                >
+                  <X size={10} weight="bold" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+        <TextareaWithScrollbar
+          textareaRef={textareaRef}
+          onChange={onTextChange}
+          onKeyDown={onTextKeyDown}
+          onPaste={onTextPaste}
+          disabled={disabled}
+          placeholder={placeholder}
+          onClick={disabled ? () => onActivate?.() : undefined}
+        />
+        <div className="flex items-center justify-between px-2 pb-2">
+          <div className="flex items-center gap-0">
+            <div className="relative" ref={modelDropdownRef}>
+              <ControlButton
+                onClick={onToggleModelDropdown}
+                disabled={disabled || isStarted}
+                tooltip={
+                  !disabled && isStarted
+                    ? "Can't change model after thread has started"
+                    : undefined
+                }
+              >
+                {provider === "claude" ? (
+                  <ClaudeIcon className="w-[14px] h-[14px] shrink-0 text-[#D97757]" />
+                ) : (
+                  <OpenAIIcon className="w-[13px] h-[13px] shrink-0 text-white/90" />
+                )}
+                <span
+                  className="inline-flex overflow-hidden"
+                  style={
+                    animateModelLabel
+                      ? {
+                          width: modelLabelWidth ?? undefined,
+                          transition: "width 260ms ease",
+                        }
+                      : undefined
+                  }
+                >
+                  <span
+                    ref={modelLabelRef}
+                    key={displayedModel?.id ?? provider}
+                    className="inline-flex whitespace-nowrap"
+                    style={
+                      animateModelLabel
+                        ? { animation: "fadeIn 260ms ease" }
+                        : undefined
+                    }
+                  >
+                    {displayedModel?.label ?? "Loading models…"}
+                    {displayedModel?.badge && (
+                      <span
+                        className="ml-1"
+                        style={{ color: "var(--text-faint)" }}
+                      >
+                        {displayedModel.badge}
+                      </span>
+                    )}
+                  </span>
+                </span>
+                <CaretDown size={10} weight="bold" />
+              </ControlButton>
+              {!disabled &&
+                modelDropdownOpen &&
+                !isStarted &&
+                displayedModel && (
+                  <ModelDropdown
+                    sections={[
+                      {
+                        label: "Anthropic",
+                        models: claudeModels,
+                        available: providers?.claude !== false,
+                        installUrl:
+                          "https://code.claude.com/docs/en/quickstart#before-you-begin",
+                      },
+                      {
+                        label: "OpenAI",
+                        models: codexModels,
+                        available: providers?.codex !== false,
+                        installUrl:
+                          "https://developers.openai.com/codex/quickstart?setup=cli",
+                      },
+                    ]}
+                    selected={displayedModel}
+                    onSelect={onSelectModel}
+                  />
+                )}
+            </div>
+            {showEffortPicker && (
+              <div className="relative" ref={effortDropdownRef}>
+                <ControlButton
+                  onClick={onToggleEffortDropdown}
+                  disabled={disabled || isStarted}
+                  tooltip={
+                    !disabled && isStarted
+                      ? "Can't change effort after thread has started"
+                      : undefined
+                  }
+                >
+                  <span>{selectedEffort.label}</span>
+                  <CaretDown size={10} weight="bold" />
+                </ControlButton>
+                {!disabled && effortDropdownOpen && (
+                  <EffortDropdown
+                    levels={effortList}
+                    selected={selectedEffort}
+                    onSelect={onSelectEffort}
+                  />
+                )}
+              </div>
+            )}
+          </div>
+          <div className="flex items-center gap-1.5">
+            <div className="relative" ref={modeDropdownRef}>
+              <ControlButton onClick={onToggleModeDropdown} disabled={disabled}>
+                <span>{selectedMode.label}</span>
+                <CaretDown size={10} weight="bold" />
+              </ControlButton>
+              {!disabled && modeDropdownOpen && (
+                <ModeDropdown
+                  modes={MODES}
+                  selected={selectedMode}
+                  onSelect={onSelectMode}
+                />
+              )}
+            </div>
+            {!disabled && isRunning ? (
+              <button
+                onClick={onInterrupt}
+                className="w-[30px] h-[30px] flex items-center justify-center rounded-full"
+                style={{
+                  background: "var(--text-primary)",
+                }}
+              >
+                <Stop
+                  size={14}
+                  weight="fill"
+                  style={{ color: "var(--surface-0)" }}
+                />
+              </button>
+            ) : (
+              <SendButton
+                ref={sendButtonRef}
+                hasAttachments={attachments.length > 0}
+                onClick={onSubmit}
+                disabled={disabled}
+              />
+            )}
+          </div>
+        </div>
+      </div>
+      {footer && <div className="pt-2 px-1">{footer}</div>}
+    </div>
+  );
+}
+
 /** Prominent install-CLI button shown in place of the composer when
  *  no agent CLI is installed. Larger than `ControlButton` — this is the
  *  primary (and only) affordance at the bottom of the chat, so it
@@ -3499,18 +3748,24 @@ function ControlButton({
   children,
   onClick,
   tooltip,
+  disabled,
 }: {
   children: React.ReactNode;
   onClick?: () => void;
   tooltip?: string;
+  disabled?: boolean;
 }) {
   return (
     <div className="relative group/ctrl">
       <button
         onClick={onClick}
+        disabled={disabled}
         onMouseDown={(e) => e.preventDefault()}
         className="flex items-center gap-1.5 px-2 py-[5px] rounded-xl text-[13px] font-medium transition-colors hover:bg-[var(--border-subtle)] hover:text-[rgba(255,255,255,0.60)]"
-        style={{ color: "var(--text-muted)" }}
+        style={{
+          color: "var(--text-muted)",
+          cursor: disabled ? "default" : "pointer",
+        }}
       >
         {children}
       </button>

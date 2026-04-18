@@ -100,50 +100,70 @@ export function Sidebar({
         }}
       />
 
-      {/* Primary "New thread" action — pinned above the scrolling thread
-          list whenever there's at least one project to scope the new
-          thread to. In the zero-project state the button's only useful
-          action is to open the folder picker, which is already the
-          job of the larger "Add new project" CTA in the main pane — so
-          we hide it here to avoid two competing calls-to-action.
-          Target project resolves in App.handleNewChat (active thread →
-          most recent → first project → folder picker). */}
-      {projects.length > 0 && (
+      {/* Primary sidebar actions stay pinned above the scroll area, but only
+          after bootstrap resolves whether projects exist. That avoids briefly
+          flashing the zero-project CTA while the real project list is still
+          loading. */}
+      {!isLoading && (
         <div className="px-3 pt-3 pb-3 shrink-0">
-          <button
-            onClick={onNewChat}
-            className="group/newthread flex items-center gap-2.5 w-full px-2 py-[6px] rounded-xl text-[13px] font-medium transition-colors"
-            style={{ color: "var(--text-primary)", background: "transparent" }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.background = "rgba(255, 255, 255, 0.05)";
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = "transparent";
-            }}
-          >
-            <span
-              className="shrink-0 flex items-center justify-center"
-              style={{ width: 17, height: 17, color: "var(--text-primary)" }}
+          <div className="flex flex-col gap-1">
+            {projects.length > 0 && (
+              <button
+                onClick={onNewChat}
+                className="group/newthread flex items-center gap-2.5 w-full px-2 py-[6px] rounded-xl text-[13px] font-medium transition-colors"
+                style={{ color: "var(--text-primary)", background: "transparent" }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = "rgba(255, 255, 255, 0.05)";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = "transparent";
+                }}
+              >
+                <span
+                  className="shrink-0 flex items-center justify-center"
+                  style={{ width: 17, height: 17, color: "var(--text-primary)" }}
+                >
+                  <Plus size={15} weight="bold" />
+                </span>
+                New thread
+                {/* Shortcut hint — revealed on hover. Uses ⌘ on macOS-style
+                    UI; the handler in App.tsx also accepts Ctrl+N for parity. */}
+                <span
+                  className="ml-auto text-[11px] font-medium opacity-0 group-hover/newthread:opacity-100 transition-opacity"
+                  style={{ color: "rgba(255, 255, 255, 0.45)" }}
+                >
+                  ⌘N
+                </span>
+              </button>
+            )}
+
+            <button
+              onClick={onCreateProject}
+              className="group/newproject flex items-center gap-2.5 w-full px-2 py-[6px] rounded-xl text-[13px] font-medium transition-colors"
+              style={{ color: "var(--text-primary)", background: "transparent" }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = "rgba(255, 255, 255, 0.05)";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = "transparent";
+              }}
             >
-              <Plus size={13} weight="bold" />
-            </span>
-            New thread
-            {/* Shortcut hint — revealed on hover. Uses ⌘ on macOS-style
-                UI; the handler in App.tsx also accepts Ctrl+N for parity. */}
-            <span
-              className="ml-auto text-[11px] font-medium opacity-0 group-hover/newthread:opacity-100 transition-opacity"
-              style={{ color: "rgba(255, 255, 255, 0.45)" }}
-            >
-              ⌘N
-            </span>
-          </button>
+              <span
+                className="shrink-0 flex items-center justify-center"
+                style={{ width: 17, height: 17, color: "var(--text-primary)" }}
+              >
+                <FolderPlus size={15} weight="bold" />
+              </span>
+              New project
+            </button>
+          </div>
         </div>
       )}
 
       <ScrollArea className="flex-1">
         <div className="pb-2">
           {isLoading ? (
-            <div className="px-3">
+            <div className="px-3 pt-3">
               <ThreadSkeleton />
             </div>
           ) : (
@@ -176,14 +196,16 @@ export function Sidebar({
                 </>
               )}
 
-              {/* Projects header */}
-              <div className="flex items-center justify-between pl-5 pr-3 pb-2 pt-2">
-                <span
-                  className="text-[13px] font-medium"
-                  style={{ color: "rgba(255, 255, 255, 0.35)" }}
-                >
-                  Projects
-                </span>
+              {/* Projects header — hidden in zero-project state so we don't
+                  render a lone label above an empty list. */}
+              {projects.length > 0 && (
+                <div className="flex items-center justify-between pl-5 pr-3 pb-2 pt-2">
+                  <span
+                    className="text-[13px] font-medium"
+                    style={{ color: "rgba(255, 255, 255, 0.35)" }}
+                  >
+                    Projects
+                  </span>
                 {/* "Add a project" button — hidden for now because the in-chat
                     project picker (ChatView) already has a "New project…"
                     entry, and the sidebar "New thread" button falls back to
@@ -214,7 +236,8 @@ export function Sidebar({
                   </div>
                 </div>
                 */}
-              </div>
+                </div>
+              )}
 
               <div className="px-3">
               {/* Project groups */}
@@ -252,19 +275,6 @@ export function Sidebar({
                 />
               ))}
 
-              {/* Empty state */}
-              {projects.length === 0 && ungrouped.length === 0 && !isLoading && (
-                <button
-                  onClick={onCreateProject}
-                  className="flex items-center gap-2 w-full px-2 py-3 rounded-xl text-[13px] transition-colors"
-                  style={{ color: "rgba(255,255,255,0.4)" }}
-                  onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.04)")}
-                  onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-                >
-                  <FolderPlus size={16} weight="regular" />
-                  Add a project
-                </button>
-              )}
               </div>
 
             </>

@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
-import type { SessionInfo, HistoryMessage, ProjectInfo, EditorTarget, Provider, CodexModel, ClaudeModel } from "@openclawdex/shared";
+import type { SessionInfo, HistoryMessage, ProjectInfo, EditorTarget, Provider, CodexModel, ClaudeModel, ImagePayload } from "@openclawdex/shared";
 
 contextBridge.exposeInMainWorld("openclawdex", {
   platform: process.platform,
@@ -68,7 +68,7 @@ contextBridge.exposeInMainWorld("openclawdex", {
       provider?: Provider;
       resumeSessionId?: string;
       projectId?: string;
-      images?: { name: string; base64: string; mediaType: string; path?: string }[];
+      images?: ImagePayload[];
       model?: string;
       effort?: string;
     },
