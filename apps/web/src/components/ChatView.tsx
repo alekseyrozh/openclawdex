@@ -4,6 +4,9 @@ import {
   useEffect,
   useLayoutEffect,
   useCallback,
+  useImperativeHandle,
+  forwardRef,
+  memo,
   createContext,
   useContext,
 } from "react";
@@ -29,6 +32,7 @@ import {
   X,
   ImageSquare,
   Folder,
+  FolderPlus,
   Plus,
   ArrowSquareOut,
 } from "@phosphor-icons/react";
@@ -1401,7 +1405,11 @@ const LANG_LABELS: Record<string, string> = {
   text: "Text",
 };
 
-function CodeBlock({
+// PERF: wrapped in React.memo so every unrelated ChatView re-render
+// (attachment add/remove, status change, thread switch, etc.) doesn't force
+// react-syntax-highlighter to re-tokenize every code block. Props are a
+// plain string + string | undefined, so default shallow equality works.
+const CodeBlock = memo(function CodeBlock({
   language,
   children,
 }: {
@@ -1491,7 +1499,7 @@ function CodeBlock({
       </div>
     </div>
   );
-}
+});
 
 function FileRefCode({ inner }: { inner: string }) {
   const ctx = useContext(OpenFileContext);
@@ -1541,6 +1549,110 @@ function MarkdownContent({ text }: { text: string }) {
           </strong>
         ),
         em: ({ children }) => <em className="italic">{children}</em>,
+        // Route every link click through `shell.openExternal` in the
+        // main process. Without this override, two bad things happen:
+        //
+        //   1. `remark-gfm` autolinks bare URLs but the rendered `<a>`
+        //      inherits zero styling, so they look like plain text.
+        //   2. Default anchor clicks trigger an Electron webview
+        //      navigation, which blows away the app UI and has no
+        //      back button (main.ts has a belt-and-suspenders
+        //      `will-navigate` guard for the same reason, but catching
+        //      it here avoids the brief flash).
+        //
+        // We call `preventDefault` explicitly and ignore anything that
+        // isn't http(s) — `openExternal` in main rejects non-http(s)
+        // schemes anyway, but filtering here avoids the round-trip.
+        a: ({ href, children }) => {
+          const url = typeof href === "string" ? href : "";
+          const isHttp = /^https?:\/\//i.test(url);
+          return (
+            <a
+              href={url || "#"}
+              onClick={(e) => {
+                e.preventDefault();
+                if (isHttp && window.openclawdex?.openExternal) {
+                  void window.openclawdex.openExternal(url);
+                }
+              }}
+              style={{
+                color: "var(--accent)",
+                textDecoration: "underline",
+                textUnderlineOffset: "2px",
+                textDecorationThickness: "1px",
+                textDecorationColor: "rgba(51, 156, 255, 0.4)",
+                cursor: isHttp ? "pointer" : "default",
+              }}
+            >
+              {children}
+            </a>
+          );
+        },
+        // Images from model output. We do NOT auto-load arbitrary remote
+        // URLs because:
+        //
+        //   1. Privacy / tracking: a rendered <img> is a GET to an attacker-
+        //      chosen host that leaks the user's IP and a browser user-agent
+        //      the moment it appears on screen. Classic "tracking pixel"
+        //      surface when the model is prompted adversarially.
+        //   2. Reliability: flaky image hosts (via.placeholder.com is a
+        //      recurring offender) spam the console with TLS / connection
+        //      errors every time the message re-renders.
+        //
+        // `data:` and `blob:` URLs are same-origin in spirit — they never
+        // leave the renderer — so we allow those to render inline. Remote
+        // http(s) images show a click-to-open chip that routes through
+        // `openExternal`, the same path normal links already use, so the
+        // image opens in the system browser where the user can decide.
+        img: ({ src, alt }) => {
+          const url = typeof src === "string" ? src : "";
+          const isLocal = url.startsWith("data:") || url.startsWith("blob:");
+          if (isLocal) {
+            return (
+              <img
+                src={url}
+                alt={alt ?? ""}
+                style={{
+                  maxWidth: "100%",
+                  borderRadius: 8,
+                  margin: "4px 0",
+                  border: "1px solid var(--border-default)",
+                }}
+              />
+            );
+          }
+          const isHttp = /^https?:\/\//i.test(url);
+          const label = alt?.trim() || url || "image";
+          return (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.preventDefault();
+                if (isHttp && window.openclawdex?.openExternal) {
+                  void window.openclawdex.openExternal(url);
+                }
+              }}
+              title={isHttp ? `Open in browser: ${url}` : url}
+              disabled={!isHttp}
+              className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[12px] align-baseline"
+              style={{
+                background: "rgba(255,255,255,0.06)",
+                color: "var(--text-secondary)",
+                border: "1px solid var(--border-default)",
+                cursor: isHttp ? "pointer" : "default",
+                maxWidth: "100%",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
+            >
+              <ImageSquare size={12} weight="regular" />
+              <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
+                {label}
+              </span>
+            </button>
+          );
+        },
         h1: ({ children }) => (
           <h1
             className="text-[17px] font-semibold mt-4 mb-2 first:mt-0"
@@ -1677,13 +1789,15 @@ function MarkdownContent({ text }: { text: string }) {
 
 function TextareaWithScrollbar({
   textareaRef,
-  value,
   onChange,
   onKeyDown,
   onPaste,
 }: {
   textareaRef: React.RefObject<HTMLTextAreaElement | null>;
-  value: string;
+  // Uncontrolled: the textarea owns its text. `onChange` is still fired so
+  // the parent can track derived signals (e.g. "is the field empty?") without
+  // round-tripping every keystroke through React state. See PERF note in
+  // ChatView below.
   onChange: React.ChangeEventHandler<HTMLTextAreaElement>;
   onKeyDown: React.KeyboardEventHandler<HTMLTextAreaElement>;
   onPaste?: React.ClipboardEventHandler<HTMLTextAreaElement>;
@@ -1746,16 +1860,17 @@ function TextareaWithScrollbar({
     <div className="relative">
       <textarea
         ref={textareaRef}
-        value={value}
         onChange={onChange}
         onScroll={onScroll}
         onPaste={onPaste}
         onInput={(e) => {
-          const el = e.currentTarget;
-          el.style.height = "auto";
-          el.style.height = el.scrollHeight + "px";
-          el.style.overflowY = el.scrollHeight > 140 ? "auto" : "hidden";
-          updateThumb(el);
+          // Only keep the thumb in sync here — height auto-grow is handled
+          // by CSS `field-sizing: content` below. Removing the imperative
+          // height manipulation was critical for typing latency: each
+          // `el.scrollHeight` read forced a synchronous full-page layout,
+          // and we were doing three per keystroke. With field-sizing the
+          // browser resizes the textarea without any JS round-trip.
+          updateThumb(e.currentTarget);
         }}
         onKeyDown={onKeyDown}
         placeholder="Ask for follow-up changes"
@@ -1766,7 +1881,11 @@ function TextareaWithScrollbar({
             color: "var(--text-primary)",
             minHeight: "36px",
             maxHeight: "140px",
-            overflowY: "hidden",
+            // Native auto-grow (Chromium ≥123, we're on Electron 41 →
+            // Chromium ≥136). Textarea sizes to its content, clamped by
+            // min/max height, with the browser handling reflow.
+            fieldSizing: "content",
+            overflowY: "auto",
             scrollbarWidth: "none",
           } as React.CSSProperties
         }
@@ -1831,6 +1950,61 @@ interface ChatViewProps {
   onNewChat?: () => void;
 }
 
+/* ── SendButton ──────────────────────────────────────────────
+ *
+ * PERF: the send button's "is there text?" signal used to live in
+ * `hasText` state inside ChatView. Every bulk edit to the composer
+ * (select-all + delete, undo of a paste, clearing on submit) flipped
+ * that boolean and re-rendered the whole 3k-line ChatView — which
+ * forced every CodeBlock / syntax-highlighted block to re-render.
+ *
+ * Pulling the state *inside* a dedicated leaf component keeps the
+ * expensive parent tree still. The parent drives updates
+ * imperatively via a ref; React.memo on CodeBlock (a separate change)
+ * handles the still-possible re-renders from other causes.
+ *
+ * We intentionally don't pass `hasText` as a prop — that would defeat
+ * the whole point, since a parent prop change means a parent render.
+ */
+export interface SendButtonHandle {
+  setHasText: (hasText: boolean) => void;
+}
+
+const SendButton = forwardRef<
+  SendButtonHandle,
+  {
+    hasAttachments: boolean;
+    onClick: () => void;
+  }
+>(function SendButton({ hasAttachments, onClick }, ref) {
+  const [hasText, setHasText] = useState(false);
+  useImperativeHandle(
+    ref,
+    () => ({
+      setHasText(next: boolean) {
+        // Functional updater bails out when unchanged — most keystrokes
+        // within a non-empty draft (or within an empty one) no-op.
+        setHasText((prev) => (prev === next ? prev : next));
+      },
+    }),
+    [],
+  );
+  const active = hasText || hasAttachments;
+  return (
+    <button
+      onClick={onClick}
+      disabled={!active}
+      className="w-[30px] h-[30px] flex items-center justify-center rounded-full transition-colors"
+      style={{
+        background: active ? "var(--text-primary)" : "var(--surface-3)",
+        color: active ? "var(--surface-0)" : "var(--text-faint)",
+      }}
+    >
+      <ArrowUp size={16} weight="bold" />
+    </button>
+  );
+});
+
 export function ChatView({
   thread,
   projects,
@@ -1845,7 +2019,18 @@ export function ChatView({
   onCreateProject,
   onNewChat,
 }: ChatViewProps) {
-  const [input, setInput] = useState("");
+  // PERF: the textarea is uncontrolled — its text lives in the DOM, read at
+  // submit time via `textareaRef.current.value`. The "is there text?" signal
+  // that drives the send-button style is kept *inside* SendButton (see its
+  // definition above) and updated imperatively via this ref. That way even
+  // hard flips (select-all + delete, undo a paste) don't re-render ChatView
+  // or the message list — only the 30×30 send button.
+  const sendButtonRef = useRef<SendButtonHandle>(null);
+  const handleTextChange = useCallback<
+    React.ChangeEventHandler<HTMLTextAreaElement>
+  >((e) => {
+    sendButtonRef.current?.setHasText(e.target.value.trim().length > 0);
+  }, []);
   // GOTCHA: `selectedModel` is the unified picker state. When the user
   // picks a Codex model on a pending thread, we also call
   // `onUpdateThreadProvider` to flip the thread.provider so subsequent
@@ -1914,6 +2099,16 @@ export function ChatView({
   const scrollAreaRef = useRef<ScrollAreaHandle>(null);
   const [showScrollBtn, setShowScrollBtn] = useState(false);
   const isAtBottomRef = useRef(true);
+  // PERF/UX: during streaming, new tokens grow scrollHeight while the smooth
+  // auto-scroll is still animating scrollTop toward the new bottom. That
+  // creates brief windows where the "at bottom" math reports false, which
+  // used to flip the scroll-to-bottom button on for a frame or two and then
+  // off again — visible flicker. We debounce the "show" transition so only
+  // sustained "not at bottom" (i.e. the user actually scrolled up) surfaces
+  // the button. Hiding stays instant.
+  const showScrollBtnTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
   const currentThreadIdRef = useRef<string | undefined>(undefined);
   const prevHistoryLoadedRef = useRef<boolean | undefined>(undefined);
 
@@ -2017,7 +2212,23 @@ export function ChatView({
   const handleMessagesScroll = useCallback((el: HTMLDivElement) => {
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
     isAtBottomRef.current = atBottom;
-    setShowScrollBtn(!atBottom);
+    if (atBottom) {
+      // Hide immediately — no flicker risk, and snappy when the user jumps
+      // back to the bottom.
+      if (showScrollBtnTimerRef.current) {
+        clearTimeout(showScrollBtnTimerRef.current);
+        showScrollBtnTimerRef.current = null;
+      }
+      setShowScrollBtn(false);
+    } else if (!showScrollBtnTimerRef.current) {
+      // Delay showing. If we return to bottom before the timer fires (as
+      // happens mid smooth-scroll during streaming), the timer is cancelled
+      // above and the button never appears.
+      showScrollBtnTimerRef.current = setTimeout(() => {
+        showScrollBtnTimerRef.current = null;
+        if (!isAtBottomRef.current) setShowScrollBtn(true);
+      }, 180);
+    }
   }, []);
 
   // Scroll to bottom: instant on thread switch or history load, smooth for new messages
@@ -2033,6 +2244,10 @@ export function ChatView({
 
     if (threadChanged || historyJustLoaded) {
       isAtBottomRef.current = true;
+      if (showScrollBtnTimerRef.current) {
+        clearTimeout(showScrollBtnTimerRef.current);
+        showScrollBtnTimerRef.current = null;
+      }
       setShowScrollBtn(false);
       messagesEndRef.current?.scrollIntoView({ behavior: "instant" });
     } else if (isAtBottomRef.current) {
@@ -2047,8 +2262,19 @@ export function ChatView({
     }
   }, [thread?.id]);
 
+  // Clear any pending scroll-button timer on unmount.
+  useEffect(() => {
+    return () => {
+      if (showScrollBtnTimerRef.current) {
+        clearTimeout(showScrollBtnTimerRef.current);
+        showScrollBtnTimerRef.current = null;
+      }
+    };
+  }, []);
+
   const handleSubmit = async () => {
-    const hasContent = input.trim() || attachments.length > 0;
+    const text = (textareaRef.current?.value ?? "").trim();
+    const hasContent = text.length > 0 || attachments.length > 0;
     if (!thread || !hasContent || thread.status === "running") return;
 
     // Convert attachments to base64. If the File was sourced from the
@@ -2088,21 +2314,19 @@ export function ChatView({
     // `selectedModel` can be null during the brief window before the
     // live model list arrives. Omit the model field so the backend
     // falls back to the CLI's own default for the provider.
-    onSend(thread.id, input.trim(), images, {
+    onSend(thread.id, text, images, {
       ...(selectedModel && { model: selectedModel.id }),
       effort,
     });
-    setInput("");
+    // Clear the uncontrolled textarea + flip the send-button state.
+    // `field-sizing: content` on the element handles the reflow.
+    const el = textareaRef.current;
+    if (el) el.value = "";
+    sendButtonRef.current?.setHasText(false);
     setAttachments((prev) => {
       prev.forEach((a) => URL.revokeObjectURL(a.previewUrl));
       return [];
     });
-    // Reset textarea height
-    const el = textareaRef.current;
-    if (el) {
-      el.style.height = "auto";
-      el.style.overflowY = "hidden";
-    }
   };
 
   const handleOpenInEditor = useCallback(
@@ -2267,13 +2491,11 @@ export function ChatView({
   if (!thread) {
     // Two no-thread states:
     //   1. Loading — spinner while bootstrap is in flight.
-    //   2. No projects exist at all (fresh install, or user just
-    //      deleted the last one) — zero-state hero with a CTA that
-    //      mirrors the sidebar's "New thread" button. Uses handleNewChat's
-    //      fallback chain to open the folder picker.
-    //   3. Otherwise — thread was deselected but projects exist; quiet
-    //      placeholder (old behavior).
-    const noProjects = !isLoading && (projects?.length ?? 0) === 0;
+    //   2. No projects exist at all — zero-state hero with a CTA
+    //      that opens the folder picker via handleNewChat.
+    // A third case (thread deselected while projects exist) is
+    // handled by an effect in App.tsx that auto-spawns a pending
+    // thread, so it never reaches this render.
     return (
       <div className="flex-1 flex items-center justify-center px-8">
         {isLoading ? (
@@ -2300,9 +2522,9 @@ export function ChatView({
               strokeLinecap="round"
             />
           </svg>
-        ) : noProjects ? (
+        ) : (projects?.length ?? 0) === 0 ? (
           <div
-            className="flex flex-col items-center gap-6 text-center"
+            className="flex flex-col items-center gap-6 text-center mb-10"
             style={{ animation: "fadeIn 120ms ease" }}
           >
             <div
@@ -2314,35 +2536,25 @@ export function ChatView({
             {onNewChat && (
               <button
                 onClick={onNewChat}
-                className="flex items-center gap-2 px-3 py-[10px] rounded-xl text-[13px] font-medium transition-colors"
+                className="flex items-center gap-1.5 pl-3 pr-4 py-[10px] rounded-full text-[13px] font-medium transition-colors"
                 style={{
-                  background: "rgba(255, 255, 255, 0.06)",
-                  color: "var(--text-primary)",
-                  border: "1px solid rgba(255, 255, 255, 0.1)",
+                  background: "#ffffff",
+                  color: "#181818",
                 }}
                 onMouseEnter={(e) => {
                   e.currentTarget.style.background =
-                    "rgba(255, 255, 255, 0.12)";
-                  e.currentTarget.style.borderColor =
-                    "rgba(255, 255, 255, 0.16)";
+                    "rgba(255, 255, 255, 0.88)";
                 }}
                 onMouseLeave={(e) => {
-                  e.currentTarget.style.background =
-                    "rgba(255, 255, 255, 0.06)";
-                  e.currentTarget.style.borderColor =
-                    "rgba(255, 255, 255, 0.1)";
+                  e.currentTarget.style.background = "#ffffff";
                 }}
               >
                 <Plus size={15} weight="bold" />
-                Point us at a folder
+                Add a project
               </button>
             )}
           </div>
-        ) : (
-          <span className="text-[13px]" style={{ color: "var(--text-muted)" }}>
-            No thread selected
-          </span>
-        )}
+        ) : null}
       </div>
     );
   }
@@ -2792,8 +3004,7 @@ export function ChatView({
                 )}
                 <TextareaWithScrollbar
                   textareaRef={textareaRef}
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
+                  onChange={handleTextChange}
                   onKeyDown={(e) => {
                     if (e.key === "Enter" && !e.shiftKey) {
                       e.preventDefault();
@@ -2961,23 +3172,11 @@ export function ChatView({
                         />
                       </button>
                     ) : (
-                      <button
+                      <SendButton
+                        ref={sendButtonRef}
+                        hasAttachments={attachments.length > 0}
                         onClick={handleSubmit}
-                        disabled={!input.trim() && attachments.length === 0}
-                        className="w-[30px] h-[30px] flex items-center justify-center rounded-full transition-colors"
-                        style={{
-                          background:
-                            input.trim() || attachments.length > 0
-                              ? "var(--text-primary)"
-                              : "var(--surface-3)",
-                          color:
-                            input.trim() || attachments.length > 0
-                              ? "var(--surface-0)"
-                              : "var(--text-faint)",
-                        }}
-                      >
-                        <ArrowUp size={16} weight="bold" />
-                      </button>
+                      />
                     )}
                   </div>
                 </div>
@@ -3338,7 +3537,7 @@ function ProjectNameDropdown({
             style={{ color: "var(--text-secondary)" }}
           >
             <Plus size={14} weight="light" style={{ flexShrink: 0 }} />
-            <span>New project…</span>
+            <span>Add a project…</span>
           </DropdownItem>
         </DropdownSurface>
       )}

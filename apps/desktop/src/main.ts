@@ -835,6 +835,61 @@ function createWindow() {
     mainWindow = null;
   });
 
+  // ── Navigation guard ────────────────────────────────────────
+  //
+  // The renderer is our app — it should never navigate away. If the
+  // user clicks an `<a href="https://...">` in assistant markdown and
+  // we fail to intercept it at the React layer, Electron's default is
+  // to replace the webview with that URL, permanently destroying the
+  // app UI with no back button. That actually happened in testing.
+  //
+  // Belt-and-suspenders: we hijack both entry points and route any
+  // http(s) URL to the system browser via `shell.openExternal`. The
+  // only permitted in-window navigation is the Vite dev server URL
+  // (during `pnpm dev`) and `file://` loads of the packaged bundle.
+  //
+  // - `will-navigate`: fires for top-level anchor clicks and any
+  //   `location.href = ...`.
+  // - `setWindowOpenHandler`: fires for `window.open()` and
+  //   `target="_blank"` anchors.
+  const isInternalUrl = (url: string): boolean => {
+    if (url.startsWith("file://")) return true;
+    if (IS_DEV && url.startsWith(DEV_URL)) return true;
+    // Allow same-origin SPA navigation within the dev server host
+    // (e.g. Vite HMR reloads). Production only ever loads from file://.
+    if (IS_DEV) {
+      try {
+        const u = new URL(url);
+        const d = new URL(DEV_URL);
+        if (u.origin === d.origin) return true;
+      } catch { /* fall through */ }
+    }
+    return false;
+  };
+
+  mainWindow.webContents.on("will-navigate", (event, url) => {
+    if (isInternalUrl(url)) return;
+    event.preventDefault();
+    try {
+      const parsed = new URL(url);
+      if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+        void shell.openExternal(parsed.toString());
+      }
+    } catch {
+      // Malformed URL — drop silently rather than navigating anywhere.
+    }
+  });
+
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    try {
+      const parsed = new URL(url);
+      if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+        void shell.openExternal(parsed.toString());
+      }
+    } catch { /* ignore */ }
+    return { action: "deny" };
+  });
+
   if (IS_DEV) {
     mainWindow.loadURL(DEV_URL);
   } else {

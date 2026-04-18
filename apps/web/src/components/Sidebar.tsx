@@ -100,31 +100,46 @@ export function Sidebar({
         }}
       />
 
-      {/* Primary "New thread" action — always visible, pinned above the
-          scrolling thread list. Target project resolves in App.handleNewChat
-          (active thread → most recent → first project → folder picker). */}
-      <div className="px-3 pt-3 pb-2 shrink-0">
-        <button
-          onClick={onNewChat}
-          className="flex items-center gap-2 w-full px-3 py-[10px] rounded-xl text-[13px] font-medium transition-colors"
-          style={{
-            background: "rgba(255, 255, 255, 0.06)",
-            color: "var(--text-primary)",
-            border: "1px solid rgba(255, 255, 255, 0.1)",
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.background = "rgba(255, 255, 255, 0.12)";
-            e.currentTarget.style.borderColor = "rgba(255, 255, 255, 0.16)";
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.background = "rgba(255, 255, 255, 0.06)";
-            e.currentTarget.style.borderColor = "rgba(255, 255, 255, 0.1)";
-          }}
-        >
-          <Plus size={15} weight="bold" />
-          New thread
-        </button>
-      </div>
+      {/* Primary "New thread" action — pinned above the scrolling thread
+          list whenever there's at least one project to scope the new
+          thread to. In the zero-project state the button's only useful
+          action is to open the folder picker, which is already the
+          job of the larger "Add new project" CTA in the main pane — so
+          we hide it here to avoid two competing calls-to-action.
+          Target project resolves in App.handleNewChat (active thread →
+          most recent → first project → folder picker). */}
+      {projects.length > 0 && (
+        <div className="px-3 pt-3 pb-2 shrink-0">
+          <button
+            onClick={onNewChat}
+            className="group/newthread flex items-center gap-2 w-full px-3 py-[10px] rounded-xl text-[13px] font-medium transition-colors"
+            style={{
+              background: "rgba(255, 255, 255, 0.06)",
+              color: "var(--text-primary)",
+              border: "1px solid rgba(255, 255, 255, 0.1)",
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = "rgba(255, 255, 255, 0.12)";
+              e.currentTarget.style.borderColor = "rgba(255, 255, 255, 0.16)";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = "rgba(255, 255, 255, 0.06)";
+              e.currentTarget.style.borderColor = "rgba(255, 255, 255, 0.1)";
+            }}
+          >
+            <Plus size={15} weight="bold" />
+            New thread
+            {/* Shortcut hint — revealed on hover. Uses ⌘ on macOS-style
+                UI; the handler in App.tsx also accepts Ctrl+N for parity. */}
+            <span
+              className="ml-auto text-[11px] font-medium opacity-0 group-hover/newthread:opacity-100 transition-opacity"
+              style={{ color: "rgba(255, 255, 255, 0.45)" }}
+            >
+              ⌘N
+            </span>
+          </button>
+        </div>
+      )}
 
       <ScrollArea className="flex-1">
         <div className="pb-2">

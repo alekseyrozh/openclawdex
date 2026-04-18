@@ -591,6 +591,40 @@ export function App() {
     }
   }, [projects, handleNewThread, handleCreateProject]);
 
+  // ── Auto-spawn a pending thread when nothing is selected ──────
+  //
+  // Deleting/archiving the active thread — or deleting the project
+  // that owns it — leaves activeThreadId=null. With projects still
+  // around, the old fallback was a dead "no thread selected" pane.
+  // Instead, immediately open a fresh pending thread so the user
+  // always lands on either a usable composer (≥1 project) or the
+  // zero-project "Add a project" hero.
+  useEffect(() => {
+    if (threadsLoading) return;
+    if (activeThreadId !== null) return;
+    if (projects.length === 0) return;
+    handleNewChat();
+  }, [activeThreadId, projects.length, threadsLoading, handleNewChat]);
+
+  // ── Keyboard shortcut: Cmd/Ctrl+N → new thread ────────────────
+  //
+  // Mirrors the sidebar's "New thread" button. Scoped globally so it
+  // fires regardless of which pane has focus; we skip while the user
+  // is typing in an editable field so the native browser shortcut
+  // (if any) still wins, and we ignore when a modifier-less `n` would
+  // otherwise collide.
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      const mod = e.metaKey || e.ctrlKey;
+      if (!mod || e.shiftKey || e.altKey) return;
+      if (e.key !== "n" && e.key !== "N") return;
+      e.preventDefault();
+      handleNewChat();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [handleNewChat]);
+
   /**
    * Reassign a thread to a different project. Pending threads (no
    * session row yet) live in renderer state only — just update
