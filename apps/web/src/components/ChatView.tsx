@@ -32,6 +32,7 @@ import {
   X,
   ImageSquare,
   Folder,
+  FolderPlus,
   Plus,
   ArrowSquareOut,
 } from "@phosphor-icons/react";
@@ -1977,13 +1978,17 @@ const SendButton = forwardRef<
   }
 >(function SendButton({ hasAttachments, onClick }, ref) {
   const [hasText, setHasText] = useState(false);
-  useImperativeHandle(ref, () => ({
-    setHasText(next: boolean) {
-      // Functional updater bails out when unchanged — most keystrokes
-      // within a non-empty draft (or within an empty one) no-op.
-      setHasText((prev) => (prev === next ? prev : next));
-    },
-  }), []);
+  useImperativeHandle(
+    ref,
+    () => ({
+      setHasText(next: boolean) {
+        // Functional updater bails out when unchanged — most keystrokes
+        // within a non-empty draft (or within an empty one) no-op.
+        setHasText((prev) => (prev === next ? prev : next));
+      },
+    }),
+    [],
+  );
   const active = hasText || hasAttachments;
   return (
     <button
@@ -2021,12 +2026,11 @@ export function ChatView({
   // hard flips (select-all + delete, undo a paste) don't re-render ChatView
   // or the message list — only the 30×30 send button.
   const sendButtonRef = useRef<SendButtonHandle>(null);
-  const handleTextChange = useCallback<React.ChangeEventHandler<HTMLTextAreaElement>>(
-    (e) => {
-      sendButtonRef.current?.setHasText(e.target.value.trim().length > 0);
-    },
-    [],
-  );
+  const handleTextChange = useCallback<
+    React.ChangeEventHandler<HTMLTextAreaElement>
+  >((e) => {
+    sendButtonRef.current?.setHasText(e.target.value.trim().length > 0);
+  }, []);
   // GOTCHA: `selectedModel` is the unified picker state. When the user
   // picks a Codex model on a pending thread, we also call
   // `onUpdateThreadProvider` to flip the thread.provider so subsequent
@@ -2102,7 +2106,9 @@ export function ChatView({
   // off again — visible flicker. We debounce the "show" transition so only
   // sustained "not at bottom" (i.e. the user actually scrolled up) surfaces
   // the button. Hiding stays instant.
-  const showScrollBtnTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const showScrollBtnTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
   const currentThreadIdRef = useRef<string | undefined>(undefined);
   const prevHistoryLoadedRef = useRef<boolean | undefined>(undefined);
 
@@ -2485,13 +2491,11 @@ export function ChatView({
   if (!thread) {
     // Two no-thread states:
     //   1. Loading — spinner while bootstrap is in flight.
-    //   2. No projects exist at all (fresh install, or user just
-    //      deleted the last one) — zero-state hero with a CTA that
-    //      mirrors the sidebar's "New thread" button. Uses handleNewChat's
-    //      fallback chain to open the folder picker.
-    //   3. Otherwise — thread was deselected but projects exist; quiet
-    //      placeholder (old behavior).
-    const noProjects = !isLoading && (projects?.length ?? 0) === 0;
+    //   2. No projects exist at all — zero-state hero with a CTA
+    //      that opens the folder picker via handleNewChat.
+    // A third case (thread deselected while projects exist) is
+    // handled by an effect in App.tsx that auto-spawns a pending
+    // thread, so it never reaches this render.
     return (
       <div className="flex-1 flex items-center justify-center px-8">
         {isLoading ? (
@@ -2518,9 +2522,9 @@ export function ChatView({
               strokeLinecap="round"
             />
           </svg>
-        ) : noProjects ? (
+        ) : (projects?.length ?? 0) === 0 ? (
           <div
-            className="flex flex-col items-center gap-6 text-center"
+            className="flex flex-col items-center gap-6 text-center mb-10"
             style={{ animation: "fadeIn 120ms ease" }}
           >
             <div
@@ -2532,35 +2536,25 @@ export function ChatView({
             {onNewChat && (
               <button
                 onClick={onNewChat}
-                className="flex items-center gap-2 px-3 py-[10px] rounded-xl text-[13px] font-medium transition-colors"
+                className="flex items-center gap-1.5 pl-3 pr-4 py-[10px] rounded-full text-[13px] font-medium transition-colors"
                 style={{
-                  background: "rgba(255, 255, 255, 0.06)",
-                  color: "var(--text-primary)",
-                  border: "1px solid rgba(255, 255, 255, 0.1)",
+                  background: "#ffffff",
+                  color: "#181818",
                 }}
                 onMouseEnter={(e) => {
                   e.currentTarget.style.background =
-                    "rgba(255, 255, 255, 0.12)";
-                  e.currentTarget.style.borderColor =
-                    "rgba(255, 255, 255, 0.16)";
+                    "rgba(255, 255, 255, 0.88)";
                 }}
                 onMouseLeave={(e) => {
-                  e.currentTarget.style.background =
-                    "rgba(255, 255, 255, 0.06)";
-                  e.currentTarget.style.borderColor =
-                    "rgba(255, 255, 255, 0.1)";
+                  e.currentTarget.style.background = "#ffffff";
                 }}
               >
                 <Plus size={15} weight="bold" />
-                Point us at a folder
+                Add a project
               </button>
             )}
           </div>
-        ) : (
-          <span className="text-[13px]" style={{ color: "var(--text-muted)" }}>
-            No thread selected
-          </span>
-        )}
+        ) : null}
       </div>
     );
   }
@@ -3543,7 +3537,7 @@ function ProjectNameDropdown({
             style={{ color: "var(--text-secondary)" }}
           >
             <Plus size={14} weight="light" style={{ flexShrink: 0 }} />
-            <span>New project…</span>
+            <span>Add a project…</span>
           </DropdownItem>
         </DropdownSurface>
       )}

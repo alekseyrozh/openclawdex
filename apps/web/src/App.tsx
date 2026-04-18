@@ -591,6 +591,21 @@ export function App() {
     }
   }, [projects, handleNewThread, handleCreateProject]);
 
+  // ── Auto-spawn a pending thread when nothing is selected ──────
+  //
+  // Deleting/archiving the active thread — or deleting the project
+  // that owns it — leaves activeThreadId=null. With projects still
+  // around, the old fallback was a dead "no thread selected" pane.
+  // Instead, immediately open a fresh pending thread so the user
+  // always lands on either a usable composer (≥1 project) or the
+  // zero-project "Add a project" hero.
+  useEffect(() => {
+    if (threadsLoading) return;
+    if (activeThreadId !== null) return;
+    if (projects.length === 0) return;
+    handleNewChat();
+  }, [activeThreadId, projects.length, threadsLoading, handleNewChat]);
+
   // ── Keyboard shortcut: Cmd/Ctrl+N → new thread ────────────────
   //
   // Mirrors the sidebar's "New thread" button. Scoped globally so it
