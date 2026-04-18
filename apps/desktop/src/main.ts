@@ -9,6 +9,7 @@ import fs from "fs";
 import { eq } from "drizzle-orm";
 import { findClaudeBinary, ClaudeSession } from "./claude";
 import { isCodexInstalled, CodexSession } from "./codex";
+import { readCodexHistory, readCodexSummary } from "./codex-history";
 import { listCodexModels } from "./codex-models";
 import { listClaudeModels } from "./claude-models";
 import type { AgentSession } from "./agent-session";
@@ -364,11 +365,14 @@ function setupIpcHandlers(): void {
           archived: row.archived ?? false,
         });
       } else {
-        // Codex: we don't have on-disk enrichment, so emit from DB only.
+        // Codex: enrich from the CLI's on-disk rollout JSONL, since its
+        // SDK doesn't expose a listing API. `customName` (user rename)
+        // wins; otherwise use the first real user prompt from disk.
+        const summary = row.customName ?? readCodexSummary(row.sessionId) ?? "Codex thread";
         results.push({
           sessionId: row.sessionId,
           provider: "codex",
-          summary: row.customName ?? "Codex thread",
+          summary,
           lastModified: row.createdAt,
           projectId: row.projectId ?? undefined,
           contextStats,
@@ -385,10 +389,9 @@ function setupIpcHandlers(): void {
    * Load message history for a past session.
    *
    * GOTCHA: Codex's SDK doesn't expose a way to read historical
-   * thread items programmatically as of 0.121.0, so we return `[]`
-   * for Codex threads. The resume flow still works (the Codex CLI
-   * itself reads the JSONL) — the user just won't see prior turns
-   * in the UI when they reopen the thread.
+   * thread items programmatically as of 0.121.0, so for Codex we
+   * parse the rollout JSONL at ~/.codex/sessions/** directly — same
+   * file `codex resume` reads, just surfaced to the UI.
    */
   ipcMain.handle("session:load-history", async (_event, sessionId: string) => {
     // Determine provider from DB. Default to claude for legacy rows.
@@ -398,7 +401,7 @@ function setupIpcHandlers(): void {
       .where(eq(knownThreads.sessionId, sessionId))
       .limit(1);
     const provider = (row[0]?.provider ?? "claude") as Provider;
-    if (provider === "codex") return [];
+    if (provider === "codex") return readCodexHistory(sessionId);
 
     const msgs = await getSessionMessages(sessionId);
 
