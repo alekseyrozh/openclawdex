@@ -1,5 +1,6 @@
 import { app, BrowserWindow, ipcMain, nativeTheme, dialog } from "electron";
-import { autoUpdater } from "electron-updater";
+import electronUpdater from "electron-updater";
+const { autoUpdater } = electronUpdater;
 import { shell } from "electron";
 import path from "path";
 import { randomUUID } from "crypto";
@@ -690,7 +691,7 @@ function createWindow() {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
-      preload: path.join(__dirname, "preload.js"),
+      preload: path.join(import.meta.dirname, "preload.cjs"),
     },
 
     show: false,
@@ -707,7 +708,7 @@ function createWindow() {
   if (IS_DEV) {
     mainWindow.loadURL(DEV_URL);
   } else {
-    mainWindow.loadFile(path.join(__dirname, "../web/dist/index.html"));
+    mainWindow.loadFile(path.join(import.meta.dirname, "../web/dist/index.html"));
   }
 }
 

@@ -2,6 +2,7 @@
   "name": "@openclawdex/desktop",
   "private": true,
   "version": "0.2.1",
+  "type": "module",
   "main": "dist/main.js",
   "scripts": {
     "dev": "tsup && electron .",

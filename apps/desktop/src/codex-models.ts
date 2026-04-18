@@ -1,49 +1,6 @@
 import { spawn } from "child_process";
-import { createRequire } from "module";
-import path from "path";
-import fs from "fs";
 import { z } from "zod";
 import { CodexModel } from "@openclawdex/shared";
-
-/**
- * Resolve the platform-specific `codex` binary that ships inside
- * `node_modules/@openai/codex`. Mirrors the resolution logic in
- * `@openai/codex-sdk`'s `findCodexPath` so we spawn the same pinned
- * binary the SDK uses for inference — keeping the app-server
- * protocol and the exec protocol in lockstep.
- */
-function findBundledCodexBinary(): string | null {
-  const PLATFORM_PACKAGE: Record<string, string> = {
-    "x86_64-unknown-linux-musl": "@openai/codex-linux-x64",
-    "aarch64-unknown-linux-musl": "@openai/codex-linux-arm64",
-    "x86_64-apple-darwin": "@openai/codex-darwin-x64",
-    "aarch64-apple-darwin": "@openai/codex-darwin-arm64",
-    "x86_64-pc-windows-msvc": "@openai/codex-win32-x64",
-    "aarch64-pc-windows-msvc": "@openai/codex-win32-arm64",
-  };
-
-  let triple: string | null = null;
-  if (process.platform === "darwin") {
-    triple = process.arch === "arm64" ? "aarch64-apple-darwin" : "x86_64-apple-darwin";
-  } else if (process.platform === "linux") {
-    triple = process.arch === "arm64" ? "aarch64-unknown-linux-musl" : "x86_64-unknown-linux-musl";
-  } else if (process.platform === "win32") {
-    triple = process.arch === "arm64" ? "aarch64-pc-windows-msvc" : "x86_64-pc-windows-msvc";
-  }
-  if (!triple) return null;
-
-  const platformPkg = PLATFORM_PACKAGE[triple];
-  try {
-    const codexPkgJson = require.resolve("@openai/codex/package.json");
-    const codexRequire = createRequire(codexPkgJson);
-    const platformPkgJson = codexRequire.resolve(`${platformPkg}/package.json`);
-    const binName = process.platform === "win32" ? "codex.exe" : "codex";
-    const bin = path.join(path.dirname(platformPkgJson), "vendor", triple, "codex", binName);
-    return fs.existsSync(bin) ? bin : null;
-  } catch {
-    return null;
-  }
-}
 
 /**
  * Response envelope for the `model/list` RPC. The `data` array is the
@@ -78,11 +35,8 @@ export function listCodexModels(): Promise<CodexModel[]> {
  * doesn't silently drop `model/list`.
  */
 async function fetchCodexModels(): Promise<CodexModel[]> {
-  const bin = findBundledCodexBinary();
-  if (!bin) throw new Error("Codex binary not found — is @openai/codex installed?");
-
   return new Promise<CodexModel[]>((resolve, reject) => {
-    const child = spawn(bin, ["app-server"], { stdio: ["pipe", "pipe", "pipe"] });
+    const child = spawn("codex", ["app-server"], { stdio: ["pipe", "pipe", "pipe"] });
 
     let stdoutBuf = "";
     const stderrChunks: Buffer[] = [];

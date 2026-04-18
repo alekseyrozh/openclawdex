@@ -20,5 +20,5 @@ export async function initDb(): Promise<void> {
   _db = drizzle(client, { schema });
   // With tsup bundling, main.js and everything required into it live in
   // `dist/`, so the drizzle/ folder is one level up.
-  await migrate(_db, { migrationsFolder: path.join(__dirname, "../drizzle") });
+  await migrate(_db, { migrationsFolder: path.join(import.meta.dirname, "../drizzle") });
 }
