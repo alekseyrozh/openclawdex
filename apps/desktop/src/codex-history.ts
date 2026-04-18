@@ -20,11 +20,19 @@ const SESSIONS_ROOT = path.join(os.homedir(), ".codex", "sessions");
 
 const InputTextItem = z.object({ type: z.literal("input_text"), text: z.string() });
 const OutputTextItem = z.object({ type: z.literal("output_text"), text: z.string() });
+const InputImageItem = z.object({ type: z.literal("input_image"), image_url: z.string() });
 
 const MessagePayload = z.object({
   type: z.literal("message"),
   role: z.enum(["user", "assistant", "developer", "system"]),
-  content: z.array(z.union([InputTextItem, OutputTextItem, z.object({ type: z.string() }).passthrough()])),
+  content: z.array(
+    z.union([
+      InputTextItem,
+      OutputTextItem,
+      InputImageItem,
+      z.object({ type: z.string() }).passthrough(),
+    ]),
+  ),
 });
 
 const FunctionCallPayload = z.object({
@@ -40,9 +48,64 @@ const ResponseItemLine = z.object({
 });
 
 export type CodexHistoryMsg =
-  | { id: string; role: "user"; content: string }
+  | {
+      id: string;
+      role: "user";
+      content: string;
+      images?: Array<{ mediaType: string; base64: string }>;
+    }
   | { id: string; role: "assistant"; content: string }
   | { id: string; role: "tool_use"; toolName: string; toolInput?: Record<string, unknown> };
+
+function parseDataUrlImage(
+  value: string,
+): { mediaType: string; base64: string } | null {
+  const match = /^data:([^;,]+);base64,(.+)$/s.exec(value);
+  if (!match) return null;
+  return { mediaType: match[1], base64: match[2] };
+}
+
+function isImagePlaceholderText(text: string): boolean {
+  const trimmed = text.trim();
+  return trimmed === "<image>" || /^<image\b[^>]*>\s*<\/image>$/.test(trimmed);
+}
+
+function stripImagePlaceholderTags(text: string): string {
+  return text.replace(/<\/?image\b[^>]*>/g, "");
+}
+
+function normalizeToolCall(
+  name: string,
+  args?: Record<string, unknown>,
+): { toolName: string; toolInput?: Record<string, unknown> } | null {
+  switch (name) {
+    case "exec_command":
+      return {
+        toolName: "shell",
+        toolInput: {
+          ...(args ?? {}),
+          ...(typeof args?.cmd === "string" ? { command: args.cmd } : {}),
+        },
+      };
+    case "shell_command":
+      return {
+        toolName: "shell",
+        toolInput: args,
+      };
+    case "request_user_input":
+      return {
+        toolName: "AskUserQuestion",
+        toolInput: args,
+      };
+    case "write_stdin":
+      // `write_stdin` is an implementation detail of an already-open
+      // shell session. The live Codex session path doesn't render it as
+      // a separate tool card, so hide it from replayed history too.
+      return null;
+    default:
+      return { toolName: name, ...(args && { toolInput: args }) };
+  }
+}
 
 /**
  * Locate the rollout JSONL for a thread id. The file name always ends
@@ -158,17 +221,43 @@ export function readCodexHistoryFromFile(file: string): CodexHistoryMsg[] {
       const msg = payload as z.infer<typeof MessagePayload>;
       if (msg.role !== "user" && msg.role !== "assistant") continue;
 
+      const images =
+        msg.role === "user"
+          ? msg.content
+              .flatMap((b) => {
+                if (b.type !== "input_image") return [];
+                const parsedImage = parseDataUrlImage(
+                  (b as z.infer<typeof InputImageItem>).image_url,
+                );
+                return parsedImage ? [parsedImage] : [];
+              })
+          : [];
+
       const text = msg.content
         .flatMap((b) => {
-          if (b.type === "input_text") return [(b as z.infer<typeof InputTextItem>).text];
+          if (b.type === "input_text") {
+            const rawValue = (b as z.infer<typeof InputTextItem>).text;
+            if (images.length > 0) {
+              if (isImagePlaceholderText(rawValue)) return [];
+              const cleaned = stripImagePlaceholderTags(rawValue);
+              if (!cleaned) return [];
+              return [cleaned];
+            }
+            return [rawValue];
+          }
           if (b.type === "output_text") return [(b as z.infer<typeof OutputTextItem>).text];
           return [];
         })
         .join("");
-      if (!text.trim()) continue;
+      if (!text.trim() && images.length === 0) continue;
       if (msg.role === "user" && isInjectedContext(text)) continue;
 
-      result.push({ id: `codex-${itemIdx++}`, role: msg.role, content: text });
+      result.push({
+        id: `codex-${itemIdx++}`,
+        role: msg.role,
+        content: text,
+        ...(msg.role === "user" && images.length > 0 ? { images } : {}),
+      });
     } else if (payload.type === "function_call") {
       const call = payload as z.infer<typeof FunctionCallPayload>;
       let args: Record<string, unknown> | undefined;
@@ -178,12 +267,9 @@ export function readCodexHistoryFromFile(file: string): CodexHistoryMsg[] {
           args = parsedArgs as Record<string, unknown>;
         }
       } catch { /* keep args undefined */ }
-      result.push({
-        id: `codex-${itemIdx++}`,
-        role: "tool_use",
-        toolName: call.name,
-        ...(args && { toolInput: args }),
-      });
+      const normalized = normalizeToolCall(call.name, args);
+      if (!normalized) continue;
+      result.push({ id: `codex-${itemIdx++}`, role: "tool_use", ...normalized });
     }
   }
 
