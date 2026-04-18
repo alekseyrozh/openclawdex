@@ -6,14 +6,13 @@ import { defineConfig } from "tsup";
 // support ESM preloads; .cjs extension overrides the package's "type": "module".
 // @openclawdex/shared is bundled inline because it exports TS source
 // (see packages/shared/package.json) which Node can't resolve at runtime.
-// @openai/codex is a CLI binary the SDK spawns — keep it on disk.
 const shared = {
   outDir: "dist",
   platform: "node" as const,
   target: "node20",
   sourcemap: true,
   noExternal: ["@openclawdex/shared"],
-  external: ["electron", "@openai/codex"],
+  external: ["electron"],
 };
 
 export default defineConfig([

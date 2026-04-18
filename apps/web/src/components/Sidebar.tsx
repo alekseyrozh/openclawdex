@@ -558,7 +558,19 @@ function ProjectGroup({
   onArchiveThread: (threadId: string) => void;
   onPinThread: (threadId: string) => void;
 }) {
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(
+    () => localStorage.getItem(`project:collapsed:${project.id}`) === "true"
+  );
+
+  function toggleCollapsed() {
+    const next = !collapsed;
+    setCollapsed(next);
+    if (next) {
+      localStorage.setItem(`project:collapsed:${project.id}`, "true");
+    } else {
+      localStorage.removeItem(`project:collapsed:${project.id}`);
+    }
+  }
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(null);
   const [renaming, setRenaming] = useState(false);
@@ -581,7 +593,7 @@ function ProjectGroup({
       <div
         className="group flex items-center w-full px-2 py-[5px] mb-[2px] rounded-xl transition-colors"
         onClick={() => {
-          if (!renaming) setCollapsed(!collapsed);
+          if (!renaming) toggleCollapsed();
         }}
         onMouseEnter={(e) =>
           (e.currentTarget.style.background = "rgba(255,255,255,0.04)")

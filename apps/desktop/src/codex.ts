@@ -4,6 +4,7 @@ import os from "os";
 import path from "path";
 import { randomUUID } from "crypto";
 import { Codex, type Thread, type ThreadEvent, type Input } from "@openai/codex-sdk";
+import { type CodexReasoningEffort } from "@openclawdex/shared";
 import type {
   AgentSession,
   ContextUsage,
@@ -20,21 +21,11 @@ export function isCodexInstalled(): boolean {
   }
 }
 
-/**
- * Codex reasoning-effort levels, in the exact order the CLI/SDK accepts.
- *
- * GOTCHA: the Codex SDK uses a DIFFERENT set of effort levels than
- * Claude. Codex: minimal/low/medium/high/xhigh (5 levels).
- * Claude: max/high/medium/low (4 levels). The renderer stores them
- * per-provider and picks the right list based on `thread.provider`.
- */
-export type CodexEffort = "minimal" | "low" | "medium" | "high" | "xhigh";
-
 export type CodexSessionOptions = {
   resumeThreadId?: string;
   cwd?: string;
   model?: string;
-  effort?: CodexEffort;
+  effort?: CodexReasoningEffort;
 };
 
 /**
@@ -123,7 +114,7 @@ export class CodexSession implements AgentSession {
       approvalPolicy: "never" as const,
     };
 
-    this.codex = new Codex();
+    this.codex = new Codex({ codexPathOverride: "codex" });
     this.thread = opts?.resumeThreadId
       ? this.codex.resumeThread(opts.resumeThreadId, threadOptions)
       : this.codex.startThread(threadOptions);

@@ -4,8 +4,8 @@ import {
   type SDKMessage,
   type SDKUserMessage,
   type Options as ClaudeQueryOptions,
-  type EffortLevel,
 } from "@anthropic-ai/claude-agent-sdk";
+import type { ClaudeEffortLevel } from "@openclawdex/shared";
 import type {
   AgentSession,
   ContextUsage,
@@ -46,7 +46,7 @@ export class ClaudeSession implements AgentSession {
   private claudePath: string;
   private resumeSessionId: string | undefined;
   private model: string | undefined;
-  private effort: string | undefined;
+  private effort: ClaudeEffortLevel | undefined;
   private queryInstance: ReturnType<typeof query> | null = null;
   private streamLoopRunning = false;
 
@@ -63,7 +63,7 @@ export class ClaudeSession implements AgentSession {
       resumeSessionId?: string;
       cwd?: string;
       model?: string;
-      effort?: string;
+      effort?: ClaudeEffortLevel;
     },
   ) {
     this.claudePath = claudePath;
@@ -177,7 +177,7 @@ export class ClaudeSession implements AgentSession {
       resume: this.resumeSessionId,
       cwd: this.cwd,
       ...(this.model && { model: this.model }),
-      ...(this.effort && { effort: this.effort as EffortLevel }),
+      ...(this.effort && { effort: this.effort }),
     };
 
     this.queryInstance = query({

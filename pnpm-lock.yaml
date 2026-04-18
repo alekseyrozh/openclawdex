@@ -20,9 +20,6 @@ importers:
       '@libsql/client':
         specifier: ^0.17.2
         version: 0.17.2(encoding@0.1.13)
-      '@openai/codex':
-        specifier: ^0.121.0
-        version: 0.121.0
       '@openai/codex-sdk':
         specifier: ^0.121.0
         version: 0.121.0
@@ -32,9 +29,6 @@ importers:
       drizzle-orm:
         specifier: ^0.44.2
         version: 0.44.7(@libsql/client@0.17.2(encoding@0.1.13))(gel@2.2.0)
-      electron-is-dev:
-        specifier: ^3.0.1
-        version: 3.0.1
       electron-updater:
         specifier: ^6.8.3
         version: 6.8.3
@@ -1888,10 +1882,6 @@ packages:
     resolution: {integrity: sha512-poRgAtUHHOnlzZnc9PK4nzG53xh74wj2Jy7jkTrqZ0MWPoHGh1M2+C//hGeYdA+4K8w4yiVCNYoLXF7ySj2Wig==}
     engines: {node: '>=14.0.0'}
     hasBin: true
-
-  electron-is-dev@3.0.1:
-    resolution: {integrity: sha512-8TjjAh8Ec51hUi3o4TaU0mD3GMTOESi866oRNavj9A3IQJ7pmv+MJVmdZBFGw4GFT36X7bkqnuDNYvkQgvyI8Q==}
-    engines: {node: '>=18'}
 
   electron-publish@25.1.7:
     resolution: {integrity: sha512-+jbTkR9m39eDBMP4gfbqglDd6UvBC7RLh5Y0MhFSsc6UkGHj9Vj9TWobxevHYMMqmoujL11ZLjfPpMX+Pt6YEg==}
@@ -5178,8 +5168,6 @@ snapshots:
       - bluebird
       - electron-builder-squirrel-windows
       - supports-color
-
-  electron-is-dev@3.0.1: {}
 
   electron-publish@25.1.7:
     dependencies:

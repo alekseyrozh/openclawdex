@@ -77,7 +77,6 @@ export type HistoryMessage = z.infer<typeof HistoryMessage>;
 // --out <dir> --experimental` to inspect the full protocol.
 
 export const CodexReasoningEffort = z.enum([
-  "none",
   "minimal",
   "low",
   "medium",

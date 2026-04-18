@@ -8,7 +8,7 @@ import { execSync, spawn } from "child_process";
 import fs from "fs";
 import { eq } from "drizzle-orm";
 import { findClaudeBinary, ClaudeSession } from "./claude";
-import { isCodexInstalled, CodexSession, type CodexEffort } from "./codex";
+import { isCodexInstalled, CodexSession } from "./codex";
 import { listCodexModels } from "./codex-models";
 import { listClaudeModels } from "./claude-models";
 import type { AgentSession } from "./agent-session";
@@ -17,7 +17,7 @@ import {
   getSessionMessages,
 } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
-import type { IpcEvent, EditorTarget, Provider, SessionInfo } from "@openclawdex/shared";
+import type { IpcEvent, EditorTarget, Provider, SessionInfo, CodexReasoningEffort, ClaudeEffortLevel } from "@openclawdex/shared";
 import { initDb, getDb } from "./db";
 import { knownThreads, projects, projectFolders } from "./db/schema";
 
@@ -68,7 +68,7 @@ function getOrCreateSession(
       resumeSessionId: opts?.resumeSessionId,
       cwd: opts?.cwd,
       model: opts?.model,
-      effort: opts?.effort,
+      effort: opts?.effort as ClaudeEffortLevel | undefined,
     });
     sessions.set(threadId, session);
     return session;
@@ -80,7 +80,7 @@ function getOrCreateSession(
     resumeThreadId: opts?.resumeSessionId,
     cwd: opts?.cwd,
     model: opts?.model,
-    effort: opts?.effort as CodexEffort | undefined,
+    effort: opts?.effort as CodexReasoningEffort | undefined,
   });
   sessions.set(threadId, session);
   return session;
@@ -691,7 +691,7 @@ function createWindow() {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
-      preload: path.join(import.meta.dirname, "preload.cjs"),
+      preload: path.join(app.getAppPath(), "dist/preload.cjs"),
     },
 
     show: false,
@@ -708,7 +708,7 @@ function createWindow() {
   if (IS_DEV) {
     mainWindow.loadURL(DEV_URL);
   } else {
-    mainWindow.loadFile(path.join(import.meta.dirname, "../web/dist/index.html"));
+    mainWindow.loadFile(path.join(app.getAppPath(), "web/dist/index.html"));
   }
 }
 

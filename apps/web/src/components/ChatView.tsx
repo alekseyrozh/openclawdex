@@ -2247,6 +2247,7 @@ function ControlButton({ children, onClick, tooltip }: { children: React.ReactNo
     <div className="relative group/ctrl">
       <button
         onClick={onClick}
+        onMouseDown={(e) => e.preventDefault()}
         className="flex items-center gap-1.5 px-2 py-[5px] rounded-xl text-[13px] font-medium transition-colors hover:bg-[var(--border-subtle)] hover:text-[rgba(255,255,255,0.60)]"
         style={{ color: "var(--text-muted)" }}
       >
@@ -2352,6 +2353,7 @@ function ModelDropdown({
         border: "1px solid var(--border-emphasis)",
         boxShadow: "0 8px 24px rgba(0,0,0,0.4)",
       }}
+      onMouseDownCapture={(e) => e.preventDefault()}
     >
       {sections.map((section, sIdx) => (
         <div key={section.label} className="flex flex-col gap-[2px]">
@@ -2434,6 +2436,7 @@ function EffortDropdown({
         border: "1px solid var(--border-emphasis)",
         boxShadow: "0 8px 24px rgba(0,0,0,0.4)",
       }}
+      onMouseDownCapture={(e) => e.preventDefault()}
     >
       {levels.map((lvl) => {
         const isSelected = lvl.id === selected.id;
@@ -2491,6 +2494,7 @@ function ModeDropdown({
         border: "1px solid var(--border-emphasis)",
         boxShadow: "0 8px 24px rgba(0,0,0,0.4)",
       }}
+      onMouseDownCapture={(e) => e.preventDefault()}
     >
       {modes.map((mode) => {
         const isSelected = mode.id === selected.id;
