@@ -170,6 +170,34 @@ export function buildCodexSessionIndex(): Map<string, string> {
   return index;
 }
 
+/**
+ * TTL-cached wrapper around {@link buildCodexSessionIndex}.
+ *
+ * `session:load-history` is called once per thread-open and the naive
+ * implementation re-walks `~/.codex/sessions/**` on every call. With
+ * hundreds of rollouts that adds up. A short TTL is safe because new
+ * Codex rollouts only appear after `thread.started`, which goes
+ * through our own event stream and explicitly calls
+ * {@link invalidateCodexSessionIndex}.
+ */
+const INDEX_TTL_MS = 10_000;
+let cachedIndex: Map<string, string> | null = null;
+let cachedIndexAt = 0;
+
+export function getCodexSessionIndex(): Map<string, string> {
+  const now = Date.now();
+  if (!cachedIndex || now - cachedIndexAt > INDEX_TTL_MS) {
+    cachedIndex = buildCodexSessionIndex();
+    cachedIndexAt = now;
+  }
+  return cachedIndex;
+}
+
+export function invalidateCodexSessionIndex(): void {
+  cachedIndex = null;
+  cachedIndexAt = 0;
+}
+
 function safeReaddir(p: string): string[] {
   try { return fs.readdirSync(p); } catch { return []; }
 }
@@ -192,7 +220,16 @@ function isInjectedContext(text: string): boolean {
 
 /** Parse the rollout file into provider-neutral history messages. */
 export function readCodexHistory(threadId: string): CodexHistoryMsg[] {
-  const file = findCodexSessionFile(threadId);
+  // Use the cached index — `session:load-history` fires once per
+  // thread-open, and without a cache each call re-walks the entire
+  // `~/.codex/sessions` tree. If the id isn't in the cache we fall
+  // back to a fresh walk once in case the rollout landed after the
+  // last cache refresh.
+  let file = getCodexSessionIndex().get(threadId) ?? null;
+  if (!file) {
+    invalidateCodexSessionIndex();
+    file = getCodexSessionIndex().get(threadId) ?? null;
+  }
   if (!file) return [];
   return readCodexHistoryFromFile(file);
 }

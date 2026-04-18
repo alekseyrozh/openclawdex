@@ -2119,7 +2119,51 @@ export function ChatView({
   const [attachments, setAttachments] = useState<ImageAttachment[]>([]);
   const [isDragOver, setIsDragOver] = useState(false);
   const dragCounter = useRef(0);
+  // GOTCHA: the dragenter/dragleave counter occasionally gets stranded
+  // above zero — the drag can end without a matching leave (Escape
+  // mid-drag, drop on the macOS title bar's `-webkit-app-region: drag`
+  // zone, drop outside the window). When that happens the overlay
+  // stays stuck visible. We recover with a heartbeat: every
+  // `dragover` refreshes this timer, and if nothing refreshes it
+  // within ~150ms we assume the drag is over.
+  const dragClearTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const composerRef = useRef<HTMLDivElement>(null);
+
+  const resetDragState = useCallback(() => {
+    dragCounter.current = 0;
+    if (dragClearTimer.current) {
+      clearTimeout(dragClearTimer.current);
+      dragClearTimer.current = null;
+    }
+    setIsDragOver(false);
+  }, []);
+
+  // Belt-and-braces: listen at the window level for drag-end signals
+  // the nested counter can miss. Only armed while the overlay is
+  // actually showing so we don't keep global listeners for no reason.
+  useEffect(() => {
+    if (!isDragOver) return;
+    const onDone = () => resetDragState();
+    const onWindowDragLeave = (e: DragEvent) => {
+      // dragleave at (0,0) is Chromium's signal that the pointer
+      // crossed the window boundary.
+      if (e.clientX === 0 && e.clientY === 0) resetDragState();
+    };
+    window.addEventListener("drop", onDone);
+    window.addEventListener("dragend", onDone);
+    window.addEventListener("dragleave", onWindowDragLeave);
+    return () => {
+      window.removeEventListener("drop", onDone);
+      window.removeEventListener("dragend", onDone);
+      window.removeEventListener("dragleave", onWindowDragLeave);
+    };
+  }, [isDragOver, resetDragState]);
+
+  useEffect(() => {
+    return () => {
+      if (dragClearTimer.current) clearTimeout(dragClearTimer.current);
+    };
+  }, []);
 
   // Clear attachments when switching threads
   useEffect(() => {
@@ -2155,40 +2199,143 @@ export function ChatView({
   }, []);
 
   // Drag handlers
-  const handleDragEnter = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    dragCounter.current++;
-    if (e.dataTransfer.types.includes("Files")) {
-      setIsDragOver(true);
-    }
-  }, []);
+  const bumpHeartbeat = useCallback(() => {
+    if (dragClearTimer.current) clearTimeout(dragClearTimer.current);
+    dragClearTimer.current = setTimeout(() => {
+      dragClearTimer.current = null;
+      resetDragState();
+    }, 150);
+  }, [resetDragState]);
 
-  const handleDragOver = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-  }, []);
+  const handleDragEnter = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      dragCounter.current++;
+      if (e.dataTransfer.types.includes("Files")) {
+        setIsDragOver(true);
+        bumpHeartbeat();
+      }
+    },
+    [bumpHeartbeat],
+  );
+
+  const handleDragOver = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      // Every dragover refreshes the heartbeat. When the drag really
+      // ends (drop, escape, leave window) these stop firing and the
+      // timer elapses, clearing the overlay even if dragleave didn't
+      // match up.
+      bumpHeartbeat();
+    },
+    [bumpHeartbeat],
+  );
 
   const handleDragLeave = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
     dragCounter.current--;
-    if (dragCounter.current === 0) {
-      setIsDragOver(false);
+    if (dragCounter.current <= 0) {
+      resetDragState();
     }
+  }, [resetDragState]);
+
+  // Format a dropped path as a chat-ready reference.
+  //
+  // When the dropped path lives inside `projectCwd` we emit a relative
+  // `@<path>` token — that's the convention both the Claude and Codex
+  // CLIs understand for "please read this file/folder". Paths outside
+  // the project (or when there's no cwd yet, e.g. a brand-new thread)
+  // come through as plain absolute paths, which the agent can still
+  // resolve but won't get the @-expansion treatment.
+  const formatPathRef = useCallback(
+    (absPath: string): string => {
+      if (!projectCwd) return absPath;
+      const cwd = projectCwd.replace(/\/+$/, "");
+      if (absPath === cwd) return "@.";
+      if (absPath.startsWith(cwd + "/"))
+        return "@" + absPath.slice(cwd.length + 1);
+      return absPath;
+    },
+    [projectCwd],
+  );
+
+  // Insert text at the textarea's current caret, adding surrounding
+  // spaces only where needed so dropped refs don't fuse with adjacent
+  // tokens. Keeps the send button's "has text" flag in sync because the
+  // textarea is uncontrolled (no onChange fires for programmatic
+  // mutations).
+  const insertAtCursor = useCallback((text: string) => {
+    const el = textareaRef.current;
+    if (!el) return;
+    const start = el.selectionStart ?? el.value.length;
+    const end = el.selectionEnd ?? el.value.length;
+    const before = el.value.slice(0, start);
+    const after = el.value.slice(end);
+    const needsLead = before.length > 0 && !/\s$/.test(before);
+    const needsTrail = after.length === 0 || !/^\s/.test(after);
+    const insertion = (needsLead ? " " : "") + text + (needsTrail ? " " : "");
+    el.value = before + insertion + after;
+    const caret = before.length + insertion.length;
+    el.setSelectionRange(caret, caret);
+    el.focus();
+    sendButtonRef.current?.setHasText(el.value.trim().length > 0);
   }, []);
 
   const handleDrop = useCallback(
     (e: React.DragEvent) => {
       e.preventDefault();
       e.stopPropagation();
-      dragCounter.current = 0;
-      setIsDragOver(false);
-      if (e.dataTransfer.files.length > 0) {
-        addFiles(e.dataTransfer.files);
+      resetDragState();
+
+      // Partition the drop into two buckets:
+      //   - images → attach as previews (current behavior)
+      //   - everything else (non-image files AND directories) → insert
+      //     an @-reference so the agent can read/list it.
+      //
+      // GOTCHA: `webkitGetAsEntry()` is the only synchronous way to
+      // tell a directory from an empty file in the renderer. It MUST be
+      // called during the drop event — the items become inert after we
+      // return. We call it upfront and stash the results.
+      const items = Array.from(e.dataTransfer.items ?? []);
+      const imageFiles: File[] = [];
+      const pathRefs: string[] = [];
+
+      const pushPath = (file: File | null) => {
+        if (!file) return;
+        const abs = window.openclawdex?.getFilePath?.(file);
+        if (abs) pathRefs.push(formatPathRef(abs));
+      };
+
+      if (items.length > 0) {
+        for (const item of items) {
+          if (item.kind !== "file") continue;
+          const entry = item.webkitGetAsEntry?.();
+          const file = item.getAsFile();
+          if (entry?.isDirectory) {
+            pushPath(file);
+          } else if (file && file.type.startsWith("image/")) {
+            imageFiles.push(file);
+          } else {
+            pushPath(file);
+          }
+        }
+      } else {
+        // Fallback for drops that didn't populate `items` (rare, but
+        // some sources only fill `files`). We can't detect folders
+        // here, but `getFilePath` still returns the OS path for both.
+        for (const f of Array.from(e.dataTransfer.files)) {
+          if (f.type.startsWith("image/")) imageFiles.push(f);
+          else pushPath(f);
+        }
       }
+
+      if (imageFiles.length > 0) addFiles(imageFiles);
+      if (pathRefs.length > 0) insertAtCursor(pathRefs.join(" "));
     },
-    [addFiles],
+    [addFiles, formatPathRef, insertAtCursor, resetDragState],
   );
 
   // Paste handler for images
@@ -2278,10 +2425,14 @@ export function ChatView({
     if (!thread || !hasContent || thread.status === "running") return;
 
     // Convert attachments to base64. If the File was sourced from the
-    // OS (drag-drop), Electron exposes its real path on `file.path` —
-    // we pass that through so the Codex backend can use it directly
-    // without materializing a tempfile. Clipboard-paste files have no
-    // backing path, so `path` stays undefined for those.
+    // OS (drag-drop), Electron can resolve its real path — we pass that
+    // through so the Codex backend can use it directly without
+    // materializing a tempfile. Clipboard-paste files have no backing
+    // path, so `path` stays undefined for those.
+    //
+    // GOTCHA: Electron 32 removed the legacy `File.path` property.
+    // `window.openclawdex.getFilePath()` wraps `webUtils.getPathForFile`
+    // in the preload, which is the supported replacement.
     let images: ImagePayload[] | undefined;
     if (attachments.length > 0) {
       images = await Promise.all(
@@ -2293,9 +2444,7 @@ export function ChatView({
                 const dataUrl = reader.result as string;
                 // Strip the data:image/xxx;base64, prefix
                 const base64 = dataUrl.split(",")[1];
-                // `File.path` is Electron-only and not in the DOM lib
-                // typings. Fall back to undefined for clipboard pastes.
-                const osPath = (a.file as File & { path?: string }).path;
+                const osPath = window.openclawdex?.getFilePath?.(a.file);
                 resolve({
                   name: a.name,
                   base64,
@@ -2610,7 +2759,53 @@ export function ChatView({
         editorLabel: editorLabel(preferredEditor),
       }}
     >
-      <div className="flex-1 flex flex-col min-w-0 min-h-0">
+      <div
+        className="flex-1 flex flex-col min-w-0 min-h-0 relative"
+        onDragEnter={handleDragEnter}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+      >
+        {/* Full-area drop overlay — shown whenever the user is dragging
+            files anywhere over the chat (messages list + composer),
+            not just the input box. `pointer-events-none` keeps drag
+            events flowing to the parent's handlers so the drop still
+            registers.
+            Border-radius: left side matches the panel's 16px inner
+            rounding; right side is rounded to ~10px to echo the macOS
+            window's native corner radius (the panel itself is flush
+            right against the window edge, so a square right border
+            gets clipped by the OS corner). A 6px inset keeps the
+            dashed line comfortably inside the visible area regardless
+            of minor platform variation. */}
+        {isDragOver && (
+          <div
+            className="absolute z-20 flex items-center justify-center pointer-events-none"
+            style={{
+              top: 6,
+              bottom: 6,
+              left: 6,
+              right: 6,
+              background: "rgba(10, 12, 16, 0.55)",
+              backdropFilter: "blur(2px)",
+              WebkitBackdropFilter: "blur(2px)",
+              border: "2px dashed rgba(255, 255, 255, 0.35)",
+              borderRadius: "12px 8px 8px 12px",
+            }}
+          >
+            <span
+              className="text-[13px] font-medium px-3 py-1.5 rounded-lg"
+              style={{
+                background: "var(--surface-3)",
+                color: "var(--text-primary)",
+                border: "1px solid var(--border-emphasis)",
+                boxShadow: "0 4px 16px rgba(0,0,0,0.4)",
+              }}
+            >
+              Drop files or folders
+            </span>
+          </div>
+        )}
         {/* Title bar area */}
         <div
           className="h-[38px] shrink-0 flex items-center justify-center relative"
@@ -2930,35 +3125,11 @@ export function ChatView({
                 style={{
                   background: "var(--surface-2)",
                   border: isDragOver
-                    ? "1px solid var(--accent)"
+                    ? "1px solid var(--border-emphasis)"
                     : "1px solid var(--border-default)",
                   transition: "border-color 150ms ease",
                 }}
-                onDragEnter={handleDragEnter}
-                onDragOver={handleDragOver}
-                onDragLeave={handleDragLeave}
-                onDrop={handleDrop}
               >
-                {/* Drag overlay */}
-                {isDragOver && (
-                  <div
-                    className="absolute inset-0 rounded-2xl z-10 flex items-center justify-center pointer-events-none"
-                    style={{
-                      background: "rgba(51, 156, 255, 0.08)",
-                    }}
-                  >
-                    <span
-                      className="text-[13px] font-medium px-3 py-1.5 rounded-lg"
-                      style={{
-                        background: "var(--surface-3)",
-                        color: "var(--text-secondary)",
-                        border: "1px solid var(--border-emphasis)",
-                      }}
-                    >
-                      Drop image to attach
-                    </span>
-                  </div>
-                )}
                 {/* Attachment chips */}
                 {attachments.length > 0 && (
                   <div className="flex flex-wrap gap-1.5 px-4 pt-3 pb-1">
@@ -3399,7 +3570,7 @@ function OpenInEditorDropdown({
       onClick={(e) => e.stopPropagation()}
     >
       {groups.map((group, gi) => (
-        <div key={gi}>
+        <div key={gi} className="flex flex-col gap-[2px]">
           {gi > 0 && <DropdownDivider variant="floating" />}
           {group.map((it) => (
             <DropdownItem

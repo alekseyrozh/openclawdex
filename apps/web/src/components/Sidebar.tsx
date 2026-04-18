@@ -109,25 +109,24 @@ export function Sidebar({
           Target project resolves in App.handleNewChat (active thread →
           most recent → first project → folder picker). */}
       {projects.length > 0 && (
-        <div className="px-3 pt-3 pb-2 shrink-0">
+        <div className="px-3 pt-3 pb-3 shrink-0">
           <button
             onClick={onNewChat}
-            className="group/newthread flex items-center gap-2 w-full px-3 py-[10px] rounded-xl text-[13px] font-medium transition-colors"
-            style={{
-              background: "rgba(255, 255, 255, 0.06)",
-              color: "var(--text-primary)",
-              border: "1px solid rgba(255, 255, 255, 0.1)",
-            }}
+            className="group/newthread flex items-center gap-2.5 w-full px-2 py-[6px] rounded-xl text-[13px] font-medium transition-colors"
+            style={{ color: "var(--text-primary)", background: "transparent" }}
             onMouseEnter={(e) => {
-              e.currentTarget.style.background = "rgba(255, 255, 255, 0.12)";
-              e.currentTarget.style.borderColor = "rgba(255, 255, 255, 0.16)";
+              e.currentTarget.style.background = "rgba(255, 255, 255, 0.05)";
             }}
             onMouseLeave={(e) => {
-              e.currentTarget.style.background = "rgba(255, 255, 255, 0.06)";
-              e.currentTarget.style.borderColor = "rgba(255, 255, 255, 0.1)";
+              e.currentTarget.style.background = "transparent";
             }}
           >
-            <Plus size={15} weight="bold" />
+            <span
+              className="shrink-0 flex items-center justify-center"
+              style={{ width: 17, height: 17, color: "var(--text-primary)" }}
+            >
+              <Plus size={13} weight="bold" />
+            </span>
             New thread
             {/* Shortcut hint — revealed on hover. Uses ⌘ on macOS-style
                 UI; the handler in App.tsx also accepts Ctrl+N for parity. */}

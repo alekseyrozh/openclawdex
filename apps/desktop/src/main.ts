@@ -9,7 +9,7 @@ import fs from "fs";
 import { eq } from "drizzle-orm";
 import { findClaudeBinary, ClaudeSession } from "./claude";
 import { isCodexInstalled, CodexSession } from "./codex";
-import { readCodexHistory, readCodexSummaryFromFile, buildCodexSessionIndex } from "./codex-history";
+import { readCodexHistory, readCodexSummaryFromFile, buildCodexSessionIndex, invalidateCodexSessionIndex } from "./codex-history";
 import { listCodexModels } from "./codex-models";
 import { listClaudeModels } from "./claude-models";
 import type { AgentSession } from "./agent-session";
@@ -257,6 +257,10 @@ function setupIpcHandlers(): void {
         switch (e.kind) {
           case "init": {
             currentSessionId = e.sessionId;
+            // A new Codex rollout file will appear on disk for this id;
+            // drop the cached session index so subsequent `load-history`
+            // calls can find it without waiting for the TTL to expire.
+            if (provider === "codex") invalidateCodexSessionIndex();
             try {
               await getDb()
                 .insert(knownThreads)
@@ -754,7 +758,14 @@ function setupIpcHandlers(): void {
   ): T {
     const parsed = schema.safeParse(args);
     if (!parsed.success) {
-      throw new Error(`Invalid arguments to ${op}: ${JSON.stringify(parsed.error)}`);
+      // `parsed.error` is a `ZodError`; its own `toString()` returns
+      // "[object Object]". Prefer the `issues` array (actionable per-
+      // field messages) and fall back to `message` then the raw value.
+      const err = parsed.error as { issues?: unknown; message?: string };
+      const detail = err.issues
+        ? JSON.stringify(err.issues)
+        : err.message ?? String(parsed.error);
+      throw new Error(`Invalid arguments to ${op}: ${detail}`);
     }
     return parsed.data;
   }
@@ -821,11 +832,46 @@ function createWindow() {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
+      sandbox: true,
       preload: path.join(app.getAppPath(), "dist/preload.cjs"),
     },
 
     show: false,
   });
+
+  // ── Content-Security-Policy ────────────────────────────────
+  //
+  // Only applied in packaged builds. Vite's dev server relies on a
+  // websocket for HMR and inline scripts for module replacement; a
+  // strict CSP would break both. In prod we load `file://`, so we
+  // can lock things down.
+  //
+  // - `default-src 'self'`  — scripts/fonts/etc. only from the bundle.
+  // - `style-src  'unsafe-inline'` — Tailwind/React inject inline <style>.
+  // - `img-src data: https:` — assistant markdown can include remote
+  //   images and we also render data: URLs for pasted screenshots.
+  // - `connect-src 'self'` — no outbound renderer fetches; all
+  //   network goes through the main process.
+  if (!IS_DEV) {
+    mainWindow.webContents.session.webRequest.onHeadersReceived((details, cb) => {
+      cb({
+        responseHeaders: {
+          ...details.responseHeaders,
+          "Content-Security-Policy": [
+            "default-src 'self'; " +
+              "script-src 'self'; " +
+              "style-src 'self' 'unsafe-inline'; " +
+              "img-src 'self' data: https:; " +
+              "font-src 'self' data:; " +
+              "connect-src 'self'; " +
+              "object-src 'none'; " +
+              "base-uri 'self'; " +
+              "frame-ancestors 'none'",
+          ],
+        },
+      });
+    });
+  }
 
   mainWindow.once("ready-to-show", () => {
     mainWindow!.show();
@@ -900,7 +946,10 @@ function createWindow() {
 // ── Auto-update ──────────────────────────────────────────────
 
 function checkForUpdates(): void {
-  autoUpdater.logger = console;
+  // Only attach a logger in dev. In release builds this routes every
+  // update-check heartbeat to stderr, which macOS then captures into
+  // the unified system log — noisy and unhelpful for end users.
+  if (IS_DEV) autoUpdater.logger = console;
   autoUpdater.on("update-downloaded", (info) => {
     if (!mainWindow) return;
     dialog
