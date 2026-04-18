@@ -1,9 +1,10 @@
-import { execSync } from "child_process";
+import { execSync, spawn, type ChildProcessWithoutNullStreams } from "child_process";
 import fs from "fs";
 import os from "os";
 import path from "path";
 import { randomUUID } from "crypto";
-import { Codex, type Thread, type ThreadEvent, type Input } from "@openai/codex-sdk";
+import { app } from "electron";
+import { z } from "zod";
 import { type CodexReasoningEffort } from "@openclawdex/shared";
 import type {
   AgentSession,
@@ -33,182 +34,391 @@ export type CodexSessionOptions = {
   effort?: CodexReasoningEffort;
 };
 
-/**
- * One multi-turn conversation with an OpenAI Codex agent via
- * `@openai/codex-sdk`.
- *
- * Implements {@link AgentSession} so it lives in the same
- * `Map<threadId, AgentSession>` as {@link ClaudeSession}.
- *
- * ── Key differences from ClaudeSession ───────────────────────────
- *
- *  - **No pause-for-input protocol.** Codex has no analogue of
- *    Claude's AskUserQuestion. `respondToTool` is a no-op and we
- *    always emit `result.deferredToolUse = null`.
- *
- *  - **No dollar cost reporting.** `turn.completed.usage` exposes
- *    token counts but not a dollar amount (billing runs against the
- *    user's ChatGPT plan). We emit `costUsd = null`.
- *
- *  - **No `max_tokens` surfaced.** The SDK only gives us
- *    `input_tokens + output_tokens`; there's no model-side context
- *    limit in the event payload, so `contextUsage` is `null` unless
- *    we compute it another way. We choose the safe path: null.
- *
- *  - **Images go in as filesystem paths, not base64.** The SDK's
- *    `UserInput.local_image` takes `{ path }`. We write incoming
- *    base64 attachments to a temp file first. We clean those up on
- *    session close.
- *
- *  - **Turn cancellation uses `AbortController`.** Unlike Claude's
- *    `query.interrupt()` the Codex SDK surfaces an `AbortSignal` via
- *    `TurnOptions.signal`. We own one controller per in-flight turn.
- *
- *  - **Sequential turn queue.** The SDK's `runStreamed()` returns a
- *    single `AsyncGenerator`; we can't push a follow-up while a turn
- *    is still streaming. So `send()` enqueues messages and a driver
- *    loop drains them one at a time, matching ClaudeSession's
- *    "fire-and-forget" contract from the caller's point of view.
- */
+const JsonRpcResponse = z.object({
+  id: z.number(),
+  result: z.unknown().optional(),
+  error: z.object({ message: z.string().optional() }).optional(),
+});
+
+const JsonRpcNotification = z.object({
+  method: z.string(),
+  params: z.unknown().optional(),
+});
+
+type RpcPending = {
+  method: string;
+  resolve: (value: unknown) => void;
+  reject: (error: Error) => void;
+};
+
+type TurnWaiter = {
+  onEvent: (e: SessionEvent) => void;
+  resolve: () => void;
+  reject: (error: Error) => void;
+  turnId: string | null;
+};
+
+type CodexInputItem = { type: "text"; text: string } | { type: "localImage"; path: string };
+
 export class CodexSession implements AgentSession {
   readonly provider = "codex" as const;
 
-  private codex: Codex;
-  private thread: Thread;
-  private cwd: string | undefined;
+  private readonly cwd: string | undefined;
+  private readonly modelLabel: string;
+  private readonly effort: CodexReasoningEffort | undefined;
 
-  // Queue of pending user messages + their onEvent callbacks. Each
-  // entry represents one turn. We process them sequentially in
-  // `driveQueue`. `tempImagePaths` holds any tempfiles we wrote *for
-  // this turn only* — they're removed as soon as `runOneTurn` settles,
-  // so long sessions with many image turns don't leak into `tmpdir`.
+  private readonly child: ChildProcessWithoutNullStreams;
+  private stdoutBuf = "";
+  private rpcId = 1;
+  private readonly pendingRpc = new Map<number, RpcPending>();
+
+  private initPromise: Promise<void>;
+  private initResolve!: () => void;
+  private initReject!: (error: Error) => void;
+
+  private threadId: string | null;
+  private initEmitted = false;
+  private currentTurn: TurnWaiter | null = null;
+
   private queue: Array<{
-    input: Input;
+    input: CodexInputItem[];
     onEvent: (e: SessionEvent) => void;
     tempImagePaths: string[];
   }> = [];
   private draining = false;
-
-  // Live controller for the currently-streaming turn, so `interrupt()`
-  // can abort mid-turn.
-  private currentAbort: AbortController | null = null;
-
-  // Has the renderer seen an `init` event yet for this session?
-  //
-  // ── When `init` fires ───────────────────────────────────────────
-  //
-  //   (a) NEW thread (no `resumeThreadId` passed): the Codex SDK emits
-  //       a `thread.started` event as the very first event of the first
-  //       turn, carrying the freshly-minted `thread_id`. We forward that
-  //       as `{kind: "init", sessionId, model}`. main.ts uses it to
-  //       insert the DB row and emit `IpcSessionInit` to the renderer,
-  //       which promotes the pending thread into the sidebar.
-  //
-  //   (b) RESUMED thread (`resumeThreadId` passed): the SDK does NOT
-  //       re-emit `thread.started` — from its perspective the thread
-  //       already exists. So `initEmitted` stays `false` forever and
-  //       we never produce an `init` SessionEvent for resumes. That's
-  //       intentional and safe for today's consumers:
-  //
-  //         - main.ts already has the sessionId (it's the same as
-  //           `resumeSessionId` the renderer passed) and the DB row
-  //           already exists, so it doesn't need the event to persist
-  //           anything.
-  //         - The renderer's `Thread` object for a resumed thread was
-  //           hydrated from `session:list-sessions` and already has
-  //           `sessionId` / `provider` populated, so the
-  //           `IpcSessionInit` reducer branch isn't needed.
-  //
-  // ── When this becomes a problem ─────────────────────────────────
-  //
-  //   If you add logic to `applyIpcEvent`'s `session_init` branch
-  //   that MUST run for every thread, not just first-turn-of-new, it
-  //   will silently skip Codex resumes. Examples of things that
-  //   would break:
-  //
-  //     - Recording "user opened thread X in this app session" via
-  //       session_init (would miss all resumed Codex threads).
-  //     - Resetting per-session renderer state on init.
-  //
-  //   If you need a "thread is live again" hook that fires on both
-  //   new and resumed Codex threads, don't rely on `init` — instead
-  //   emit a synthetic event from `runOneTurn` before `turn.started`,
-  //   or hook `status: "running"` in the renderer.
-  private initEmitted = false;
-
-  // The session id we expose via the `init` event. Populated after the
-  // first `thread.started` event, or from a resume id in the ctor.
-  private threadId: string | null = null;
-
-  // The model label we echo on `init`. The Codex SDK doesn't emit the
-  // active model on `thread.started`, so we capture whatever the
-  // renderer selected at construction time. Falls back to "codex" when
-  // the caller didn't pick one (the CLI will use its configured
-  // default).
-  private readonly modelLabel: string;
+  private closed = false;
 
   constructor(opts?: CodexSessionOptions) {
     this.cwd = opts?.cwd;
     this.modelLabel = opts?.model ?? "codex";
+    this.effort = opts?.effort;
+    this.threadId = opts?.resumeThreadId ?? null;
 
-    // GOTCHA: we must pass workingDirectory here (not later per-turn).
-    // The SDK scopes sandbox permissions to this directory for the
-    // lifetime of the thread.
-    //
-    // GOTCHA: `skipGitRepoCheck: true` because we allow users to open
-    // folders that aren't git repos. The default errors out otherwise.
-    const threadOptions = {
-      workingDirectory: this.cwd,
-      skipGitRepoCheck: true,
-      ...(opts?.model && { model: opts.model }),
-      ...(opts?.effort && { modelReasoningEffort: opts.effort }),
-      // "workspace-write" matches Claude's `bypassPermissions` mode —
-      // the agent can edit files in its cwd but not the whole FS.
-      sandboxMode: "workspace-write" as const,
-      // "never" — don't block on approvals; we've already told the user
-      // this session will write to their workspace.
-      approvalPolicy: "never" as const,
-    };
+    this.initPromise = new Promise<void>((resolve, reject) => {
+      this.initResolve = resolve;
+      this.initReject = reject;
+    });
 
-    this.codex = new Codex({ codexPathOverride: "codex" });
-    this.thread = opts?.resumeThreadId
-      ? this.codex.resumeThread(opts.resumeThreadId, threadOptions)
-      : this.codex.startThread(threadOptions);
+    this.child = spawn("codex", ["app-server"], { stdio: ["pipe", "pipe", "pipe"] });
+    this.child.stdout.on("data", (chunk: Buffer) => this.onStdout(chunk));
+    this.child.stderr.on("data", () => {
+      // app-server occasionally writes progress text to stderr; ignore.
+    });
+    this.child.on("error", (err) => this.failSession(new Error(`codex app-server spawn failed: ${err.message}`)));
+    this.child.on("exit", (code, signal) => {
+      const detail = signal ? `signal ${signal}` : `code ${code ?? "unknown"}`;
+      this.failSession(new Error(`codex app-server exited (${detail})`));
+    });
 
-    if (opts?.resumeThreadId) {
-      this.threadId = opts.resumeThreadId;
+    void this.initialize();
+  }
+
+  private failSession(error: Error): void {
+    if (this.closed) return;
+    this.closed = true;
+    this.initReject(error);
+    for (const [id, pending] of this.pendingRpc) {
+      pending.reject(new Error(`RPC ${id} (${pending.method}) failed: ${error.message}`));
+    }
+    this.pendingRpc.clear();
+    if (this.currentTurn) {
+      this.currentTurn.reject(error);
+      this.currentTurn = null;
     }
   }
 
-  /**
-   * Convert our IPC-level {@link ImageInput} into the Codex SDK's
-   * `local_image` shape (which requires a filesystem path).
-   *
-   * - If the renderer already has a real path (Electron drag-drop sets
-   *   `file.path` on OS-backed files), we forward it directly — no
-   *   tempfile, no copy, no cleanup concern.
-   * - Otherwise (clipboard paste, where the blob has no backing file),
-   *   we materialize a tempfile at
-   *   `<tmpdir>/openclawdex-codex-<uuid>.<ext>` and track it in the
-   *   returned `tempPaths` array so the caller can clean up at
-   *   end-of-turn.
-   */
-  private imagesToUserInput(
-    text: string,
-    images: ImageInput[],
-  ): { input: Input; tempPaths: string[] } {
-    const items: Input = [];
+  private onStdout(chunk: Buffer): void {
+    this.stdoutBuf += chunk.toString("utf-8");
+    let nl: number;
+    while ((nl = this.stdoutBuf.indexOf("\n")) >= 0) {
+      const line = this.stdoutBuf.slice(0, nl).trim();
+      this.stdoutBuf = this.stdoutBuf.slice(nl + 1);
+      if (!line) continue;
+
+      let parsedUnknown: unknown;
+      try {
+        parsedUnknown = JSON.parse(line);
+      } catch {
+        continue;
+      }
+
+      const asResponse = JsonRpcResponse.safeParse(parsedUnknown);
+      if (asResponse.success) {
+        this.handleRpcResponse(asResponse.data);
+        continue;
+      }
+
+      const asNotif = JsonRpcNotification.safeParse(parsedUnknown);
+      if (asNotif.success) {
+        this.handleNotification(asNotif.data.method, asNotif.data.params);
+        continue;
+      }
+
+      // Some builds may emit event objects with `type` instead of JSON-RPC notification envelope.
+      if (
+        parsedUnknown &&
+        typeof parsedUnknown === "object" &&
+        typeof (parsedUnknown as Record<string, unknown>).type === "string"
+      ) {
+        const event = parsedUnknown as Record<string, unknown>;
+        this.handleNotification(String(event.type), event);
+        continue;
+      }
+
+      // Ignore unknown notification shapes for forward compatibility.
+    }
+  }
+
+  private handleRpcResponse(msg: z.infer<typeof JsonRpcResponse>): void {
+    const pending = this.pendingRpc.get(msg.id);
+    if (!pending) return;
+    this.pendingRpc.delete(msg.id);
+    if (msg.error) {
+      pending.reject(
+        new Error(
+          `${pending.method} failed: ${msg.error.message ?? `RPC ${msg.id} failed`}`,
+        ),
+      );
+      return;
+    }
+    pending.resolve(msg.result);
+  }
+
+  private normalizeMethod(method: string): string {
+    return method.replace(/\//g, ".");
+  }
+
+  private pickTextDelta(payload: unknown): string | null {
+    if (!payload || typeof payload !== "object") return null;
+    const p = payload as Record<string, unknown>;
+    const candidates = [
+      p.text,
+      p.delta,
+      (p.delta as Record<string, unknown> | undefined)?.text,
+      (p.params as Record<string, unknown> | undefined)?.text,
+      (p.params as Record<string, unknown> | undefined)?.delta,
+      ((p.params as Record<string, unknown> | undefined)?.delta as Record<string, unknown> | undefined)?.text,
+    ];
+    for (const c of candidates) {
+      if (typeof c === "string" && c.length > 0) return c;
+    }
+    return null;
+  }
+
+  private pickItem(payload: unknown): Record<string, unknown> | null {
+    if (!payload || typeof payload !== "object") return null;
+    const p = payload as Record<string, unknown>;
+    const item = (p.item ?? (p.params as Record<string, unknown> | undefined)?.item) as unknown;
+    if (!item || typeof item !== "object") return null;
+    return item as Record<string, unknown>;
+  }
+
+  private handleNotification(methodRaw: string, params: unknown): void {
+    const method = this.normalizeMethod(methodRaw);
+
+    if (method === "item.agentMessage.delta" || method === "item.agent_message.delta") {
+      const delta = this.pickTextDelta(params);
+      if (delta && this.currentTurn) {
+        this.currentTurn.onEvent({ kind: "text_delta", text: delta });
+      }
+      return;
+    }
+
+    if (method === "item.started" || method === "item.updated" || method === "item.completed") {
+      const rawItem = this.pickItem(params);
+      if (!rawItem) return;
+      const item = rawItem;
+      const itemType = typeof item.type === "string" ? item.type : null;
+      if (!itemType || !this.currentTurn) return;
+
+      if (itemType === "agent_message" && method === "item.completed") {
+        const text = typeof item.text === "string" ? item.text : "";
+        if (text) this.currentTurn.onEvent({ kind: "text_delta", text });
+        return;
+      }
+
+      if (itemType === "command_execution") {
+        this.currentTurn.onEvent({
+          kind: "tool_use",
+          toolUseId: typeof item.id === "string" ? item.id : undefined,
+          toolName: "shell",
+          toolInput: {
+            command: item.command,
+            output: item.aggregated_output,
+            exit_code: item.exit_code,
+          } as Record<string, unknown>,
+        });
+        return;
+      }
+
+      if (itemType === "file_change" && method === "item.completed") {
+        this.currentTurn.onEvent({
+          kind: "tool_use",
+          toolUseId: typeof item.id === "string" ? item.id : undefined,
+          toolName: "apply_patch",
+          toolInput: {
+            changes: item.changes,
+            status: item.status,
+          } as Record<string, unknown>,
+        });
+        return;
+      }
+
+      if (itemType === "mcp_tool_call") {
+        this.currentTurn.onEvent({
+          kind: "tool_use",
+          toolUseId: typeof item.id === "string" ? item.id : undefined,
+          toolName: `${String(item.server ?? "mcp")}.${String(item.tool ?? "tool")}`,
+          toolInput: ((item.arguments as Record<string, unknown>) ?? {}) as Record<string, unknown>,
+        });
+        return;
+      }
+
+      if (itemType === "web_search") {
+        this.currentTurn.onEvent({
+          kind: "tool_use",
+          toolUseId: typeof item.id === "string" ? item.id : undefined,
+          toolName: "web_search",
+          toolInput: { query: item.query } as Record<string, unknown>,
+        });
+        return;
+      }
+
+      if (itemType === "todo_list") {
+        this.currentTurn.onEvent({
+          kind: "tool_use",
+          toolUseId: typeof item.id === "string" ? item.id : undefined,
+          toolName: "update_plan",
+          toolInput: { items: item.items } as Record<string, unknown>,
+        });
+        return;
+      }
+
+      if (itemType === "error" && method === "item.completed") {
+        const msg = typeof item.message === "string" ? item.message : "Unknown Codex error";
+        this.currentTurn.onEvent({ kind: "error", message: msg });
+      }
+      return;
+    }
+
+    if (method === "turn.started") return;
+
+    if (method === "turn.completed") {
+      if (!this.currentTurn) return;
+      const turn = this.currentTurn;
+      this.currentTurn = null;
+      turn.resolve();
+      return;
+    }
+
+    if (method === "turn.failed") {
+      const msg =
+        (params && typeof params === "object" && typeof (params as Record<string, unknown>).error === "object"
+          ? String(((params as Record<string, unknown>).error as Record<string, unknown>).message ?? "Turn failed")
+          : "Turn failed");
+      if (this.currentTurn) {
+        const turn = this.currentTurn;
+        this.currentTurn = null;
+        turn.reject(new Error(msg));
+      }
+      return;
+    }
+
+    if (method === "error" && this.currentTurn) {
+      const msg = this.pickTextDelta(params) ?? "Codex stream error";
+      this.currentTurn.onEvent({ kind: "error", message: msg });
+    }
+  }
+
+  private writeJsonLine(message: unknown): Promise<void> {
+    if (this.closed) return Promise.reject(new Error("Codex session is closed"));
+    const payload = JSON.stringify(message) + "\n";
+    return new Promise<void>((resolve, reject) => {
+      this.child.stdin.write(payload, (err) => {
+        if (err) reject(err);
+        else resolve();
+      });
+    });
+  }
+
+  private rpc(
+    method: string,
+    params: Record<string, unknown>,
+  ): Promise<unknown> {
+    if (this.closed) return Promise.reject(new Error("Codex session is closed"));
+    const id = this.rpcId++;
+    const payload = JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n";
+    return new Promise<unknown>((resolve, reject) => {
+      this.pendingRpc.set(id, { method, resolve, reject });
+      this.child.stdin.write(payload, (err) => {
+        if (!err) return;
+        this.pendingRpc.delete(id);
+        reject(err);
+      });
+    });
+  }
+
+  private async initialize(): Promise<void> {
+    try {
+      await this.rpc("initialize", {
+        clientInfo: {
+          name: "openclawdex",
+          version: app.getVersion(),
+        },
+        capabilities: { experimentalApi: true },
+      });
+      await this.writeJsonLine({ jsonrpc: "2.0", method: "initialized" });
+      this.initResolve();
+    } catch (err) {
+      this.initReject(err instanceof Error ? err : new Error(String(err)));
+    }
+  }
+
+  private async ensureThreadReady(onEvent: (e: SessionEvent) => void): Promise<void> {
+    await this.initPromise;
+    if (this.threadId) {
+      // Resume explicitly so app-server loads thread state.
+      await this.rpc("thread/resume", { threadId: this.threadId });
+      if (!this.initEmitted) {
+        this.initEmitted = true;
+        onEvent({ kind: "init", sessionId: this.threadId, model: this.modelLabel });
+      }
+      return;
+    }
+
+    const result = await this.rpc("thread/start", {
+      ...(this.modelLabel && { model: this.modelLabel }),
+      ...(this.cwd && { cwd: this.cwd }),
+      approvalPolicy: "never",
+      sandbox: "workspace-write",
+    });
+    const threadId =
+      result && typeof result === "object"
+        ? ((result as Record<string, unknown>).thread as Record<string, unknown> | undefined)?.id
+        : undefined;
+    if (typeof threadId !== "string" || threadId.length === 0) {
+      throw new Error("thread/start response missing thread.id");
+    }
+    this.threadId = threadId;
+    if (!this.initEmitted) {
+      this.initEmitted = true;
+      onEvent({ kind: "init", sessionId: threadId, model: this.modelLabel });
+    }
+  }
+
+  private imagesToInput(text: string, images: ImageInput[]): { input: CodexInputItem[]; tempPaths: string[] } {
+    const items: CodexInputItem[] = [];
     const tempPaths: string[] = [];
     for (const img of images) {
       if (img.path) {
-        items.push({ type: "local_image", path: img.path });
+        items.push({ type: "localImage", path: img.path });
         continue;
       }
       const ext = img.mediaType.split("/")[1] ?? "png";
       const p = path.join(os.tmpdir(), `openclawdex-codex-${randomUUID()}.${ext}`);
       fs.writeFileSync(p, Buffer.from(img.base64, "base64"));
       tempPaths.push(p);
-      items.push({ type: "local_image", path: p });
+      items.push({ type: "localImage", path: p });
     }
     if (text) items.push({ type: "text", text });
     return { input: items, tempPaths };
@@ -219,10 +429,10 @@ export class CodexSession implements AgentSession {
     images: ImageInput[] | undefined,
     onEvent: (e: SessionEvent) => void,
   ): void {
-    let input: Input = message;
+    let input: CodexInputItem[] = [{ type: "text", text: message }];
     let tempImagePaths: string[] = [];
     if (images && images.length > 0) {
-      const prepared = this.imagesToUserInput(message, images);
+      const prepared = this.imagesToInput(message, images);
       input = prepared.input;
       tempImagePaths = prepared.tempPaths;
     }
@@ -234,11 +444,6 @@ export class CodexSession implements AgentSession {
     }
   }
 
-  /**
-   * Process queued turns one at a time. Each turn: open a stream, fan
-   * Codex events out to the caller's `onEvent`, then emit `done`, then
-   * unlink any tempfiles created for that turn's images.
-   */
   private async driveQueue(): Promise<void> {
     try {
       while (this.queue.length > 0) {
@@ -255,48 +460,46 @@ export class CodexSession implements AgentSession {
   }
 
   private async runOneTurn(
-    input: Input,
+    input: CodexInputItem[],
     onEvent: (e: SessionEvent) => void,
   ): Promise<void> {
-    const abort = new AbortController();
-    this.currentAbort = abort;
-
-    // TODO(context-window): surface Codex context usage once we can
-    // resolve the selected model's max-token limit. The SDK's `Usage`
-    // payload exposes only `input_tokens + output_tokens`, not the
-    // model-side context window, so we can compute a percentage only
-    // if we hardcode (or look up) per-model limits. Until then we emit
-    // `null` so the renderer hides the context-window donut entirely
-    // for Codex threads (see ChatView's provider gate). Do NOT reinstate
-    // the `{maxTokens: 0, percentage: 0}` sentinel that lived here
-    // before — downstream `!= null` checks treat zero as "present" and
-    // render a misleading "0% used, N / 0 tokens" tooltip.
     const lastUsage: ContextUsage | null = null;
-    // Captured from JSON events on stdout. Preferred over the
-    // `exited with code` wrapper the SDK throws, because that wrapper
-    // only carries stderr (e.g. "Reading prompt from stdin...") while
-    // the real reason (rate limit, auth, etc.) is in the JSON event.
     let turnError: string | null = null;
 
     try {
-      const { events } = await this.thread.runStreamed(input, { signal: abort.signal });
+      await this.ensureThreadReady(onEvent);
+      if (!this.threadId) throw new Error("Missing thread id");
 
-      for await (const ev of events) {
-        this.handleEvent(ev, onEvent);
-
-        if (ev.type === "turn.failed") {
-          turnError = ev.error.message;
-        } else if (ev.type === "error") {
-          turnError = ev.message;
-        }
-      }
+      await new Promise<void>((resolve, reject) => {
+        this.currentTurn = { onEvent, resolve, reject, turnId: null };
+        void this.rpc("turn/start", {
+          threadId: this.threadId,
+          input,
+          ...(this.cwd && { cwd: this.cwd }),
+          ...(this.modelLabel && { model: this.modelLabel }),
+          ...(this.effort && { effort: this.effort }),
+          approvalPolicy: "never",
+          sandboxPolicy: {
+            type: "workspaceWrite",
+            networkAccess: true,
+            ...(this.cwd && { writableRoots: [this.cwd] }),
+          },
+          sandbox: "workspace-write",
+        }).then((result) => {
+          const turnId =
+            result && typeof result === "object"
+              ? ((result as Record<string, unknown>).turn as Record<string, unknown> | undefined)?.id
+              : undefined;
+          if (this.currentTurn && typeof turnId === "string") {
+            this.currentTurn.turnId = turnId;
+          }
+        }).catch((err) => {
+          if (this.currentTurn) this.currentTurn = null;
+          reject(err instanceof Error ? err : new Error(String(err)));
+        });
+      });
     } catch (err) {
-      const aborted = err instanceof Error && (err.name === "AbortError" || abort.signal.aborted);
-      if (!aborted && !turnError) {
-        turnError = err instanceof Error ? err.message : String(err);
-      }
-    } finally {
-      this.currentAbort = null;
+      turnError = err instanceof Error ? err.message : String(err);
     }
 
     onEvent({
@@ -307,173 +510,41 @@ export class CodexSession implements AgentSession {
       contextUsage: lastUsage,
       deferredToolUse: null,
     });
-
-    if (turnError) {
-      onEvent({ kind: "error", message: turnError });
-    }
+    if (turnError) onEvent({ kind: "error", message: turnError });
     onEvent({ kind: "done" });
   }
 
-  /**
-   * Translate one Codex `ThreadEvent` into our provider-neutral
-   * {@link SessionEvent} stream.
-   *
-   * GOTCHA: Codex emits many item.* lifecycle events per item
-   * (started → updated* → completed). For text we only forward
-   * `agent_message`'s COMPLETED event as one big `text_delta`,
-   * because the SDK doesn't expose per-token deltas in a shape we
-   * can stream incrementally. This means Codex responses appear
-   * "chunked by message" in the UI, where Claude responses stream
-   * character-by-character — that's a real UX difference worth
-   * keeping in mind when debugging "why isn't my Codex reply
-   * streaming?".
-   *
-   * TOOL CARDS: for tool-shaped items (shell, file_change, mcp, web
-   * search, todo list) we emit a `tool_use` on BOTH `item.started`
-   * and `item.completed`, reusing the SDK-provided `item.id` as
-   * `toolUseId`. The renderer de-dupes on that id and updates the
-   * card in place, so the user sees "$ npm install" appear as soon
-   * as Codex decides to run it, then the same card fills in with
-   * the output once it finishes. Without this pairing, long shell
-   * commands would show no activity at all until they exited.
-   */
-  private handleEvent(ev: ThreadEvent, onEvent: (e: SessionEvent) => void): void {
-    switch (ev.type) {
-      case "thread.started": {
-        this.threadId = ev.thread_id;
-        if (!this.initEmitted) {
-          this.initEmitted = true;
-          onEvent({
-            kind: "init",
-            sessionId: ev.thread_id,
-            // GOTCHA: the SDK doesn't echo back the model name on
-            // thread.started. Surface whatever the renderer selected
-            // at ctor time so `SessionInfo.model` reads correctly in
-            // the sidebar instead of the misleading literal "codex".
-            model: this.modelLabel,
-          });
-        }
-        break;
-      }
-
-      case "item.started":
-      case "item.completed": {
-        const item = ev.item;
-        switch (item.type) {
-          case "agent_message":
-            // Only the final text is useful — `item.started` fires
-            // before any content is streamed (item.text === "").
-            if (ev.type === "item.completed") {
-              onEvent({ kind: "text_delta", text: item.text });
-            }
-            break;
-
-          case "command_execution":
-            // On started: command is known, output/exit_code not yet.
-            // On completed: everything's filled in. Same id on both
-            // so the renderer swaps the placeholder for the full card.
-            onEvent({
-              kind: "tool_use",
-              toolUseId: item.id,
-              toolName: "shell",
-              toolInput: {
-                command: item.command,
-                output: item.aggregated_output,
-                exit_code: item.exit_code,
-              },
-            });
-            break;
-
-          case "file_change":
-            // file_change only emits on completion in practice (the
-            // SDK treats it as atomic) but we still dedupe by id in
-            // case that changes upstream.
-            if (ev.type === "item.completed") {
-              onEvent({
-                kind: "tool_use",
-                toolUseId: item.id,
-                toolName: "apply_patch",
-                toolInput: { changes: item.changes, status: item.status },
-              });
-            }
-            break;
-
-          case "mcp_tool_call":
-            onEvent({
-              kind: "tool_use",
-              toolUseId: item.id,
-              toolName: `${item.server}.${item.tool}`,
-              toolInput: (item.arguments as Record<string, unknown>) ?? {},
-            });
-            break;
-
-          case "web_search":
-            onEvent({
-              kind: "tool_use",
-              toolUseId: item.id,
-              toolName: "web_search",
-              toolInput: { query: item.query },
-            });
-            break;
-
-          case "todo_list":
-            onEvent({
-              kind: "tool_use",
-              toolUseId: item.id,
-              toolName: "update_plan",
-              toolInput: { items: item.items },
-            });
-            break;
-
-          case "reasoning":
-            // Reasoning summaries aren't surfaced in the Claude flow
-            // either; we skip them to keep the transcript tight.
-            break;
-
-          case "error":
-            if (ev.type === "item.completed") {
-              onEvent({ kind: "error", message: item.message });
-            }
-            break;
-        }
-        break;
-      }
-
-      case "turn.started":
-      case "turn.completed":
-      case "turn.failed":
-      case "item.updated":
-      case "error":
-        // Lifecycle events we handle in runOneTurn (or explicitly
-        // ignore — `item.updated` fires many times per streaming
-        // command and we'd rather not redraw the card for every
-        // `aggregated_output` byte).
-        break;
-    }
-  }
-
-  /**
-   * GOTCHA: Codex has no pause-for-input protocol. This method is a
-   * no-op; it only exists to satisfy {@link AgentSession}.
-   */
   respondToTool(_toolUseId: string, _text: string): void {
-    // intentionally empty
+    // Codex currently has no deferred-tool input protocol exposed here.
   }
 
   async interrupt(): Promise<void> {
-    this.currentAbort?.abort();
+    if (!this.threadId || !this.currentTurn?.turnId) return;
+    // Fire and forget — don't block session teardown on the server's response.
+    this.rpc("turn/interrupt", {
+      threadId: this.threadId,
+      turnId: this.currentTurn.turnId,
+    }).catch(() => {
+      // Best effort.
+    });
   }
 
   close(): void {
-    this.currentAbort?.abort();
-    this.currentAbort = null;
-    // Drain any queued-but-unstarted turns and release their tempfiles.
-    // In-flight turns clean up in `driveQueue`'s per-turn finally; this
-    // only catches entries the user closed out before they began.
+    this.closed = true;
     for (const entry of this.queue) {
       for (const p of entry.tempImagePaths) safeUnlink(p);
     }
     this.queue = [];
-    this.draining = false;
+    this.currentTurn = null;
+    for (const [, pending] of this.pendingRpc) {
+      pending.reject(new Error("Codex session closed"));
+    }
+    this.pendingRpc.clear();
+    try {
+      this.child.kill();
+    } catch {
+      // ignore
+    }
   }
 }
+
