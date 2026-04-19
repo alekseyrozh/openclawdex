@@ -1,6 +1,7 @@
 {
   "name": "@openclawdex/shared",
   "private": true,
+  "license": "MIT",
   "exports": {
     ".": "./src/index.ts"
   },

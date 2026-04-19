@@ -10,14 +10,19 @@
  * - `costUsd` / `durationMs` are `number | null` because Codex does not
  *   report a per-turn dollar cost (billing runs against the user's ChatGPT
  *   plan) and may not surface a duration. Claude always reports both.
- * - `deferredToolUse` is `DeferredToolUse | null` because Codex has no
- *   equivalent of Claude's AskUserQuestion pause-for-input protocol —
- *   Codex adapters always set it to null.
- * - `respondToTool` is a no-op for Codex; only Claude's AskUserQuestion
- *   path ever invokes it.
+ * - `pendingRequest` is `PendingRequest | null` — a discriminated union
+ *   covering every "agent paused waiting for the user" flow (today:
+ *   `ask_user_question`; future: approval/plan variants). Backends that
+ *   don't surface the current kind always set it to null.
+ * - `resolveRequest` is the inverse — receives a typed resolution
+ *   variant and routes it into the backend's native mechanism (Claude:
+ *   user message with `parent_tool_use_id`; Codex: reply to a paused
+ *   approval RPC — future). No-op on backends that don't know the kind.
  */
 
-import type { Provider } from "@openclawdex/shared";
+import type { PendingRequest, Provider, RequestResolution, UserMode } from "@openclawdex/shared";
+
+export type { PendingRequest, RequestResolution, UserMode };
 
 /**
  * One image attachment on an outgoing user message.
@@ -40,12 +45,6 @@ export type ContextUsage = {
   totalTokens: number;
   maxTokens: number;
   percentage: number;
-};
-
-export type DeferredToolUse = {
-  id: string;
-  name: string;
-  input: Record<string, unknown>;
 };
 
 export type SessionEvent =
@@ -73,9 +72,25 @@ export type SessionEvent =
       durationMs: number | null;
       isError: boolean;
       contextUsage: ContextUsage | null;
-      // Always `null` for Codex (no AskUserQuestion analogue).
-      deferredToolUse: DeferredToolUse | null;
     }
+  /**
+   * The agent has paused and is waiting on the user. Emitted mid-turn
+   * (NOT inside a `result` event) because the pause happens inside the
+   * SDK's `canUseTool` callback — before the turn's `result` is
+   * produced. The renderer stashes the request on the thread, shows
+   * the appropriate UI, and eventually calls `resolveRequest` on the
+   * session to unblock the backend.
+   */
+  | { kind: "pending_request"; request: PendingRequest }
+  /**
+   * The session's effective UserMode changed. Fires both when the user
+   * switches modes via the UI (IPC round-trip echoes this back for
+   * reconciliation) and when the model flips its own mode via
+   * `EnterPlanMode` / `ExitPlanMode` (detected in the streamed tool
+   * results). Renderer treats this as the authoritative path for
+   * `thread.userMode`.
+   */
+  | { kind: "mode_changed"; mode: UserMode }
   | { kind: "error"; message: string }
   | { kind: "done" };
 
@@ -108,11 +123,25 @@ export interface AgentSession {
   interrupt(): Promise<void>;
 
   /**
-   * Respond to a deferred tool call. Only meaningful for Claude's
-   * AskUserQuestion — Codex implementations make this a no-op because
-   * the Codex SDK does not surface a pause-for-input protocol.
+   * Change the effective {@link UserMode} for this session. Emits a
+   * `mode_changed` event via `onEvent` so the renderer can reconcile.
+   * For Claude, this flips the live SDK query's permission mode
+   * immediately (future tool calls see the new gate) — the returned
+   * Promise resolves only after the SDK accepts the flip, so callers
+   * never see an optimistic UI update that silently diverges from the
+   * CLI's actual state. For Codex, the new mode applies on the next
+   * `turn/start` — the current turn, if any, keeps its existing
+   * policies.
    */
-  respondToTool(toolUseId: string, text: string): void;
+  setMode(mode: UserMode, onEvent: (e: SessionEvent) => void): Promise<void>;
+
+  /**
+   * Resolve a {@link PendingRequest} previously emitted on a `result`
+   * event. The `resolution.kind` must match the request's `kind`;
+   * backends dispatch on it to route into their native protocol.
+   * Unknown kinds are silently ignored (future-variant safety).
+   */
+  resolveRequest(resolution: RequestResolution): Promise<void>;
 
   /** Close the session entirely and release any child-process handles. */
   close(): void;

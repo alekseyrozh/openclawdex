@@ -2,6 +2,7 @@
   "name": "@openclawdex/web",
   "private": true,
   "type": "module",
+  "license": "MIT",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",

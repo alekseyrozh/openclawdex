@@ -5,13 +5,16 @@ import path from "path";
 import { randomUUID } from "crypto";
 import { app } from "electron";
 import { z } from "zod";
-import { type CodexReasoningEffort } from "@openclawdex/shared";
+import { type CodexReasoningEffort, type UserMode } from "@openclawdex/shared";
 import type {
   AgentSession,
   ContextUsage,
   ImageInput,
+  PendingRequest,
+  RequestResolution,
   SessionEvent,
 } from "./agent-session";
+import { codexModeOptions, codexTurnContextToUserMode } from "./user-mode";
 
 /** Best-effort cleanup of a single tempfile. Never throws. */
 function safeUnlink(p: string): void {
@@ -32,10 +35,16 @@ export type CodexSessionOptions = {
   cwd?: string;
   model?: string;
   effort?: CodexReasoningEffort;
+  userMode?: UserMode;
 };
 
+// JSON-RPC ids can be strings or numbers per spec. We send integers;
+// app-server echoes them back, but server-initiated requests can use
+// either — relax here so the schema matches whatever comes over.
+const JsonRpcId = z.union([z.string(), z.number()]);
+
 const JsonRpcResponse = z.object({
-  id: z.number(),
+  id: JsonRpcId,
   result: z.unknown().optional(),
   error: z.object({ message: z.string().optional() }).optional(),
 });
@@ -45,10 +54,97 @@ const JsonRpcNotification = z.object({
   params: z.unknown().optional(),
 });
 
+// Server-initiated RPC request (e.g. item/tool/requestUserInput). Has
+// BOTH `id` and `method` — distinguished from a response (id without
+// method) and a notification (method without id).
+const JsonRpcServerRequest = z.object({
+  id: JsonRpcId,
+  method: z.string(),
+  params: z.unknown().optional(),
+});
+
+const CodexUserInputOption = z.object({
+  label: z.string(),
+  description: z.string().optional(),
+});
+
+const CodexUserInputQuestion = z.object({
+  id: z.string(),
+  header: z.string().optional(),
+  question: z.string(),
+  options: z.array(CodexUserInputOption),
+  multiSelect: z.boolean().optional(),
+});
+
+const CodexUserInputRequestParams = z.object({
+  questions: z.array(CodexUserInputQuestion),
+});
+
+// Codex's three approval RPC param shapes — minimal subset we need.
+// All carry thread/turn/item ids plus a human-readable `reason`; the
+// command form additionally carries the command string and cwd. We
+// forward what's useful into the ToolApprovalCard's `toolInput`.
+const CodexCommandApprovalParams = z.object({
+  thread_id: z.string().optional(),
+  turn_id: z.string().optional(),
+  item_id: z.string().optional(),
+  approval_id: z.string().optional(),
+  reason: z.string().optional(),
+  command: z.string().optional(),
+  cwd: z.string().optional(),
+});
+
+const CodexFileChangeApprovalParams = z.object({
+  thread_id: z.string().optional(),
+  turn_id: z.string().optional(),
+  item_id: z.string().optional(),
+  reason: z.string().optional(),
+  grant_root: z.string().optional(),
+});
+
+const CodexPermissionsApprovalParams = z.object({
+  thread_id: z.string().optional(),
+  turn_id: z.string().optional(),
+  item_id: z.string().optional(),
+  reason: z.string().optional(),
+  permissions: z.unknown().optional(),
+});
+
 type RpcPending = {
   method: string;
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
+};
+
+/**
+ * Bookkeeping for a paused `item/tool/requestUserInput` RPC. The
+ * renderer sees questions keyed by text (matching Claude's
+ * AskUserQuestion), but Codex answers must be keyed by the question's
+ * original `id`. We stash both the JSON-RPC request id (so we can
+ * reply to the right call) and the text→id map so we can translate
+ * answers back on resolution.
+ */
+type PendingUserInputRequest = {
+  jsonRpcId: string | number;
+  textToCodexId: Map<string, string>;
+  multiSelectByText: Map<string, boolean>;
+};
+
+/**
+ * Paused approval RPC (command / file change / permissions). We
+ * reply on the original JSON-RPC call with a `decision` payload
+ * whose shape depends on which flavor of approval was requested,
+ * so track `kind` alongside the id.
+ *
+ * For `permissions`, we also keep the originally-requested profile
+ * so an "approve" can echo it back as the granted set; "reject" is
+ * an empty profile.
+ */
+type PendingToolApprovalKind = "command" | "fileChange" | "permissions";
+type PendingToolApproval = {
+  jsonRpcId: string | number;
+  kind: PendingToolApprovalKind;
+  requestedPermissions?: unknown;
 };
 
 type TurnWaiter = {
@@ -66,6 +162,10 @@ export class CodexSession implements AgentSession {
   private readonly cwd: string | undefined;
   private readonly modelLabel: string;
   private readonly effort: CodexReasoningEffort | undefined;
+  // Effective UI-level permission mode. Applied on every `turn/start`
+  // (Codex has no mid-turn mutation); switching modes mid-turn takes
+  // effect on the next user message.
+  private userMode: UserMode;
 
   private readonly child: ChildProcessWithoutNullStreams;
   private stdoutBuf = "";
@@ -80,6 +180,34 @@ export class CodexSession implements AgentSession {
   private initEmitted = false;
   private currentTurn: TurnWaiter | null = null;
 
+  // Most recent `onEvent` callback, captured on send(). Lets mode
+  // reconciliation emit `mode_changed` even when it fires outside the
+  // active turn window (e.g. a late turn_context arriving after we've
+  // already cleared currentTurn). Mirrors the Claude pattern.
+  private lastOnEvent: ((e: SessionEvent) => void) | null = null;
+
+  // Paused `item/tool/requestUserInput` RPC calls from app-server,
+  // keyed by the requestId we emitted to the renderer. `resolveRequest`
+  // looks these up to translate the user's answers back into Codex's
+  // shape and reply on the originating JSON-RPC call.
+  private pendingUserInputs = new Map<string, PendingUserInputRequest>();
+
+  // Paused approval RPCs from app-server (command execution, file
+  // change, permissions escalation), keyed by the requestId we
+  // emitted to the renderer. `resolveRequest` looks these up to
+  // build the correct response payload and reply on the paused call.
+  private pendingToolApprovals = new Map<string, PendingToolApproval>();
+
+  // Outstanding `<proposed_plan>` approvals — client-side only.
+  // Codex doesn't pause anything waiting for plan approval; we
+  // synthesize the approve/revise dialog on top of the plan item so
+  // the UX matches the native Codex app (see plan.md line 124:
+  // "Do not ask 'should I proceed?' in the final output. The user can
+  // easily switch out of Plan mode and request implementation if you
+  // have included a `<proposed_plan>` block in your response.").
+  // Just a presence-check set so resolveRequest can validate the id.
+  private pendingPlanApprovals = new Set<string>();
+
   private queue: Array<{
     input: CodexInputItem[];
     onEvent: (e: SessionEvent) => void;
@@ -92,6 +220,7 @@ export class CodexSession implements AgentSession {
     this.cwd = opts?.cwd;
     this.modelLabel = opts?.model ?? "codex";
     this.effort = opts?.effort;
+    this.userMode = opts?.userMode ?? "bypassPermissions";
     this.threadId = opts?.resumeThreadId ?? null;
 
     this.initPromise = new Promise<void>((resolve, reject) => {
@@ -142,6 +271,17 @@ export class CodexSession implements AgentSession {
         continue;
       }
 
+      // Order matters: a server-initiated REQUEST has both `id` and
+      // `method`, which would also match JsonRpcResponse (where
+      // result/error are optional). Check for the request shape first
+      // so we don't silently drop server-initiated calls — that was
+      // the bug hanging `request_user_input` turns.
+      const asServerRequest = JsonRpcServerRequest.safeParse(parsedUnknown);
+      if (asServerRequest.success) {
+        this.handleServerRequest(asServerRequest.data);
+        continue;
+      }
+
       const asResponse = JsonRpcResponse.safeParse(parsedUnknown);
       if (asResponse.success) {
         this.handleRpcResponse(asResponse.data);
@@ -170,9 +310,10 @@ export class CodexSession implements AgentSession {
   }
 
   private handleRpcResponse(msg: z.infer<typeof JsonRpcResponse>): void {
-    const pending = this.pendingRpc.get(msg.id);
+    const numericId = typeof msg.id === "number" ? msg.id : Number(msg.id);
+    const pending = this.pendingRpc.get(numericId);
     if (!pending) return;
-    this.pendingRpc.delete(msg.id);
+    this.pendingRpc.delete(numericId);
     if (msg.error) {
       pending.reject(
         new Error(
@@ -182,6 +323,198 @@ export class CodexSession implements AgentSession {
       return;
     }
     pending.resolve(msg.result);
+  }
+
+  /**
+   * Dispatch a server-initiated JSON-RPC request. Today the only one
+   * we handle is `item/tool/requestUserInput` — Codex's Plan-mode
+   * questionnaire. Unknown methods get a `-32601` error so app-server
+   * doesn't hang waiting for a reply.
+   */
+  private handleServerRequest(req: z.infer<typeof JsonRpcServerRequest>): void {
+    const method = this.normalizeMethod(req.method);
+
+    if (method === "item.tool.requestUserInput") {
+      this.handleRequestUserInput(req);
+      return;
+    }
+
+    if (method === "item.commandExecution.requestApproval") {
+      this.handleCommandApproval(req);
+      return;
+    }
+
+    if (method === "item.fileChange.requestApproval") {
+      this.handleFileChangeApproval(req);
+      return;
+    }
+
+    if (method === "item.permissions.requestApproval") {
+      this.handlePermissionsApproval(req);
+      return;
+    }
+
+    void this.writeJsonLine({
+      jsonrpc: "2.0",
+      id: req.id,
+      error: {
+        code: -32601,
+        message: `Unsupported server request: ${req.method}`,
+      },
+    });
+  }
+
+  /**
+   * Emit a `tool_approval` PendingRequest and record the JSON-RPC id
+   * + approval kind for the resolver. Shared helper for all three
+   * approval flavors — only the request shape differs.
+   */
+  private emitToolApproval(
+    req: z.infer<typeof JsonRpcServerRequest>,
+    kind: PendingToolApprovalKind,
+    toolName: string,
+    toolInput: Record<string, unknown>,
+    requestedPermissions?: unknown,
+  ): void {
+    const requestId = randomUUID();
+    this.pendingToolApprovals.set(requestId, {
+      jsonRpcId: req.id,
+      kind,
+      ...(requestedPermissions !== undefined && { requestedPermissions }),
+    });
+    const request: PendingRequest = {
+      kind: "tool_approval",
+      requestId,
+      toolName,
+      toolInput,
+    };
+    const emit = this.currentTurn?.onEvent ?? this.lastOnEvent;
+    emit?.({ kind: "pending_request", request });
+  }
+
+  private handleCommandApproval(req: z.infer<typeof JsonRpcServerRequest>): void {
+    const parsed = CodexCommandApprovalParams.safeParse(req.params);
+    if (!parsed.success) {
+      void this.writeJsonLine({
+        jsonrpc: "2.0",
+        id: req.id,
+        error: { code: -32602, message: `Invalid command approval params: ${parsed.error.message}` },
+      });
+      return;
+    }
+    // Surface as a Bash-shaped tool call so the existing
+    // ToolApprovalCard renders the command preview correctly.
+    const toolInput: Record<string, unknown> = {
+      command: parsed.data.command ?? "",
+      ...(parsed.data.reason && { description: parsed.data.reason }),
+      ...(parsed.data.cwd && { cwd: parsed.data.cwd }),
+    };
+    this.emitToolApproval(req, "command", "Bash", toolInput);
+  }
+
+  private handleFileChangeApproval(req: z.infer<typeof JsonRpcServerRequest>): void {
+    const parsed = CodexFileChangeApprovalParams.safeParse(req.params);
+    if (!parsed.success) {
+      void this.writeJsonLine({
+        jsonrpc: "2.0",
+        id: req.id,
+        error: { code: -32602, message: `Invalid fileChange approval params: ${parsed.error.message}` },
+      });
+      return;
+    }
+    // FileChangeRequestApproval doesn't carry the diff itself — the
+    // file_change item was emitted as its own `item.*` event before
+    // this RPC arrived. Pass `item_id` through so a future UI can
+    // cross-reference; for now the card shows the reason + target.
+    const toolInput: Record<string, unknown> = {
+      ...(parsed.data.reason && { reason: parsed.data.reason }),
+      ...(parsed.data.grant_root && { grant_root: parsed.data.grant_root }),
+      ...(parsed.data.item_id && { item_id: parsed.data.item_id }),
+    };
+    this.emitToolApproval(req, "fileChange", "apply_patch", toolInput);
+  }
+
+  private handlePermissionsApproval(req: z.infer<typeof JsonRpcServerRequest>): void {
+    const parsed = CodexPermissionsApprovalParams.safeParse(req.params);
+    if (!parsed.success) {
+      void this.writeJsonLine({
+        jsonrpc: "2.0",
+        id: req.id,
+        error: { code: -32602, message: `Invalid permissions approval params: ${parsed.error.message}` },
+      });
+      return;
+    }
+    const toolInput: Record<string, unknown> = {
+      ...(parsed.data.reason && { reason: parsed.data.reason }),
+      ...(parsed.data.permissions !== undefined && { permissions: parsed.data.permissions }),
+    };
+    this.emitToolApproval(req, "permissions", "RequestPermissions", toolInput, parsed.data.permissions);
+  }
+
+  /**
+   * Translate Codex's `item/tool/requestUserInput` into our
+   * `ask_user_question` PendingRequest and stash the JSON-RPC id so
+   * `resolveRequest` can reply on the paused call.
+   *
+   * Codex questions carry an `id` we must echo back in the answer
+   * record; our renderer keys answers by question TEXT (matching
+   * Claude's AskUserQuestion). We store a text→id map so translation
+   * on the way out is straightforward.
+   */
+  private handleRequestUserInput(req: z.infer<typeof JsonRpcServerRequest>): void {
+    const parsed = CodexUserInputRequestParams.safeParse(req.params);
+    if (!parsed.success) {
+      void this.writeJsonLine({
+        jsonrpc: "2.0",
+        id: req.id,
+        error: {
+          code: -32602,
+          message: `Invalid requestUserInput params: ${parsed.error.message}`,
+        },
+      });
+      return;
+    }
+
+    const requestId = randomUUID();
+    const textToCodexId = new Map<string, string>();
+    const multiSelectByText = new Map<string, boolean>();
+
+    // Map Codex's question shape onto our AskUserQuestionItem. Header
+    // is optional in Codex, required by the renderer — fall back to a
+    // truncated prefix of the question text so the card always has a
+    // title.
+    const mappedQuestions = parsed.data.questions.map((q) => {
+      const header = q.header && q.header.trim().length > 0
+        ? q.header
+        : q.question.slice(0, 60);
+      textToCodexId.set(q.question, q.id);
+      multiSelectByText.set(q.question, q.multiSelect === true);
+      return {
+        question: q.question,
+        header,
+        options: q.options.map((opt) => ({
+          label: opt.label,
+          description: opt.description ?? "",
+        })),
+        multiSelect: q.multiSelect === true,
+      };
+    });
+
+    this.pendingUserInputs.set(requestId, {
+      jsonRpcId: req.id,
+      textToCodexId,
+      multiSelectByText,
+    });
+
+    const request: PendingRequest = {
+      kind: "ask_user_question",
+      requestId,
+      toolName: "request_user_input",
+      input: { questions: mappedQuestions },
+    };
+
+    const emit = this.currentTurn?.onEvent ?? this.lastOnEvent;
+    emit?.({ kind: "pending_request", request });
   }
 
   private normalizeMethod(method: string): string {
@@ -213,8 +546,76 @@ export class CodexSession implements AgentSession {
     return item as Record<string, unknown>;
   }
 
+  /**
+   * Pull a turn_context payload out of the many shapes app-server might
+   * use. Handles: top-level `{ payload }`, JSON-RPC `{ params: { payload } }`,
+   * bare params (payload fields spread directly), and item-wrapped
+   * `{ item: { type: "turn_context", ... } }`. Returns null if nothing
+   * turn_context-shaped is in there.
+   */
+  private pickTurnContextPayload(
+    typeHint: string | null,
+    params: unknown,
+  ): Record<string, unknown> | null {
+    if (!params || typeof params !== "object") return null;
+    const p = params as Record<string, unknown>;
+
+    if (typeHint === "turn_context") {
+      const payload = (p.payload ?? p) as Record<string, unknown>;
+      if (payload && typeof payload === "object") return payload;
+    }
+
+    const nestedParams = p.params as Record<string, unknown> | undefined;
+    if (nestedParams && typeof nestedParams === "object") {
+      const payload = (nestedParams.payload ?? nestedParams) as Record<string, unknown>;
+      if (payload && typeof payload === "object" && ("approval_policy" in payload || "sandbox_policy" in payload || "collaboration_mode" in payload)) {
+        return payload;
+      }
+    }
+
+    if ("approval_policy" in p || "sandbox_policy" in p || "collaboration_mode" in p) {
+      return p;
+    }
+    const topPayload = p.payload as Record<string, unknown> | undefined;
+    if (topPayload && typeof topPayload === "object" && ("approval_policy" in topPayload || "sandbox_policy" in topPayload || "collaboration_mode" in topPayload)) {
+      return topPayload;
+    }
+
+    return null;
+  }
+
+  /**
+   * Reconcile our cached {@link userMode} against a server-reported
+   * turn_context. Ground truth overrides the cache; drift triggers a
+   * `mode_changed` event so the renderer dropdown converges. Mirrors
+   * Claude's PreToolUse hook pattern — we want the UI to match what
+   * the agent *actually* ran under, not what we optimistically set.
+   */
+  private reconcileModeFromTurnContext(payload: Record<string, unknown>): void {
+    const approvalPolicy = typeof payload.approval_policy === "string" ? payload.approval_policy : undefined;
+    const sandboxPolicy = payload.sandbox_policy as { type?: unknown } | undefined;
+    const sandboxType = sandboxPolicy && typeof sandboxPolicy.type === "string" ? sandboxPolicy.type : undefined;
+    const collaborationMode = payload.collaboration_mode as { mode?: unknown } | undefined;
+    const modeRaw = collaborationMode && typeof collaborationMode.mode === "string" ? collaborationMode.mode : undefined;
+
+    const observed = codexTurnContextToUserMode(approvalPolicy, sandboxType, modeRaw);
+    if (observed === this.userMode) return;
+    this.userMode = observed;
+    const emit = this.currentTurn?.onEvent ?? this.lastOnEvent;
+    emit?.({ kind: "mode_changed", mode: observed });
+  }
+
   private handleNotification(methodRaw: string, params: unknown): void {
     const method = this.normalizeMethod(methodRaw);
+
+    // turn_context: the app-server's ground truth about the policies
+    // the current turn is running under. Matches several plausible
+    // wire names since the protocol isn't formally documented.
+    if (method === "turn_context" || method === "turn.context" || method === "turnContext") {
+      const payload = this.pickTurnContextPayload("turn_context", params);
+      if (payload) this.reconcileModeFromTurnContext(payload);
+      return;
+    }
 
     if (method === "item.agentMessage.delta" || method === "item.agent_message.delta") {
       const delta = this.pickTextDelta(params);
@@ -229,6 +630,17 @@ export class CodexSession implements AgentSession {
       if (!rawItem) return;
       const item = rawItem;
       const itemType = typeof item.type === "string" ? item.type : null;
+
+      // turn_context can also arrive wrapped as an item. Handled here —
+      // before the `currentTurn` gate below — so mode reconciliation
+      // works even on the item.started that immediately follows
+      // turn/start, when other item handlers require currentTurn.
+      if (itemType === "turn_context") {
+        const payload = this.pickTurnContextPayload("turn_context", item);
+        if (payload) this.reconcileModeFromTurnContext(payload);
+        return;
+      }
+
       if (!itemType || !this.currentTurn) return;
 
       if (itemType === "agent_message" && method === "item.completed") {
@@ -281,6 +693,26 @@ export class CodexSession implements AgentSession {
           toolName: "web_search",
           toolInput: { query: item.query } as Record<string, unknown>,
         });
+        return;
+      }
+
+      // `<proposed_plan>` block Codex extracted from the assistant
+      // message. Text is the plan body, without the surrounding tags.
+      // Wait for `item.completed` — earlier `started`/`updated` events
+      // stream partial text (see `item/plan/delta`) and we don't want
+      // to flash a half-written plan as an approval card.
+      if (itemType === "plan" && method === "item.completed") {
+        const text = typeof item.text === "string" ? item.text : "";
+        if (text.length === 0) return;
+        const requestId = randomUUID();
+        this.pendingPlanApprovals.add(requestId);
+        const request: PendingRequest = {
+          kind: "exit_plan_approval",
+          requestId,
+          toolName: "proposed_plan",
+          plan: text,
+        };
+        this.currentTurn.onEvent({ kind: "pending_request", request });
         return;
       }
 
@@ -386,11 +818,16 @@ export class CodexSession implements AgentSession {
       return;
     }
 
+    const startOpts = codexModeOptions(this.userMode, this.cwd, this.modelLabel, this.effort);
     const result = await this.rpc("thread/start", {
       ...(this.modelLabel && { model: this.modelLabel }),
       ...(this.cwd && { cwd: this.cwd }),
-      approvalPolicy: "never",
-      sandbox: "workspace-write",
+      approvalPolicy: startOpts.approvalPolicy,
+      sandbox: startOpts.sandbox,
+      collaborationMode: {
+        mode: startOpts.collaborationMode,
+        settings: startOpts.collaborationSettings,
+      },
     });
     const threadId =
       result && typeof result === "object"
@@ -429,6 +866,7 @@ export class CodexSession implements AgentSession {
     images: ImageInput[] | undefined,
     onEvent: (e: SessionEvent) => void,
   ): void {
+    this.lastOnEvent = onEvent;
     let input: CodexInputItem[] = [{ type: "text", text: message }];
     let tempImagePaths: string[] = [];
     if (images && images.length > 0) {
@@ -472,19 +910,20 @@ export class CodexSession implements AgentSession {
 
       await new Promise<void>((resolve, reject) => {
         this.currentTurn = { onEvent, resolve, reject, turnId: null };
+        const turnOpts = codexModeOptions(this.userMode, this.cwd, this.modelLabel, this.effort);
         void this.rpc("turn/start", {
           threadId: this.threadId,
           input,
           ...(this.cwd && { cwd: this.cwd }),
           ...(this.modelLabel && { model: this.modelLabel }),
           ...(this.effort && { effort: this.effort }),
-          approvalPolicy: "never",
-          sandboxPolicy: {
-            type: "workspaceWrite",
-            networkAccess: true,
-            ...(this.cwd && { writableRoots: [this.cwd] }),
+          approvalPolicy: turnOpts.approvalPolicy,
+          sandboxPolicy: turnOpts.sandboxPolicy,
+          sandbox: turnOpts.sandbox,
+          collaborationMode: {
+            mode: turnOpts.collaborationMode,
+            settings: turnOpts.collaborationSettings,
           },
-          sandbox: "workspace-write",
         }).then((result) => {
           const turnId =
             result && typeof result === "object"
@@ -508,14 +947,134 @@ export class CodexSession implements AgentSession {
       durationMs: null,
       isError: turnError !== null,
       contextUsage: lastUsage,
-      deferredToolUse: null,
     });
     if (turnError) onEvent({ kind: "error", message: turnError });
     onEvent({ kind: "done" });
   }
 
-  respondToTool(_toolUseId: string, _text: string): void {
-    // Codex currently has no deferred-tool input protocol exposed here.
+  async resolveRequest(resolution: RequestResolution): Promise<void> {
+    switch (resolution.kind) {
+      case "ask_user_question": {
+        const pending = this.pendingUserInputs.get(resolution.requestId);
+        if (!pending) return;
+        this.pendingUserInputs.delete(resolution.requestId);
+
+        // Translate `{ questionText: "answer" | "a, b" }` back into
+        // Codex's `{ [codexQuestionId]: { answers: string[] } }`.
+        // Multi-select answers come in as ", "-joined strings (see
+        // QuestionCard submission logic); split back to an array.
+        const codexAnswers: Record<string, { answers: string[] }> = {};
+        for (const [questionText, answerValue] of Object.entries(resolution.answers)) {
+          const codexId = pending.textToCodexId.get(questionText);
+          if (!codexId) continue;
+          const isMulti = pending.multiSelectByText.get(questionText) === true;
+          const arr = isMulti
+            ? answerValue.split(",").map((s) => s.trim()).filter((s) => s.length > 0)
+            : [answerValue];
+          codexAnswers[codexId] = { answers: arr };
+        }
+
+        await this.writeJsonLine({
+          jsonrpc: "2.0",
+          id: pending.jsonRpcId,
+          result: { answers: codexAnswers },
+        });
+        return;
+      }
+      case "ask_user_question_cancel": {
+        const pending = this.pendingUserInputs.get(resolution.requestId);
+        if (!pending) return;
+        this.pendingUserInputs.delete(resolution.requestId);
+        // Reply with a JSON-RPC error so app-server unwinds the paused
+        // tool call cleanly instead of hanging. Code -32000 is the
+        // reserved range for implementation-defined server errors.
+        await this.writeJsonLine({
+          jsonrpc: "2.0",
+          id: pending.jsonRpcId,
+          error: {
+            code: -32000,
+            message: "User dismissed the question.",
+          },
+        });
+        return;
+      }
+      case "exit_plan_approval": {
+        // Client-side flow: Codex doesn't pause for plan approval
+        // (no tool call is waiting). We just interpret the decision
+        // and drive the next turn accordingly.
+        if (!this.pendingPlanApprovals.delete(resolution.requestId)) return;
+        const emit = this.lastOnEvent;
+        if (!emit) return;
+
+        if (resolution.approved) {
+          // Switch out of plan mode so the next turn runs with edit
+          // permissions, then queue a synthetic user message asking
+          // the agent to proceed. acceptEdits is the natural "go
+          // implement" mode — no approval prompts for file edits,
+          // but Bash still gates.
+          await this.setMode("acceptEdits", emit);
+          this.send(
+            "Please proceed with implementing the plan.",
+            undefined,
+            emit,
+          );
+        } else {
+          // Stay in plan mode; if the user left feedback, queue it
+          // as the next turn so the agent refines. No feedback = no
+          // new turn; the composer is focused and the user can type.
+          const feedback = resolution.message?.trim();
+          if (feedback && feedback.length > 0) {
+            this.send(feedback, undefined, emit);
+          }
+        }
+        return;
+      }
+      case "tool_approval": {
+        const pending = this.pendingToolApprovals.get(resolution.requestId);
+        if (!pending) return;
+        this.pendingToolApprovals.delete(resolution.requestId);
+
+        // Each approval flavor has a different response shape. Command
+        // + file-change use a `decision` enum; permissions echo a
+        // `GrantedPermissionProfile` (empty object = granted nothing).
+        let result: Record<string, unknown>;
+        if (pending.kind === "permissions") {
+          result = resolution.approved
+            ? {
+                permissions: pending.requestedPermissions ?? {},
+                scope: "turn",
+              }
+            : { permissions: {}, scope: "turn" };
+        } else {
+          // command | fileChange — same `{ decision }` shape.
+          result = { decision: resolution.approved ? "accept" : "decline" };
+        }
+
+        await this.writeJsonLine({
+          jsonrpc: "2.0",
+          id: pending.jsonRpcId,
+          result,
+        });
+        return;
+      }
+    }
+  }
+
+  /**
+   * Update the effective UserMode. Codex has no mid-turn mutation for
+   * approval/sandbox policies — they're turn-scoped on `turn/start` —
+   * so we just stash the new mode. It will be picked up on the next
+   * user message. Mid-turn callers see the in-flight turn finish
+   * under the previous policies.
+   */
+  async setMode(mode: UserMode, onEvent: (e: SessionEvent) => void): Promise<void> {
+    if (this.userMode === mode) return;
+    this.userMode = mode;
+    onEvent({ kind: "mode_changed", mode });
+  }
+
+  get currentUserMode(): UserMode {
+    return this.userMode;
   }
 
   async interrupt(): Promise<void> {
@@ -540,6 +1099,32 @@ export class CodexSession implements AgentSession {
       pending.reject(new Error("Codex session closed"));
     }
     this.pendingRpc.clear();
+    // Fail any paused requestUserInput calls so app-server unwinds the
+    // tool rather than holding the RPC forever. We can't `await`
+    // writeJsonLine here since close() is sync; fire-and-forget is
+    // fine — the child is being killed either way.
+    for (const [, pending] of this.pendingUserInputs) {
+      void this.writeJsonLine({
+        jsonrpc: "2.0",
+        id: pending.jsonRpcId,
+        error: { code: -32000, message: "Session closed." },
+      }).catch(() => { /* process likely already dead */ });
+    }
+    this.pendingUserInputs.clear();
+    // Decline any paused approval RPCs so app-server unwinds the
+    // tool call rather than holding the connection open.
+    for (const [, pending] of this.pendingToolApprovals) {
+      const result = pending.kind === "permissions"
+        ? { permissions: {}, scope: "turn" }
+        : { decision: "decline" };
+      void this.writeJsonLine({
+        jsonrpc: "2.0",
+        id: pending.jsonRpcId,
+        result,
+      }).catch(() => { /* process likely already dead */ });
+    }
+    this.pendingToolApprovals.clear();
+    this.pendingPlanApprovals.clear();
     try {
       this.child.kill();
     } catch {

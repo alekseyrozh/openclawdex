@@ -36,7 +36,9 @@ import {
   Plus,
   ArrowSquareOut,
 } from "@phosphor-icons/react";
-import { QuestionCard } from "./QuestionCard";
+import { QuestionnaireForm } from "./QuestionCard";
+import { PlanApprovalCard } from "./PlanApprovalCard";
+import { ToolApprovalCard } from "./ToolApprovalCard";
 import {
   DropdownSurface,
   DropdownItem,
@@ -44,7 +46,7 @@ import {
   DropdownSectionHeader,
 } from "./Dropdown";
 import type { Thread, Message, FileChange, ContextStats } from "../App";
-import { EditorTarget, type ProjectInfo } from "@openclawdex/shared";
+import { EditorTarget, type PendingRequest, type ProjectInfo, type UserMode } from "@openclawdex/shared";
 
 /* ── Editor logos ────────────────────────────────────────────── */
 
@@ -233,7 +235,7 @@ interface OpenFileCtx {
   open: (path: string, line?: number) => void;
   editorLabel: string;
 }
-const OpenFileContext = createContext<OpenFileCtx | null>(null);
+export const OpenFileContext = createContext<OpenFileCtx | null>(null);
 
 /**
  * Parse a file reference like `path/to/file.tsx`, `file.tsx:42`, or
@@ -364,6 +366,12 @@ interface ModelDef {
   // An empty array means the model has no reasoning-effort control
   // (e.g. Haiku) → the effort picker is hidden entirely.
   supportedEfforts?: string[];
+  // Provider-declared default effort for this model. When the user
+  // manually picks the model from the dropdown we snap the effort to
+  // this value so each model lands on its own recommended setting
+  // (e.g. Codex's `defaultReasoningEffort`). Claude's SDK doesn't
+  // expose a default, so it stays undefined for Claude models.
+  defaultEffort?: string;
 }
 
 // Shared formatters so the picker looks uniform across providers.
@@ -461,6 +469,16 @@ function loadClaudeModels(): Promise<ModelDef[]> {
                   m.supportsEffort && m.supportedEffortLevels
                     ? m.supportedEffortLevels
                     : [];
+                // Claude's SDK doesn't surface a default-effort field,
+                // but the convention is to pick the deepest reasoning
+                // the model supports: `xhigh` if available (Opus),
+                // otherwise `high` (Sonnet et al.). Models with neither
+                // (e.g. Haiku has no effort knob) get no default.
+                const defaultEffort = supportedEfforts.includes("xhigh")
+                  ? "xhigh"
+                  : supportedEfforts.includes("high")
+                    ? "high"
+                    : undefined;
                 return {
                   id: m.value,
                   label,
@@ -468,6 +486,7 @@ function loadClaudeModels(): Promise<ModelDef[]> {
                   provider: "claude" as const,
                   badge,
                   supportedEfforts,
+                  defaultEffort,
                 };
               })
             : [];
@@ -589,6 +608,7 @@ function loadCodexModels(): Promise<ModelDef[]> {
           supportedEfforts: m.supportedReasoningEfforts.map(
             (e) => e.reasoningEffort,
           ),
+          defaultEffort: m.defaultReasoningEffort,
         }));
         codexModelsCache = result;
         return result;
@@ -643,31 +663,38 @@ const CODEX_EFFORT: EffortDef[] = [
 /* ── Modes ──────────────────────────────────────────────────── */
 
 interface ModeDef {
-  id: string;
+  id: UserMode;
   label: string;
   subtitle: string;
-  comingSoon?: boolean;
 }
 
 const MODES: ModeDef[] = [
   {
     id: "plan",
-    label: "Plan mode",
+    label: "Plan",
     subtitle: "Outline a plan without making changes",
-    comingSoon: true,
   },
   {
     id: "ask",
-    label: "Ask before edits",
+    label: "Ask permissions",
     subtitle: "Confirm each file change before applying",
-    comingSoon: true,
   },
   {
-    id: "auto",
+    id: "acceptEdits",
     label: "Auto-accept edits",
     subtitle: "Apply changes without asking",
   },
+  {
+    id: "bypassPermissions",
+    label: "Bypass permissions",
+    subtitle: "Run any tool without prompting",
+  },
 ];
+
+const DEFAULT_MODE: ModeDef = MODES[3]; // bypassPermissions — matches legacy threads.
+function modeById(id: UserMode | undefined): ModeDef {
+  return MODES.find((m) => m.id === id) ?? DEFAULT_MODE;
+}
 
 /* ── File change card ────────────────────────────────────────── */
 
@@ -786,13 +813,13 @@ function CollapsedIndicator({ count }: { count: number }) {
 
 /* ── Thinking indicator ──────────────────────────────────────── */
 
-function ThinkingIndicator() {
+function ThinkingIndicator({ label = "Thinking…" }: { label?: string }) {
   return (
     <div
       className="thinking-shimmer flex items-center gap-2 text-[14px] font-medium"
       style={{ color: "rgba(255,255,255,0.60)" }}
     >
-      Thinking…
+      {label}
     </div>
   );
 }
@@ -1272,6 +1299,73 @@ function TokenProgressIndicator({ stats }: { stats: ContextStats }) {
   );
 }
 
+/**
+ * Compact collapsible summary of an AskUserQuestion answer turn. Shown
+ * in place of the user's plain message bubble so the conversation keeps
+ * a record of what was asked and answered without bloating the stream
+ * with a giant markdown dump. Expanded by default (the user just saw
+ * the questions) but collapsible via the header caret.
+ */
+function AskedQuestionsSummary({
+  answers,
+}: {
+  answers: Array<{ question: string; value: string }>;
+}) {
+  const [expanded, setExpanded] = useState(true);
+  const count = answers.length;
+  return (
+    <div className="my-5 px-1 flex flex-col gap-4">
+      <button
+        onClick={() => setExpanded((v) => !v)}
+        className="flex items-center gap-1.5 text-[14px] font-medium leading-none w-fit transition-colors"
+        style={{
+          color: "var(--text-secondary)",
+          background: "transparent",
+          border: "none",
+          padding: 0,
+          cursor: "pointer",
+        }}
+      >
+        <span>
+          Asked{" "}
+          <span style={{ color: "var(--text-muted)" }}>
+            {count} {count === 1 ? "question" : "questions"}
+          </span>
+        </span>
+        <CaretDown
+          size={12}
+          weight="bold"
+          style={{
+            color: "var(--text-muted)",
+            transform: expanded ? "rotate(0deg)" : "rotate(-90deg)",
+            transition: "transform 120ms ease",
+          }}
+        />
+      </button>
+      {expanded && (
+        <div className="flex flex-col gap-4">
+          {answers.map((a, i) => (
+            <div key={i} className="flex flex-col gap-1">
+              <span
+                className="text-[14px] font-medium leading-snug"
+                style={{ color: "var(--text-secondary)" }}
+              >
+                {a.question}
+              </span>
+              <span
+                className="text-[14px] font-medium leading-snug"
+                style={{ color: "var(--text-muted)" }}
+              >
+                {a.value}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function MessageBlock({
   message,
   isStreaming,
@@ -1302,6 +1396,13 @@ function MessageBlock({
   const isUser = message.role === "user";
 
   if (isUser) {
+    // Answer to an AskUserQuestion — render as a collapsible summary
+    // card left-aligned in the stream instead of the usual right-
+    // aligned user bubble. The stream reads like a conversation log
+    // of questions + answers rather than a wall of markdown.
+    if (message.questionAnswers && message.questionAnswers.length > 0) {
+      return <AskedQuestionsSummary answers={message.questionAnswers} />;
+    }
     return (
       <div className="my-3 ml-auto w-fit max-w-[85%] min-w-0 group">
         {message.images && message.images.length > 0 && (
@@ -1579,7 +1680,7 @@ function FileRefCode({ inner }: { inner: string }) {
   );
 }
 
-function MarkdownContent({ text }: { text: string }) {
+export function MarkdownContent({ text }: { text: string }) {
   const ctx = useContext(OpenFileContext);
 
   return (
@@ -1998,7 +2099,41 @@ interface ChatViewProps {
     opts?: { model?: string; effort?: string },
   ) => void;
   onInterrupt: (threadId: string) => void;
-  onRespondToTool: (threadId: string, toolUseId: string, text: string) => void;
+  onResolveRequest: (
+    threadId: string,
+    request: PendingRequest,
+    payload: {
+      answers: Record<string, string>;
+      displayText: string;
+      questionAnswers: Array<{ question: string; value: string }>;
+    },
+  ) => void;
+  onCancelRequest: (threadId: string, request: PendingRequest) => void;
+  /**
+   * Approve (or reject) an ExitPlanMode plan. Fired from the
+   * PlanApprovalCard that renders as a banner above the composer
+   * when `thread.pendingRequest.kind` is `exit_plan_approval`. When
+   * the user denies with a non-empty `message` (typed into the
+   * composer textarea below the card), it's forwarded as the deny
+   * reason so they can steer plan revisions in one shot.
+   */
+  onApprovePlan?: (
+    threadId: string,
+    request: PendingRequest,
+    approved: boolean,
+    message?: string,
+  ) => void;
+  /**
+   * Approve / reject a per-tool approval prompt. When the user denies
+   * with a non-empty `message`, it's forwarded to the agent as the
+   * deny reason so they can steer the next step.
+   */
+  onApproveTool?: (
+    threadId: string,
+    request: PendingRequest,
+    approved: boolean,
+    message?: string,
+  ) => void;
   /**
    * Flip the pending thread's provider when the user picks a Codex model
    * on a brand-new (uncommitted) conversation. No-op for already-started
@@ -2019,6 +2154,13 @@ interface ChatViewProps {
    * empty-app zero-state CTA.
    */
   onNewChat?: () => void;
+  /**
+   * Change the thread's UserMode. Renderer updates Thread state
+   * optimistically; main.ts echoes a `mode_changed` IPC event back
+   * to reconcile (including when the model itself flips mode via
+   * `EnterPlanMode` / `ExitPlanMode`).
+   */
+  onSetMode?: (threadId: string, mode: UserMode) => void;
 }
 
 /* ── SendButton ──────────────────────────────────────────────
@@ -2066,10 +2208,16 @@ const SendButton = forwardRef<
     <button
       onClick={onClick}
       disabled={!active}
-      className="w-[30px] h-[30px] flex items-center justify-center rounded-full transition-colors"
+      className="w-[30px] h-[30px] flex items-center justify-center rounded-full transition-all"
       style={{
         background: active ? "var(--text-primary)" : "var(--surface-3)",
         color: active ? "var(--surface-0)" : "var(--text-faint)",
+      }}
+      onMouseEnter={(e) => {
+        if (active) e.currentTarget.style.background = "rgba(255,255,255,0.85)";
+      }}
+      onMouseLeave={(e) => {
+        if (active) e.currentTarget.style.background = "var(--text-primary)";
       }}
     >
       <ArrowUp size={16} weight="bold" />
@@ -2085,11 +2233,15 @@ export function ChatView({
   isLoading,
   onSend,
   onInterrupt,
-  onRespondToTool,
+  onResolveRequest,
+  onCancelRequest,
+  onApprovePlan,
+  onApproveTool,
   onUpdateThreadProvider,
   onChangeThreadProject,
   onCreateProject,
   onNewChat,
+  onSetMode,
 }: ChatViewProps) {
   // PERF: the textarea is uncontrolled — its text lives in the DOM, read at
   // submit time via `textareaRef.current.value`. The "is there text?" signal
@@ -2152,7 +2304,12 @@ export function ChatView({
   const [codexEffort, setCodexEffort] = useState<EffortDef>(CODEX_EFFORT[2]); // default "medium"
   const [effortDropdownOpen, setEffortDropdownOpen] = useState(false);
   const effortDropdownRef = useRef<HTMLDivElement>(null);
-  const [selectedMode, setSelectedMode] = useState(MODES[2]); // default "Auto-accept edits" (only available mode for now)
+  // Mode is thread-scoped state owned by App.tsx. The dropdown reflects
+  // `thread.userMode`, which reconciles on `mode_changed` events from
+  // the backend (both UI-initiated switches and model-initiated
+  // EnterPlanMode / ExitPlanMode calls). No local fallback state —
+  // displaying anything other than the authoritative mode would lie.
+  const selectedMode = modeById(thread?.userMode);
   const [modeDropdownOpen, setModeDropdownOpen] = useState(false);
   const modeDropdownRef = useRef<HTMLDivElement>(null);
   const [editorDropdownOpen, setEditorDropdownOpen] = useState(false);
@@ -2488,7 +2645,11 @@ export function ChatView({
     } else if (isAtBottomRef.current) {
       messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
     }
-  }, [thread?.id, thread?.historyLoaded, thread?.messages]);
+    // `pendingRequest?.kind` is included so the "Asking questions…"
+    // indicator (rendered below the message list when a pending
+    // AskUserQuestion lands) triggers the same autoscroll as a new
+    // message would — otherwise it appears off-screen.
+  }, [thread?.id, thread?.historyLoaded, thread?.messages, thread?.pendingRequest?.kind]);
 
   // Autofocus composer when thread changes
   useEffect(() => {
@@ -2510,7 +2671,32 @@ export function ChatView({
   const handleSubmit = async () => {
     const text = (textareaRef.current?.value ?? "").trim();
     const hasContent = text.length > 0 || attachments.length > 0;
-    if (!thread || !hasContent || thread.status === "running") return;
+    if (!thread) return;
+
+    // An approval is pending: the composer is acting as a "deny with
+    // feedback" channel. Send routes the typed message to the matching
+    // handler as a deny note, and we never call onSend. Empty text +
+    // Enter falls through to a no-op (let the user click the explicit
+    // Deny / Allow buttons in the banner above).
+    const pending = thread.pendingRequest;
+    if (pending?.kind === "tool_approval") {
+      if (!text) return;
+      onApproveTool?.(thread.id, pending, false, text);
+      const el = textareaRef.current;
+      if (el) el.value = "";
+      sendButtonRef.current?.setHasText(false);
+      return;
+    }
+    if (pending?.kind === "exit_plan_approval") {
+      if (!text) return;
+      onApprovePlan?.(thread.id, pending, false, text);
+      const el = textareaRef.current;
+      if (el) el.value = "";
+      sendButtonRef.current?.setHasText(false);
+      return;
+    }
+
+    if (!hasContent || thread.status === "running") return;
 
     // Convert attachments to base64. If the File was sourced from the
     // OS (drag-drop), Electron can resolve its real path — we pass that
@@ -3097,6 +3283,22 @@ export function ChatView({
                       (last, m) => (m.role === "assistant" ? m : last),
                       undefined,
                     );
+                    // The last *visible* message in the turn determines the
+                    // hover bar's top margin: assistant text has `py-4`, so
+                    // we overlap it with `-mt-4`; tool rows only have `py-1.5`,
+                    // so that negative margin would crowd the bar against the
+                    // tool name.
+                    const lastVisibleMsg = [...turnMsgs]
+                      .reverse()
+                      .find(
+                        (m) =>
+                          !(
+                            m.role === "tool_use" &&
+                            m.toolName === "AskUserQuestion"
+                          ),
+                      );
+                    const endsWithToolUse =
+                      lastVisibleMsg?.role === "tool_use";
                     // Turn is complete if there are more messages after it, or thread is idle
                     const isTurnComplete =
                       i < msgs.length || thread.status === "idle";
@@ -3104,32 +3306,16 @@ export function ChatView({
                     rendered.push(
                       <div key={`turn-${msg.id}`} className="group/turn">
                         {turnMsgs.map((m) => {
-                          // Render AskUserQuestion tool calls as interactive cards
+                          // AskUserQuestion is surfaced via the questionnaire
+                          // composer (see QuestionnaireComposer), not as a
+                          // card in the stream. Skip it here — the structured
+                          // user answer that follows (rendered as chip pills)
+                          // is the visual record of the exchange.
                           if (
                             m.role === "tool_use" &&
                             m.toolName === "AskUserQuestion"
                           ) {
-                            const hasUserMsgAfter = msgs
-                              .slice(i)
-                              .some((later) => later.role === "user");
-                            return (
-                              <QuestionCard
-                                key={m.id}
-                                toolInput={m.toolInput}
-                                alreadyAnswered={hasUserMsgAfter}
-                                onSubmit={(text) => {
-                                  if (thread.pendingToolUseId) {
-                                    onRespondToTool(
-                                      thread.id,
-                                      thread.pendingToolUseId,
-                                      text,
-                                    );
-                                  } else {
-                                    onSend(thread.id, text);
-                                  }
-                                }}
-                              />
-                            );
+                            return null;
                           }
                           return (
                             <MessageBlock
@@ -3143,7 +3329,9 @@ export function ChatView({
                           );
                         })}
                         {lastAssistantMsg && isTurnComplete && (
-                          <div className="-mt-4 px-1 transition-opacity duration-300 opacity-0 group-hover/turn:opacity-100">
+                          <div
+                            className={`${endsWithToolUse ? "mt-1" : "-mt-4"} px-1 transition-opacity duration-300 opacity-0 group-hover/turn:opacity-100`}
+                          >
                             <MessageHoverBar message={lastAssistantMsg} />
                           </div>
                         )}
@@ -3153,13 +3341,33 @@ export function ChatView({
                 }
                 return rendered;
               })()}
-              {thread.status === "running" &&
-                thread.messages[thread.messages.length - 1]?.role !==
-                  "assistant" && (
+              {thread.pendingRequest?.kind === "ask_user_question" ? (
+                <div className="py-4 px-1">
+                  <ThinkingIndicator label="Asking questions…" />
+                </div>
+              ) : thread.pendingRequest?.kind === "exit_plan_approval" ? (
+                <div className="py-4 px-1">
+                  <ThinkingIndicator label="Awaiting plan approval…" />
+                </div>
+              ) : thread.pendingRequest?.kind === "tool_approval" ? (
+                <div className="py-4 px-1">
+                  <ThinkingIndicator label="Awaiting approval…" />
+                </div>
+              ) : (
+                // Show "Thinking…" whenever the thread is running and we're
+                // not in a pending-request state. We used to suppress this
+                // when the last message was an assistant message (the
+                // streaming text was acting as the indicator), but that
+                // left a silent gap between the assistant finishing its
+                // text and the next tool event arriving — exactly when the
+                // model is deciding to call AskUserQuestion / ExitPlanMode
+                // and the user can't tell anything is happening.
+                thread.status === "running" && (
                   <div className="py-4 px-1">
                     <ThinkingIndicator />
                   </div>
-                )}
+                )
+              )}
               <div ref={messagesEndRef} />
             </div>
           )}
@@ -3210,8 +3418,85 @@ export function ChatView({
                 url="https://developers.openai.com/codex/quickstart?setup=cli"
               />
             </div>
+          ) : thread.pendingRequest?.kind === "ask_user_question" ? (
+            // Agent is paused waiting on an AskUserQuestion. Swap the
+            // whole input affordance for the questionnaire so the user
+            // can't type free-form text into a turn that's waiting on a
+            // structured answer. Footer (Local / branch / context) stays
+            // so the user still sees where they are.
+            <QuestionnaireComposer
+              toolInput={thread.pendingRequest.input}
+              onSubmit={(payload) => {
+                const pending = thread.pendingRequest;
+                if (pending && pending.kind === "ask_user_question") {
+                  onResolveRequest(thread.id, pending, payload);
+                }
+              }}
+              onCancel={() => {
+                const pending = thread.pendingRequest;
+                if (pending) onCancelRequest(thread.id, pending);
+              }}
+              footer={
+                <div className="flex items-center gap-1 mt-2 px-0.5">
+                  <StatusButton tooltip="Coming soon">
+                    <Monitor size={14} weight="regular" />
+                    <span>Local</span>
+                  </StatusButton>
+                  {thread.branch && (
+                    <StatusButton tooltip="Coming soon" fadeIn>
+                      <GitBranch size={14} weight="regular" />
+                      <span>{thread.branch}</span>
+                    </StatusButton>
+                  )}
+                  {thread.contextStats && thread.provider !== "codex" && (
+                    <TokenProgressIndicator stats={thread.contextStats} />
+                  )}
+                </div>
+              }
+            />
           ) : (
-            <ChatComposer
+            <>
+              {thread.pendingRequest?.kind === "tool_approval" && (
+                <div className="max-w-[720px] mx-auto mb-2">
+                  <ToolApprovalCard
+                    toolName={thread.pendingRequest.toolName}
+                    toolInput={thread.pendingRequest.toolInput}
+                    onApprove={() => {
+                      const pending = thread.pendingRequest;
+                      if (pending?.kind === "tool_approval") {
+                        onApproveTool?.(thread.id, pending, true);
+                      }
+                    }}
+                    onReject={() => {
+                      const pending = thread.pendingRequest;
+                      if (pending?.kind === "tool_approval") {
+                        onApproveTool?.(thread.id, pending, false);
+                      }
+                    }}
+                  />
+                </div>
+              )}
+              {thread.pendingRequest?.kind === "exit_plan_approval" && (
+                <div className="max-w-[720px] mx-auto mb-2">
+                  <PlanApprovalCard
+                    plan={thread.pendingRequest.plan}
+                    planFilePath={thread.pendingRequest.planFilePath}
+                    onApprove={() => {
+                      const pending = thread.pendingRequest;
+                      if (pending?.kind === "exit_plan_approval") {
+                        onApprovePlan?.(thread.id, pending, true);
+                      }
+                    }}
+                    onReject={() => {
+                      const pending = thread.pendingRequest;
+                      if (pending?.kind === "exit_plan_approval") {
+                        onApprovePlan?.(thread.id, pending, false);
+                      }
+                    }}
+                  />
+                </div>
+              )}
+              <ChatComposer
               composerRef={composerRef}
               textareaRef={textareaRef}
               sendButtonRef={sendButtonRef}
@@ -3222,6 +3507,17 @@ export function ChatView({
                 if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();
                   handleSubmit();
+                  return;
+                }
+                if (e.key === "Tab" && e.shiftKey) {
+                  e.preventDefault();
+                  const idx = MODES.findIndex(
+                    (m) => m.id === selectedMode.id,
+                  );
+                  const next = MODES[(idx + 1) % MODES.length];
+                  if (thread && next.id !== selectedMode.id) {
+                    onSetMode?.(thread.id, next.id);
+                  }
                 }
               }}
               onTextPaste={handlePaste}
@@ -3251,13 +3547,26 @@ export function ChatView({
               onToggleModeDropdown={() => setModeDropdownOpen((v) => !v)}
               onSelectModel={(m) => {
                 setSelectedModel(m);
+                // Snap the effort picker to this model's declared
+                // default (Codex surfaces one via
+                // `defaultReasoningEffort`; Claude doesn't). Fall back
+                // to whatever effort was already active when the model
+                // has no default or the default isn't in the provider's
+                // known effort list.
+                const base =
+                  m.provider === "codex" ? CODEX_EFFORT : CLAUDE_EFFORT;
+                const currentEffort =
+                  m.provider === "codex" ? codexEffort : claudeEffort;
+                const nextEffort =
+                  (m.defaultEffort &&
+                    base.find((e) => e.id === m.defaultEffort)) ||
+                  currentEffort;
+                if (m.provider === "codex") setCodexEffort(nextEffort);
+                else setClaudeEffort(nextEffort);
                 const selectionToSave = {
                   provider: m.provider,
                   modelId: m.id,
-                  effortId: (m.provider === "codex"
-                    ? codexEffort
-                    : claudeEffort
-                  ).id,
+                  effortId: nextEffort.id,
                 };
                 localStorage.setItem(
                   "lastSelection",
@@ -3284,12 +3593,21 @@ export function ChatView({
                 setEffortDropdownOpen(false);
               }}
               onSelectMode={(m) => {
-                setSelectedMode(m);
+                if (thread && m.id !== selectedMode.id) {
+                  onSetMode?.(thread.id, m.id);
+                }
                 setModeDropdownOpen(false);
               }}
               isRunning={thread.status === "running"}
               onInterrupt={() => onInterrupt(thread.id)}
               onSubmit={handleSubmit}
+              placeholder={
+                thread.pendingRequest?.kind === "tool_approval"
+                  ? "Reply to deny with feedback…"
+                  : thread.pendingRequest?.kind === "exit_plan_approval"
+                    ? "Reply to dismiss with feedback…"
+                    : undefined
+              }
               footer={
                 <div className="flex items-center gap-1 mt-2 px-0.5">
                   <StatusButton tooltip="Coming soon">
@@ -3308,6 +3626,7 @@ export function ChatView({
                 </div>
               }
             />
+            </>
           )}
         </div>
 
@@ -3377,6 +3696,49 @@ function StatusButton({
           {tooltip}
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * Composer variant shown while the agent is paused on an AskUserQuestion.
+ * Mirrors ChatComposer's outer chrome (same rounded surface, same
+ * max-width, same footer slot) so the swap feels like a mode change on
+ * the same input, not a new element. No textarea, no model picker —
+ * those would only confuse the user when the turn is waiting on
+ * structured answers.
+ */
+function QuestionnaireComposer({
+  toolInput,
+  onSubmit,
+  onCancel,
+  footer,
+}: {
+  toolInput: Record<string, unknown> | undefined;
+  onSubmit: (payload: {
+    answers: Record<string, string>;
+    displayText: string;
+    questionAnswers: Array<{ question: string; value: string }>;
+  }) => void;
+  onCancel: () => void;
+  footer?: React.ReactNode;
+}) {
+  return (
+    <div className="max-w-[720px] mx-auto">
+      <div
+        className="rounded-2xl relative overflow-hidden"
+        style={{
+          background: "var(--surface-2)",
+          border: "1px solid var(--border-default)",
+        }}
+      >
+        <QuestionnaireForm
+          toolInput={toolInput}
+          onSubmit={onSubmit}
+          onCancel={onCancel}
+        />
+      </div>
+      {footer && <div className="pt-2 px-1">{footer}</div>}
     </div>
   );
 }
@@ -3671,9 +4033,15 @@ function ChatComposer({
             {!disabled && isRunning ? (
               <button
                 onClick={onInterrupt}
-                className="w-[30px] h-[30px] flex items-center justify-center rounded-full"
+                className="w-[30px] h-[30px] flex items-center justify-center rounded-full transition-all"
                 style={{
                   background: "var(--text-primary)",
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = "rgba(255,255,255,0.85)";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = "var(--text-primary)";
                 }}
               >
                 <Stop
@@ -4196,30 +4564,15 @@ function ModeDropdown({
     >
       {modes.map((mode) => {
         const isSelected = mode.id === selected.id;
-        const isDisabled = !!mode.comingSoon;
         return (
           <DropdownItem
             key={mode.id}
             variant="composer"
             selected={isSelected}
-            disabled={isDisabled}
             onClick={() => onSelect(mode)}
           >
             <div className="flex flex-col gap-0.5 flex-1 min-w-0">
-              <span className="flex items-center gap-2">
-                <span className="leading-tight">{mode.label}</span>
-                {isDisabled && (
-                  <span
-                    className="text-[10px] font-semibold uppercase tracking-wide leading-none px-1.5 py-0.5 rounded-md"
-                    style={{
-                      color: "var(--text-muted)",
-                      background: "rgba(255,255,255,0.06)",
-                    }}
-                  >
-                    Coming soon
-                  </span>
-                )}
-              </span>
+              <span className="leading-tight">{mode.label}</span>
               <span
                 className="text-[11px] leading-tight"
                 style={{ color: "var(--text-muted)" }}

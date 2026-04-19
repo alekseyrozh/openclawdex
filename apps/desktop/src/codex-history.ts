@@ -2,6 +2,8 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import { z } from "zod";
+import type { UserMode } from "@openclawdex/shared";
+import { codexTurnContextToUserMode } from "./user-mode";
 
 /**
  * Read Codex thread state from the CLI's on-disk rollout files.
@@ -328,6 +330,44 @@ export function readCodexSummary(threadId: string): string | null {
  */
 export function readCodexSummaryFromFile(file: string): string | null {
   return summaryFromHistory(readCodexHistoryFromFile(file));
+}
+
+/**
+ * Scan the rollout for the most recent `turn_context` entry and derive
+ * the UserMode the thread was last running under. Returns `null` if
+ * the file has no `turn_context` entries — callers fall back to
+ * defaults.
+ *
+ * Codex logs a fresh `turn_context` at the start of every turn with
+ * the exact `approval_policy` + `sandbox_policy` the server used, so
+ * the last one tells us the current effective mode.
+ */
+export function readCodexUserModeFromFile(file: string): UserMode | null {
+  let content: string;
+  try { content = fs.readFileSync(file, "utf-8"); } catch { return null; }
+  let last: UserMode | null = null;
+  for (const line of content.split("\n")) {
+    if (!line) continue;
+    // Cheap prefilter — full JSON.parse on every line is wasteful.
+    if (!line.includes('"turn_context"')) continue;
+    let raw: unknown;
+    try { raw = JSON.parse(line); } catch { continue; }
+    if (!raw || typeof raw !== "object") continue;
+    const entry = raw as {
+      type?: string;
+      payload?: {
+        approval_policy?: unknown;
+        sandbox_policy?: { type?: unknown };
+        collaboration_mode?: { mode?: unknown };
+      };
+    };
+    if (entry.type !== "turn_context" || !entry.payload) continue;
+    const approval = typeof entry.payload.approval_policy === "string" ? entry.payload.approval_policy : undefined;
+    const sandboxType = typeof entry.payload.sandbox_policy?.type === "string" ? entry.payload.sandbox_policy.type : undefined;
+    const collaborationMode = typeof entry.payload.collaboration_mode?.mode === "string" ? entry.payload.collaboration_mode.mode : undefined;
+    last = codexTurnContextToUserMode(approval, sandboxType, collaborationMode);
+  }
+  return last;
 }
 
 function summaryFromHistory(history: CodexHistoryMsg[]): string | null {

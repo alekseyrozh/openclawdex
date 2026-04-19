@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
-import type { SessionInfo, HistoryMessage, ProjectInfo, EditorTarget, Provider, CodexModel, ClaudeModel, ImagePayload } from "@openclawdex/shared";
+import type { SessionInfo, HistoryMessage, ProjectInfo, EditorTarget, Provider, CodexModel, ClaudeModel, ImagePayload, RequestResolution, UserMode } from "@openclawdex/shared";
 
 contextBridge.exposeInMainWorld("openclawdex", {
   platform: process.platform,
@@ -71,6 +71,7 @@ contextBridge.exposeInMainWorld("openclawdex", {
       images?: ImagePayload[];
       model?: string;
       effort?: string;
+      userMode?: UserMode;
     },
   ): Promise<void> =>
     ipcRenderer.invoke("session:send", threadId, message, opts),
@@ -80,14 +81,17 @@ contextBridge.exposeInMainWorld("openclawdex", {
     ipcRenderer.invoke("session:interrupt", threadId),
 
   /**
-   * Respond to a deferred tool call (e.g. AskUserQuestion).
+   * Resolve a {@link PendingRequest} previously emitted on the
+   * `pending_request` IPC event. The `resolution.kind` must match the
+   * originating request's kind; main validates via Zod and drops
+   * unknown shapes.
    *
-   * GOTCHA: only Claude threads ever surface `deferred_tool_use`;
-   * calling this on a Codex thread is a harmless no-op in the main
-   * process but the UI should never reach it.
+   * GOTCHA: today only `ask_user_question` is emitted (Claude only).
+   * Calling on a Codex thread would be a harmless no-op in the main
+   * process, but the UI shouldn't reach it until approval flows land.
    */
-  respondToTool: (threadId: string, toolUseId: string, responseText: string): Promise<void> =>
-    ipcRenderer.invoke("session:respond-to-tool", threadId, toolUseId, responseText),
+  resolveRequest: (threadId: string, resolution: RequestResolution): Promise<void> =>
+    ipcRenderer.invoke("session:resolve-request", threadId, resolution),
 
   /** List all past sessions (Claude + Codex) across all projects. */
   listSessions: (): Promise<SessionInfo[]> =>
@@ -170,6 +174,16 @@ contextBridge.exposeInMainWorld("openclawdex", {
   /** Reassign a thread to a different project (or null to ungroup). */
   changeThreadProject: (sessionId: string, projectId: string | null): Promise<void> =>
     ipcRenderer.invoke("threads:change-project", sessionId, projectId),
+
+  /**
+   * Change the thread's effective {@link UserMode}. Returns the
+   * resolved mode (may differ from the requested mode only in future
+   * when a floor is introduced — today it round-trips unchanged).
+   * The renderer should still wait for the `mode_changed` event
+   * before treating the dropdown as authoritative.
+   */
+  setThreadMode: (sessionId: string, mode: UserMode): Promise<UserMode> =>
+    ipcRenderer.invoke("threads:set-mode", sessionId, mode),
 
   /**
    * Subscribe to events coming from the main process.

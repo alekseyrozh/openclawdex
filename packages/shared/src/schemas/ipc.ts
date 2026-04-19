@@ -5,6 +5,11 @@ import { z } from "zod";
 export const Provider = z.enum(["claude", "codex"]);
 export type Provider = z.infer<typeof Provider>;
 
+// ── UserMode (UI-level permission mode shared by both backends) ───
+
+export const UserMode = z.enum(["plan", "ask", "acceptEdits", "bypassPermissions"]);
+export type UserMode = z.infer<typeof UserMode>;
+
 // ── Editor target (for the open-in-editor menu) ──────────────
 
 export const EditorTarget = z.enum(["vscode", "cursor", "finder", "terminal", "iterm", "ghostty"]);
@@ -52,6 +57,7 @@ export const SessionInfo = z.object({
   contextStats: ContextStats.optional(),
   pinned: z.boolean().optional(),
   archived: z.boolean().optional(),
+  userMode: UserMode.optional(),
 });
 export type SessionInfo = z.infer<typeof SessionInfo>;
 
@@ -178,6 +184,7 @@ export const ThreadsChangeProjectInput = z.tuple([
   z.string().min(1),
   z.string().min(1).nullable(),
 ]);
+export const ThreadsSetModeInput = z.tuple([z.string().min(1), UserMode]);
 
 // ── Events flowing from main process → renderer ──────────────
 
@@ -234,14 +241,138 @@ export const IpcToolUse = z.object({
   toolInput: z.record(z.string(), z.unknown()).optional(),
 });
 
-// GOTCHA: Codex has no equivalent of Claude's AskUserQuestion pause-for-input
-// protocol, so deferred_tool_use events are emitted only for Claude threads.
-export const IpcDeferredToolUse = z.object({
-  type: z.literal("deferred_tool_use"),
-  threadId: z.string(),
-  toolUseId: z.string(),
+// ── Pending requests (agent pauses, waits for user) ──────────
+//
+// Generalizes "the agent needs something from the user before it can
+// continue." Today only `ask_user_question` is emitted (by Claude via
+// its AskUserQuestion tool); the discriminated union is shaped to
+// accept approval-style variants (command approval, file-change
+// approval, plan approval) without changing any surrounding plumbing.
+//
+// Protocol:
+//   1. Agent emits a `pending_request` IPC event with a fresh `requestId`.
+//   2. Renderer shows UI keyed on `kind`, collects user response.
+//   3. Renderer dispatches `session:resolve-request` with a matching
+//      `RequestResolution` variant (same `kind` + `requestId`).
+//   4. Main routes the resolution to the session's `resolveRequest`.
+//   5. Each backend translates the resolution into its native mechanism
+//      (Claude: resolve the `canUseTool` Promise with `updatedInput`
+//      carrying the answers; Codex: reply to the paused JSON-RPC
+//      approval request — future).
+
+export const PendingAskUserQuestion = z.object({
+  kind: z.literal("ask_user_question"),
+  requestId: z.string(),
   toolName: z.string(),
-  toolInput: z.record(z.string(), z.unknown()).optional(),
+  input: z.record(z.string(), z.unknown()).optional(),
+});
+
+// Model called ExitPlanMode. The SDK tags this tool as `shouldDefer`,
+// meaning the caller (us) must supply an approval signal before it
+// runs. We intercept in `canUseTool` — the Promise returned there
+// blocks the tool until `resolveRequest` fulfills it with an accept
+// or reject. `plan` is the markdown the model proposed; renderer
+// shows it in a PlanApprovalCard. `planFilePath` is optional because
+// older / simpler plan-mode exits pass just `{plan: "..."}`.
+export const PendingExitPlanApproval = z.object({
+  kind: z.literal("exit_plan_approval"),
+  requestId: z.string(),
+  toolName: z.string(),
+  plan: z.string(),
+  planFilePath: z.string().optional(),
+});
+
+// Per-tool approval prompt. Fired in "ask" mode for mutating /
+// shell-like tools, and in "acceptEdits" mode for shell-like tools
+// only (edit-family tools auto-allow in acceptEdits). The renderer
+// surfaces a `ToolApprovalCard` showing the tool name and a
+// tool-specific input preview (diff for Edit, command for Bash,
+// etc.), with Approve / Approve-for-session / Reject buttons.
+export const PendingToolApproval = z.object({
+  kind: z.literal("tool_approval"),
+  requestId: z.string(),
+  toolName: z.string(),
+  toolInput: z.record(z.string(), z.unknown()),
+});
+
+export const PendingRequest = z.discriminatedUnion("kind", [
+  PendingAskUserQuestion,
+  PendingExitPlanApproval,
+  PendingToolApproval,
+]);
+export type PendingRequest = z.infer<typeof PendingRequest>;
+
+// `answers` is keyed by the question text (the `question` field of
+// each AskUserQuestionItem) with values being the selected label, or a
+// comma-joined string for multi-select questions. This matches the
+// `AskUserQuestionOutput.answers` shape the Claude CLI's tool expects,
+// so we can feed it straight back as the tool's `updatedInput` via the
+// SDK's `canUseTool` callback. `displayText` is an opaque human-
+// readable rendering of the same answers — used to render the user's
+// reply bubble in chat, kept separate so the renderer owns its
+// presentation.
+export const AskUserQuestionResolution = z.object({
+  kind: z.literal("ask_user_question"),
+  requestId: z.string(),
+  answers: z.record(z.string(), z.string()),
+  displayText: z.string(),
+});
+
+// User dismissed the questionnaire (ESC / cancel). Backend denies the
+// paused tool call so the agent unwinds cleanly instead of hanging.
+export const AskUserQuestionCancelResolution = z.object({
+  kind: z.literal("ask_user_question_cancel"),
+  requestId: z.string(),
+});
+
+// User decision on an `exit_plan_approval` pending request. Fulfills
+// the paused `canUseTool` Promise: on `approved: true` the ExitPlanMode
+// tool runs (which flips the SDK off plan mode); on `false` we deny
+// so the agent stays in plan mode and gets a clear message back. On
+// reject, an optional `message` is forwarded to the agent as the deny
+// reason so the user can steer plan revisions in one shot.
+export const ExitPlanApprovalResolution = z.object({
+  kind: z.literal("exit_plan_approval"),
+  requestId: z.string(),
+  approved: z.boolean(),
+  message: z.string().optional(),
+});
+
+// User decision on a `tool_approval` pending request. Approve
+// releases this single call; reject denies it. No session-memory —
+// each call prompts independently. On reject, an optional `message`
+// is forwarded to the agent as the deny reason so the user can steer
+// the next step (e.g. "use rg instead of grep") without waiting for
+// the tool to fail and replying after.
+export const ToolApprovalResolution = z.object({
+  kind: z.literal("tool_approval"),
+  requestId: z.string(),
+  approved: z.boolean(),
+  message: z.string().optional(),
+});
+
+export const RequestResolution = z.discriminatedUnion("kind", [
+  AskUserQuestionResolution,
+  AskUserQuestionCancelResolution,
+  ExitPlanApprovalResolution,
+  ToolApprovalResolution,
+]);
+export type RequestResolution = z.infer<typeof RequestResolution>;
+
+export const IpcPendingRequest = z.object({
+  type: z.literal("pending_request"),
+  threadId: z.string(),
+  request: PendingRequest,
+});
+
+// Mode change — fires both when the user flips the dropdown (IPC
+// round-trip) and when the model calls EnterPlanMode/ExitPlanMode on
+// its own. The renderer treats this as the authoritative reconciliation
+// path for `thread.userMode`.
+export const IpcModeChanged = z.object({
+  type: z.literal("mode_changed"),
+  threadId: z.string(),
+  mode: UserMode,
 });
 
 export const IpcEvent = z.discriminatedUnion("type", [
@@ -251,6 +382,7 @@ export const IpcEvent = z.discriminatedUnion("type", [
   IpcError,
   IpcSessionInit,
   IpcToolUse,
-  IpcDeferredToolUse,
+  IpcPendingRequest,
+  IpcModeChanged,
 ]);
 export type IpcEvent = z.infer<typeof IpcEvent>;

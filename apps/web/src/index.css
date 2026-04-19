@@ -72,6 +72,60 @@ svg {
   display: none;
 }
 
+/* Thin translucent scrollbar for content-sized scroll containers where
+   the JS-driven ScrollArea can't be used (it requires a flex-given
+   height; see ScrollArea.tsx). Thumb matches the ScrollArea thumb
+   color/shape so the two feel interchangeable visually. */
+.thin-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.14) transparent;
+}
+.thin-scrollbar::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.thin-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.thin-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.14);
+  border-radius: 100px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+.thin-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.24);
+  background-clip: padding-box;
+}
+
+/* Paginator arrow button: no chrome until hovered. CSS-driven (rather
+   than JS mouse handlers) so the :hover state never desyncs after
+   click/blur — a click can leave onMouseLeave un-fired on some browsers
+   which was showing as a stuck circular bg. */
+.paginator-btn {
+  color: var(--text-secondary);
+  background: transparent;
+  border: none;
+  outline: none;
+  -webkit-appearance: none;
+  appearance: none;
+}
+.paginator-btn:hover:not(:disabled) {
+  color: var(--text-primary);
+  background: var(--surface-3);
+}
+.paginator-btn:focus {
+  outline: none;
+  background: transparent;
+}
+.paginator-btn:focus:hover:not(:disabled) {
+  background: var(--surface-3);
+}
+.paginator-btn:disabled {
+  color: var(--text-faint);
+  cursor: default;
+}
+
 
 
 /* Token fade-in for streaming text */
