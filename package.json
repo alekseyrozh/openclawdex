@@ -2,6 +2,7 @@
   "name": "openclawdex",
   "private": true,
   "description": "Desktop UI for orchestrating Claude and Codex agents",
+  "license": "MIT",
   "scripts": {
     "dev": "pnpm --filter @openclawdex/web dev",
     "dev:desktop": "concurrently -n web,desktop \"pnpm --filter @openclawdex/web dev\" \"pnpm --filter @openclawdex/desktop dev\"",

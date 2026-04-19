@@ -21,6 +21,30 @@ const ModelListResponse = z.object({
  */
 let cache: Promise<CodexModel[]> | null = null;
 
+/**
+ * Order Codex models newest-first using Codex's own `upgrade` graph.
+ * Each older model carries an `upgrade` field pointing at its
+ * successor; a model with no upgrade is a sink (newest). We sort by
+ * generation depth — distance (in upgrade hops) to a sink — so the
+ * newest models come first and chains stay correctly ordered even if
+ * Codex ships intermediate versions in the future.
+ */
+function sortByUpgradeGraph(models: CodexModel[]): CodexModel[] {
+  const byId = new Map(models.map((m) => [m.model, m]));
+  const depthCache = new Map<string, number>();
+  const depth = (id: string, seen = new Set<string>()): number => {
+    const cached = depthCache.get(id);
+    if (cached !== undefined) return cached;
+    if (seen.has(id)) return 0; // cycle guard
+    seen.add(id);
+    const up = byId.get(id)?.upgrade;
+    const d = up && byId.has(up) ? depth(up, seen) + 1 : 0;
+    depthCache.set(id, d);
+    return d;
+  };
+  return [...models].sort((a, b) => depth(a.model) - depth(b.model));
+}
+
 export function listCodexModels(): Promise<CodexModel[]> {
   if (!cache) cache = fetchCodexModels();
   return cache;
@@ -96,7 +120,11 @@ async function fetchCodexModels(): Promise<CodexModel[]> {
             finish(() => reject(new Error(`model/list schema mismatch: ${parsed.error.message}`)));
             return;
           }
-          finish(() => resolve(parsed.data.data.filter((m) => !m.hidden)));
+          finish(() =>
+            resolve(
+              sortByUpgradeGraph(parsed.data.data.filter((m) => !m.hidden)),
+            ),
+          );
         }
       }
     });

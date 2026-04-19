@@ -2,8 +2,8 @@ import { useState, useCallback, useRef, useEffect } from "react";
 import { Sidebar } from "./components/Sidebar";
 import { ChatView } from "./components/ChatView";
 import type { ImagePayload } from "./components/ChatView";
-import { IpcEvent, SessionInfo, HistoryMessage, ProjectInfo, ContextStats, type Provider, type PendingRequest } from "@openclawdex/shared";
-export type { ContextStats, Provider };
+import { IpcEvent, SessionInfo, HistoryMessage, ProjectInfo, ContextStats, type Provider, type PendingRequest, type UserMode } from "@openclawdex/shared";
+export type { ContextStats, Provider, UserMode };
 
 export interface Thread {
   id: string;
@@ -22,6 +22,15 @@ export interface Thread {
   model?: string;
   // Reasoning effort, with provider-specific vocabulary (see ChatView).
   effort?: string;
+  /**
+   * UI-level permission mode. Authoritative source on first render is
+   * the backend (derived from the CLI rollout file by main.ts); we
+   * reconcile on every `mode_changed` event, which fires both on
+   * user-initiated dropdown changes and on model-initiated
+   * `EnterPlanMode` / `ExitPlanMode` calls. New threads initialize
+   * from `localStorage.lastUserMode`, falling back to `bypassPermissions`.
+   */
+  userMode: UserMode;
   historyLoaded?: boolean;
   lastModified: Date;
   contextStats?: ContextStats;
@@ -58,6 +67,13 @@ export interface Message {
    */
   toolUseId?: string;
   images?: MessageImage[];
+  /**
+   * When this user message is the reply to an AskUserQuestion, carry
+   * the structured {question, value} pairs so the renderer can show a
+   * collapsible "Asked N questions" summary instead of a plain text
+   * bubble. `content` still holds the plaintext fallback.
+   */
+  questionAnswers?: Array<{ question: string; value: string }>;
 }
 
 export interface FileChange {
@@ -104,6 +120,19 @@ function lastSavedProvider(): Provider {
   return "claude";
 }
 
+const USER_MODE_STORAGE_KEY = "lastUserMode";
+const USER_MODES: readonly UserMode[] = ["plan", "ask", "acceptEdits", "bypassPermissions"];
+
+function lastSavedUserMode(): UserMode {
+  try {
+    const raw = localStorage.getItem(USER_MODE_STORAGE_KEY);
+    if (raw && (USER_MODES as readonly string[]).includes(raw)) {
+      return raw as UserMode;
+    }
+  } catch {}
+  return "bypassPermissions";
+}
+
 function newThread(projectId: string | null, provider: Provider = lastSavedProvider()): Thread {
   return {
     id: crypto.randomUUID(),
@@ -114,6 +143,7 @@ function newThread(projectId: string | null, provider: Provider = lastSavedProvi
     messages: [],
     historyLoaded: true,
     lastModified: new Date(),
+    userMode: lastSavedUserMode(),
   };
 }
 
@@ -132,6 +162,7 @@ function sessionToThread(s: SessionInfo): Thread {
     contextStats: s.contextStats,
     archived: s.archived ?? false,
     pinned: s.pinned ?? false,
+    userMode: s.userMode ?? "bypassPermissions",
   };
 }
 
@@ -242,6 +273,9 @@ function applyIpcEvent(thread: Thread, event: IpcEvent): Thread {
     }
     case "pending_request": {
       return { ...thread, pendingRequest: event.request };
+    }
+    case "mode_changed": {
+      return { ...thread, userMode: event.mode };
     }
   }
 }
@@ -481,6 +515,7 @@ export function App() {
           images,
           model: opts?.model,
           effort: opts?.effort,
+          userMode: pending.userMode,
         })?.catch((err) => reportIpcError("Send message", err));
       } else {
         setThreads((prev) =>
@@ -497,6 +532,7 @@ export function App() {
           images,
           model: opts?.model,
           effort: opts?.effort,
+          userMode: thread?.userMode,
         })?.catch((err) => reportIpcError("Send message", err));
       }
     },
@@ -668,13 +704,18 @@ export function App() {
     (
       threadId: string,
       request: PendingRequest,
-      payload: { answers: Record<string, string>; displayText: string },
+      payload: {
+        answers: Record<string, string>;
+        displayText: string;
+        questionAnswers: Array<{ question: string; value: string }>;
+      },
     ) => {
       const userMsg: Message = {
         id: msgId(),
         role: "user",
         content: payload.displayText,
         timestamp: new Date(),
+        questionAnswers: payload.questionAnswers,
       };
 
       // Update thread: add user message, clear pending, set running
@@ -700,6 +741,139 @@ export function App() {
             answers: payload.answers,
             displayText: payload.displayText,
           })?.catch((err) => reportIpcError("Submit question answer", err));
+          return;
+      }
+    },
+    [],
+  );
+
+  /**
+   * Approve or reject an `exit_plan_approval` pending request. Parallel
+   * to {@link handleResolveRequest}, but the payload is a single bool
+   * and the user-message bubble reflects the decision (so the chat
+   * transcript shows what the user chose). Dispatch lands on the
+   * session's `canUseTool` Promise: approve → allow, reject → deny.
+   */
+  const handleApprovePlan = useCallback(
+    (
+      threadId: string,
+      request: PendingRequest,
+      approved: boolean,
+      message?: string,
+    ) => {
+      if (request.kind !== "exit_plan_approval") return;
+      const note = message?.trim();
+      const userMsg: Message = {
+        id: msgId(),
+        role: "user",
+        content: approved
+          ? "Approved the plan."
+          : note
+            ? `Rejected the plan: ${note}`
+            : "Rejected the plan.",
+        timestamp: new Date(),
+      };
+      const updateThread = (t: Thread): Thread =>
+        t.id === threadId
+          ? { ...t, status: "running" as const, pendingRequest: undefined, messages: [...t.messages, userMsg] }
+          : t;
+      if (pendingThreadRef.current?.id === threadId) {
+        setPendingThread((prev) => prev ? updateThread(prev) as Thread : prev);
+      } else {
+        setThreads((prev) => prev.map(updateThread));
+      }
+      window.openclawdex?.resolveRequest(threadId, {
+        kind: "exit_plan_approval",
+        requestId: request.requestId,
+        approved,
+        ...(note && !approved ? { message: note } : {}),
+      })?.catch((err) => reportIpcError("Submit plan approval", err));
+    },
+    [],
+  );
+
+  /**
+   * Approve / reject a single `tool_approval` pending request. Fires
+   * from the inline ToolApprovalCard. Each call is independent —
+   * we don't remember approvals across calls.
+   */
+  const handleApproveTool = useCallback(
+    (
+      threadId: string,
+      request: PendingRequest,
+      approved: boolean,
+      message?: string,
+    ) => {
+      if (request.kind !== "tool_approval") return;
+      const note = message?.trim();
+      const label = approved
+        ? `Approved ${request.toolName}.`
+        : note
+          ? `Rejected ${request.toolName}: ${note}`
+          : `Rejected ${request.toolName}.`;
+      const userMsg: Message = {
+        id: msgId(),
+        role: "user",
+        content: label,
+        timestamp: new Date(),
+      };
+      const updateThread = (t: Thread): Thread =>
+        t.id === threadId
+          ? { ...t, status: "running" as const, pendingRequest: undefined, messages: [...t.messages, userMsg] }
+          : t;
+      if (pendingThreadRef.current?.id === threadId) {
+        setPendingThread((prev) => prev ? updateThread(prev) as Thread : prev);
+      } else {
+        setThreads((prev) => prev.map(updateThread));
+      }
+      window.openclawdex?.resolveRequest(threadId, {
+        kind: "tool_approval",
+        requestId: request.requestId,
+        approved,
+        ...(note && !approved ? { message: note } : {}),
+      })?.catch((err) => reportIpcError("Submit tool approval", err));
+    },
+    [],
+  );
+
+  // Dismiss a pending request (ESC from the questionnaire composer).
+  // Clears the pending state locally and tells the backend to deny the
+  // paused tool call so the agent unwinds rather than hanging.
+  const handleCancelRequest = useCallback(
+    (threadId: string, request: PendingRequest) => {
+      const updateThread = (t: Thread): Thread =>
+        t.id === threadId ? { ...t, pendingRequest: undefined } : t;
+
+      if (pendingThreadRef.current?.id === threadId) {
+        setPendingThread((prev) => prev ? updateThread(prev) as Thread : prev);
+      } else {
+        setThreads((prev) => prev.map(updateThread));
+      }
+
+      switch (request.kind) {
+        case "ask_user_question":
+          window.openclawdex?.resolveRequest(threadId, {
+            kind: "ask_user_question_cancel",
+            requestId: request.requestId,
+          })?.catch((err) => reportIpcError("Cancel question", err));
+          return;
+        case "exit_plan_approval":
+          // Dismissing the approval card is the same as rejecting — we
+          // route through the same resolution variant so the backend
+          // unblocks with `behavior: "deny"` and the agent stays in
+          // plan mode rather than hanging.
+          window.openclawdex?.resolveRequest(threadId, {
+            kind: "exit_plan_approval",
+            requestId: request.requestId,
+            approved: false,
+          })?.catch((err) => reportIpcError("Cancel plan approval", err));
+          return;
+        case "tool_approval":
+          window.openclawdex?.resolveRequest(threadId, {
+            kind: "tool_approval",
+            requestId: request.requestId,
+            approved: false,
+          })?.catch((err) => reportIpcError("Cancel tool approval", err));
           return;
       }
     },
@@ -849,6 +1023,44 @@ export function App() {
     }
   }, []);
 
+  /**
+   * Change the thread's UserMode. Optimistic in-memory update; the
+   * `mode_changed` IPC event echoed back from main.ts reconciles if
+   * something goes wrong. Pending threads (no sessionId yet) get the
+   * update in memory only — first send picks it up from
+   * `thread.userMode` via the `userMode` opt.
+   */
+  const handleSetMode = useCallback((threadId: string, mode: UserMode) => {
+    // Remember as the global default so new threads start in this mode.
+    try {
+      localStorage.setItem(USER_MODE_STORAGE_KEY, mode);
+    } catch { /* localStorage full or disabled — not fatal */ }
+
+    // Optimistic update. Covers both real threads and the pending one.
+    const pending = pendingThreadRef.current;
+    if (pending && pending.id === threadId) {
+      setPendingThread((prev) => (prev ? { ...prev, userMode: mode } : prev));
+    } else {
+      setThreads((prev) =>
+        prev.map((t) => (t.id === threadId ? { ...t, userMode: mode } : t)),
+      );
+    }
+
+    const thread = threadsRef.current.find((t) => t.id === threadId);
+    const sessionId = thread?.sessionId;
+    // Only push to main for committed sessions — pending threads hold
+    // the chosen mode in memory until the first send threads it through.
+    if (sessionId) {
+      const prevMode = thread.userMode;
+      window.openclawdex?.setThreadMode(sessionId, mode)?.catch((err) => {
+        reportIpcError("Change thread mode", err);
+        setThreads((p) =>
+          p.map((t) => (t.id === threadId ? { ...t, userMode: prevMode } : t)),
+        );
+      });
+    }
+  }, []);
+
   // ── Sidebar drag ──────────────────────────────────────────────
 
   const onDragStart = useCallback((e: React.MouseEvent) => {
@@ -932,10 +1144,14 @@ export function App() {
           onSend={handleSend}
           onInterrupt={handleInterrupt}
           onResolveRequest={handleResolveRequest}
+          onCancelRequest={handleCancelRequest}
+          onApprovePlan={handleApprovePlan}
+          onApproveTool={handleApproveTool}
           onUpdateThreadProvider={handleUpdateThreadProvider}
           onChangeThreadProject={handleChangeThreadProject}
           onCreateProject={handleCreateProjectBare}
           onNewChat={handleNewChat}
+          onSetMode={handleSetMode}
         />
       </div>
     </div>

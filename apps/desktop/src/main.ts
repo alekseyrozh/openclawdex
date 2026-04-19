@@ -14,7 +14,13 @@ import {
   readCodexSummaryFromFile,
   buildCodexSessionIndex,
   invalidateCodexSessionIndex,
+  readCodexUserModeFromFile,
 } from "./codex-history";
+import {
+  buildClaudeSessionIndex,
+  invalidateClaudeSessionIndex,
+  readClaudeUserModeFromFile,
+} from "./claude-history";
 import { listCodexModels } from "./codex-models";
 import { listClaudeModels } from "./claude-models";
 import type { AgentSession } from "./agent-session";
@@ -30,6 +36,7 @@ import type {
   SessionInfo,
   CodexReasoningEffort,
   ClaudeEffortLevel,
+  UserMode,
   ImagePayload as ImagePayloadT,
 } from "@openclawdex/shared";
 import { ImagePayload, RequestResolution } from "@openclawdex/shared";
@@ -40,6 +47,7 @@ import {
   ThreadsArchiveInput,
   ThreadsDeleteInput,
   ThreadsChangeProjectInput,
+  ThreadsSetModeInput,
 } from "@openclawdex/shared";
 import { initDb, getDb } from "./db";
 import { knownThreads, projects, projectFolders } from "./db/schema";
@@ -72,6 +80,13 @@ const claudePath = findClaudeBinary();
 const codexInstalled = isCodexInstalled();
 const sessions = new Map<string, AgentSession>();
 
+// UserMode overrides set via `threads:set-mode` while no live session
+// exists yet (e.g. user flips the dropdown before sending the next
+// turn). Consumed by `getOrCreateSession` on the next construction and
+// cleared once the session is live — the CLI's rollout file takes over
+// as the persistence surface from that point on.
+const pendingModeOverrides = new Map<string, UserMode>();
+
 function getOrCreateSession(
   threadId: string,
   provider: Provider,
@@ -84,10 +99,24 @@ function getOrCreateSession(
     // and let each SDK reject it if invalid. Renderer enforces the right
     // list per provider in the model picker UI.
     effort?: string;
+    userMode?: UserMode;
   },
 ): AgentSession | null {
   const existing = sessions.get(threadId);
   if (existing) return existing;
+
+  // Resolve initial mode: explicit opts > pending override > last
+  // rollout entry > "bypassPermissions".
+  const override = pendingModeOverrides.get(threadId);
+  pendingModeOverrides.delete(threadId);
+  let userMode: UserMode = opts?.userMode ?? override ?? "bypassPermissions";
+  if (!opts?.userMode && override === undefined && opts?.resumeSessionId) {
+    const fromRollout =
+      provider === "claude"
+        ? readClaudeUserModeFromFile(findClaudeRolloutFile(opts.resumeSessionId) ?? "")
+        : readCodexUserModeFromRolloutId(opts.resumeSessionId);
+    if (fromRollout) userMode = fromRollout;
+  }
 
   if (provider === "claude") {
     if (!claudePath) return null;
@@ -96,6 +125,7 @@ function getOrCreateSession(
       cwd: opts?.cwd,
       model: opts?.model,
       effort: opts?.effort as ClaudeEffortLevel | undefined,
+      userMode,
     });
     sessions.set(threadId, session);
     return session;
@@ -108,9 +138,21 @@ function getOrCreateSession(
     cwd: opts?.cwd,
     model: opts?.model,
     effort: opts?.effort as CodexReasoningEffort | undefined,
+    userMode,
   });
   sessions.set(threadId, session);
   return session;
+}
+
+// Helpers kept file-local because they only exist to bridge the two
+// history readers into `getOrCreateSession` — neither the renderer nor
+// the session constructors need them.
+function findClaudeRolloutFile(sessionId: string): string | null {
+  return buildClaudeSessionIndex().get(sessionId) ?? null;
+}
+function readCodexUserModeFromRolloutId(sessionId: string): UserMode | null {
+  const file = buildCodexSessionIndex().get(sessionId);
+  return file ? readCodexUserModeFromFile(file) : null;
 }
 
 /** Send a validated IPC event to the renderer. */
@@ -241,6 +283,7 @@ function setupIpcHandlers(): void {
         images?: unknown;
         model?: string;
         effort?: string;
+        userMode?: UserMode;
       },
     ) => {
       // Validate the `images` payload at the boundary. Per CLAUDE.md
@@ -284,6 +327,7 @@ function setupIpcHandlers(): void {
         cwd,
         model: opts?.model,
         effort: opts?.effort,
+        userMode: opts?.userMode,
       });
       if (!session) {
         const installHint =
@@ -302,10 +346,11 @@ function setupIpcHandlers(): void {
         switch (e.kind) {
           case "init": {
             currentSessionId = e.sessionId;
-            // A new Codex rollout file will appear on disk for this id;
-            // drop the cached session index so the next `load-history`
-            // call rebuilds it and finds the new rollout.
+            // A new rollout file will appear on disk for this id; drop
+            // the cached index for the relevant provider so the next
+            // history / mode lookup rebuilds and picks it up.
             if (provider === "codex") invalidateCodexSessionIndex();
+            else invalidateClaudeSessionIndex();
             try {
               await getDb()
                 .insert(knownThreads)
@@ -404,6 +449,10 @@ function setupIpcHandlers(): void {
             break;
           }
 
+          case "mode_changed":
+            emitToRenderer({ type: "mode_changed", threadId, mode: e.mode });
+            break;
+
           case "error":
             emitToRenderer({
               type: "error",
@@ -434,7 +483,7 @@ function setupIpcHandlers(): void {
    */
   ipcMain.handle(
     "session:resolve-request",
-    (_event, threadId: string, resolution: unknown) => {
+    async (_event, threadId: string, resolution: unknown) => {
       const session = sessions.get(threadId);
       if (!session) return;
       const parsed = RequestResolution.safeParse(resolution);
@@ -447,7 +496,7 @@ function setupIpcHandlers(): void {
         return;
       }
       emitToRenderer({ type: "status", threadId, status: "running" });
-      session.resolveRequest(parsed.data);
+      await session.resolveRequest(parsed.data);
     },
   );
 
@@ -486,18 +535,27 @@ function setupIpcHandlers(): void {
     // number of rows × total rollout files. Skip the walk entirely if
     // no row is Codex.
     const hasCodex = known.some((r) => (r.provider ?? "claude") === "codex");
+    const hasClaude = known.some((r) => (r.provider ?? "claude") === "claude");
     const codexIndex = hasCodex ? buildCodexSessionIndex() : null;
+    const claudeIndex = hasClaude ? buildClaudeSessionIndex() : null;
     const results: SessionInfo[] = [];
 
     for (const row of known) {
       const provider = (row.provider ?? "claude") as Provider;
       const contextStats = parseContextStats(row.contextStats);
+      // Mode resolution order: live in-memory override (user just
+      // flipped the dropdown without sending yet) → rollout file's
+      // last recorded mode → unset (renderer falls back to its
+      // localStorage default).
+      const override = pendingModeOverrides.get(row.sessionId);
 
       if (provider === "claude") {
         // Intersect with on-disk Claude sessions; if the JSONL is gone
         // we skip the row so we don't surface a thread with no history.
         const s = claudeMap.get(row.sessionId);
         if (!s) continue;
+        const rolloutFile = claudeIndex?.get(row.sessionId) ?? null;
+        const diskMode = rolloutFile ? readClaudeUserModeFromFile(rolloutFile) : null;
         results.push({
           sessionId: s.sessionId,
           provider: "claude",
@@ -505,11 +563,12 @@ function setupIpcHandlers(): void {
           lastModified: s.lastModified,
           cwd: s.cwd,
           firstPrompt: s.firstPrompt,
-          gitBranch: s.gitBranch,
+          gitBranch: s.gitBranch === "HEAD" ? undefined : s.gitBranch,
           projectId: row.projectId ?? undefined,
           contextStats,
           pinned: row.pinned ?? false,
           archived: row.archived ?? false,
+          ...(override ? { userMode: override } : diskMode ? { userMode: diskMode } : {}),
         });
       } else {
         // Codex: enrich from the CLI's on-disk rollout JSONL, since its
@@ -521,6 +580,7 @@ function setupIpcHandlers(): void {
         const diskSummary = rolloutFile
           ? readCodexSummaryFromFile(rolloutFile)
           : null;
+        const diskMode = rolloutFile ? readCodexUserModeFromFile(rolloutFile) : null;
         const summary = row.customName ?? diskSummary ?? "Codex thread";
         results.push({
           sessionId: row.sessionId,
@@ -531,6 +591,7 @@ function setupIpcHandlers(): void {
           contextStats,
           pinned: row.pinned ?? false,
           archived: row.archived ?? false,
+          ...(override ? { userMode: override } : diskMode ? { userMode: diskMode } : {}),
         });
       }
     }
@@ -760,7 +821,7 @@ function setupIpcHandlers(): void {
   /** Get the current git branch for a directory. */
   ipcMain.handle("git:branch", (_event, cwd: string): string | null => {
     try {
-      const branch = execSync("git rev-parse --abbrev-ref HEAD", {
+      const branch = execSync("git symbolic-ref --short -q HEAD", {
         cwd,
         encoding: "utf-8",
         stdio: ["ignore", "pipe", "ignore"],
@@ -1019,6 +1080,37 @@ function setupIpcHandlers(): void {
         .where(eq(knownThreads.sessionId, sessionId));
     },
   );
+
+  /**
+   * Change the effective {@link UserMode} for a thread.
+   *
+   * If a live session exists we flip it immediately (Claude: push into
+   * the SDK's `setPermissionMode`; Codex: stash for the next turn).
+   * If not, we stash in `pendingModeOverrides` so the next send picks
+   * it up. Durability comes from the CLI's own rollout file once the
+   * next turn fires, so no DB write is needed here.
+   */
+  ipcMain.handle("threads:set-mode", async (_event, ...args: unknown[]) => {
+    const [threadId, mode] = parseIpcArgs(
+      "threads:set-mode",
+      ThreadsSetModeInput,
+      args,
+    );
+    const session = sessions.get(threadId);
+    if (session) {
+      await session.setMode(mode, (e) => {
+        if (e.kind === "mode_changed") {
+          emitToRenderer({ type: "mode_changed", threadId, mode: e.mode });
+        }
+      });
+    } else {
+      pendingModeOverrides.set(threadId, mode);
+      // Echo to the renderer so the dropdown reflects the new mode
+      // immediately even without a live session.
+      emitToRenderer({ type: "mode_changed", threadId, mode });
+    }
+    return mode;
+  });
 }
 
 // ── Window creation ───────────────────────────────────────────

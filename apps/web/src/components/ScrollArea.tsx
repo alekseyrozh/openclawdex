@@ -4,6 +4,14 @@ interface ScrollAreaProps {
   children: React.ReactNode;
   className?: string;
   onScroll?: (el: HTMLDivElement) => void;
+  /**
+   * When set, the scroll container is content-sized up to this height
+   * (as a CSS length: `"420px"`, `"50vh"`, `"min(50vh, 420px)"`, …)
+   * instead of filling its parent via `absolute inset-0`. Use this when
+   * the ScrollArea sits inside a non-flex parent that can't give it a
+   * height. Thumb styling and fade behavior are identical either way.
+   */
+  maxHeight?: string;
 }
 
 export interface ScrollAreaHandle {
@@ -11,7 +19,7 @@ export interface ScrollAreaHandle {
 }
 
 export const ScrollArea = forwardRef<ScrollAreaHandle, ScrollAreaProps>(
-  function ScrollArea({ children, className, onScroll: onScrollProp }, ref) {
+  function ScrollArea({ children, className, onScroll: onScrollProp, maxHeight }, ref) {
     const scrollRef = useRef<HTMLDivElement>(null);
     const [thumb, setThumb] = useState({ height: 0, top: 0, visible: false });
     const [hovered, setHovered] = useState(false);
@@ -77,6 +85,48 @@ export const ScrollArea = forwardRef<ScrollAreaHandle, ScrollAreaProps>(
       if (scrollRef.current) onScrollProp?.(scrollRef.current);
     }, [update, onScrollProp]);
 
+    // Two layout modes:
+    //   - Parent-sized (default): outer is `absolute inset-0`-style via
+    //     caller's flex-1 etc. Inner scroller fills it absolutely so
+    //     it reports the correct clientHeight for thumb math.
+    //   - Content-sized (maxHeight set): outer and inner are both in-flow
+    //     capped at `maxHeight`. Works inside non-flex parents.
+    const thumbNode = thumb.visible && (
+      <div
+        className="absolute right-1 rounded-full cursor-pointer transition-opacity duration-300"
+        style={{
+          top: thumb.top + 6,
+          height: thumb.height - 12,
+          width: 8,
+          background: hovered ? "rgba(255,255,255,0.24)" : "rgba(255,255,255,0.14)",
+          borderRadius: 100,
+          opacity: scrolling || hovered ? 1 : 0,
+        }}
+        onMouseDown={onThumbMouseDown}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+      />
+    );
+
+    if (maxHeight !== undefined) {
+      return (
+        <div
+          className={`relative ${className ?? ""}`}
+          style={{ maxHeight }}
+        >
+          <div
+            ref={scrollRef}
+            onScroll={onScroll}
+            className="overflow-y-auto"
+            style={{ maxHeight, scrollbarWidth: "none" } as React.CSSProperties}
+          >
+            {children}
+          </div>
+          {thumbNode}
+        </div>
+      );
+    }
+
     return (
       <div className={`relative overflow-hidden ${className ?? ""}`}>
         <div
@@ -87,22 +137,7 @@ export const ScrollArea = forwardRef<ScrollAreaHandle, ScrollAreaProps>(
         >
           {children}
         </div>
-        {thumb.visible && (
-          <div
-            className="absolute right-1 rounded-full cursor-pointer transition-opacity duration-300"
-            style={{
-              top: thumb.top + 6,
-              height: thumb.height - 12,
-              width: 8,
-              background: hovered ? "rgba(255,255,255,0.24)" : "rgba(255,255,255,0.14)",
-              borderRadius: 100,
-              opacity: scrolling || hovered ? 1 : 0,
-            }}
-            onMouseDown={onThumbMouseDown}
-            onMouseEnter={() => setHovered(true)}
-            onMouseLeave={() => setHovered(false)}
-          />
-        )}
+        {thumbNode}
       </div>
     );
   },

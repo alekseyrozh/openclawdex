@@ -20,9 +20,9 @@
  *   approval RPC — future). No-op on backends that don't know the kind.
  */
 
-import type { PendingRequest, Provider, RequestResolution } from "@openclawdex/shared";
+import type { PendingRequest, Provider, RequestResolution, UserMode } from "@openclawdex/shared";
 
-export type { PendingRequest, RequestResolution };
+export type { PendingRequest, RequestResolution, UserMode };
 
 /**
  * One image attachment on an outgoing user message.
@@ -82,6 +82,15 @@ export type SessionEvent =
    * session to unblock the backend.
    */
   | { kind: "pending_request"; request: PendingRequest }
+  /**
+   * The session's effective UserMode changed. Fires both when the user
+   * switches modes via the UI (IPC round-trip echoes this back for
+   * reconciliation) and when the model flips its own mode via
+   * `EnterPlanMode` / `ExitPlanMode` (detected in the streamed tool
+   * results). Renderer treats this as the authoritative path for
+   * `thread.userMode`.
+   */
+  | { kind: "mode_changed"; mode: UserMode }
   | { kind: "error"; message: string }
   | { kind: "done" };
 
@@ -114,12 +123,25 @@ export interface AgentSession {
   interrupt(): Promise<void>;
 
   /**
+   * Change the effective {@link UserMode} for this session. Emits a
+   * `mode_changed` event via `onEvent` so the renderer can reconcile.
+   * For Claude, this flips the live SDK query's permission mode
+   * immediately (future tool calls see the new gate) — the returned
+   * Promise resolves only after the SDK accepts the flip, so callers
+   * never see an optimistic UI update that silently diverges from the
+   * CLI's actual state. For Codex, the new mode applies on the next
+   * `turn/start` — the current turn, if any, keeps its existing
+   * policies.
+   */
+  setMode(mode: UserMode, onEvent: (e: SessionEvent) => void): Promise<void>;
+
+  /**
    * Resolve a {@link PendingRequest} previously emitted on a `result`
    * event. The `resolution.kind` must match the request's `kind`;
    * backends dispatch on it to route into their native protocol.
    * Unknown kinds are silently ignored (future-variant safety).
    */
-  resolveRequest(resolution: RequestResolution): void;
+  resolveRequest(resolution: RequestResolution): Promise<void>;
 
   /** Close the session entirely and release any child-process handles. */
   close(): void;

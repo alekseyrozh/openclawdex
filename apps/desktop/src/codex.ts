@@ -5,7 +5,7 @@ import path from "path";
 import { randomUUID } from "crypto";
 import { app } from "electron";
 import { z } from "zod";
-import { type CodexReasoningEffort } from "@openclawdex/shared";
+import { type CodexReasoningEffort, type UserMode } from "@openclawdex/shared";
 import type {
   AgentSession,
   ContextUsage,
@@ -13,6 +13,7 @@ import type {
   RequestResolution,
   SessionEvent,
 } from "./agent-session";
+import { codexModeOptions } from "./user-mode";
 
 /** Best-effort cleanup of a single tempfile. Never throws. */
 function safeUnlink(p: string): void {
@@ -33,6 +34,7 @@ export type CodexSessionOptions = {
   cwd?: string;
   model?: string;
   effort?: CodexReasoningEffort;
+  userMode?: UserMode;
 };
 
 const JsonRpcResponse = z.object({
@@ -67,6 +69,10 @@ export class CodexSession implements AgentSession {
   private readonly cwd: string | undefined;
   private readonly modelLabel: string;
   private readonly effort: CodexReasoningEffort | undefined;
+  // Effective UI-level permission mode. Applied on every `turn/start`
+  // (Codex has no mid-turn mutation); switching modes mid-turn takes
+  // effect on the next user message.
+  private userMode: UserMode;
 
   private readonly child: ChildProcessWithoutNullStreams;
   private stdoutBuf = "";
@@ -93,6 +99,7 @@ export class CodexSession implements AgentSession {
     this.cwd = opts?.cwd;
     this.modelLabel = opts?.model ?? "codex";
     this.effort = opts?.effort;
+    this.userMode = opts?.userMode ?? "bypassPermissions";
     this.threadId = opts?.resumeThreadId ?? null;
 
     this.initPromise = new Promise<void>((resolve, reject) => {
@@ -387,11 +394,12 @@ export class CodexSession implements AgentSession {
       return;
     }
 
+    const startOpts = codexModeOptions(this.userMode, this.cwd);
     const result = await this.rpc("thread/start", {
       ...(this.modelLabel && { model: this.modelLabel }),
       ...(this.cwd && { cwd: this.cwd }),
-      approvalPolicy: "never",
-      sandbox: "workspace-write",
+      approvalPolicy: startOpts.approvalPolicy,
+      sandbox: startOpts.sandbox,
     });
     const threadId =
       result && typeof result === "object"
@@ -473,19 +481,16 @@ export class CodexSession implements AgentSession {
 
       await new Promise<void>((resolve, reject) => {
         this.currentTurn = { onEvent, resolve, reject, turnId: null };
+        const turnOpts = codexModeOptions(this.userMode, this.cwd);
         void this.rpc("turn/start", {
           threadId: this.threadId,
           input,
           ...(this.cwd && { cwd: this.cwd }),
           ...(this.modelLabel && { model: this.modelLabel }),
           ...(this.effort && { effort: this.effort }),
-          approvalPolicy: "never",
-          sandboxPolicy: {
-            type: "workspaceWrite",
-            networkAccess: true,
-            ...(this.cwd && { writableRoots: [this.cwd] }),
-          },
-          sandbox: "workspace-write",
+          approvalPolicy: turnOpts.approvalPolicy,
+          sandboxPolicy: turnOpts.sandboxPolicy,
+          sandbox: turnOpts.sandbox,
         }).then((result) => {
           const turnId =
             result && typeof result === "object"
@@ -514,10 +519,27 @@ export class CodexSession implements AgentSession {
     onEvent({ kind: "done" });
   }
 
-  resolveRequest(_resolution: RequestResolution): void {
+  async resolveRequest(_resolution: RequestResolution): Promise<void> {
     // Codex doesn't emit any PendingRequest variants today. When we wire
     // app-server approval requests, this will dispatch on
     // `resolution.kind` and reply on the paused JSON-RPC call.
+  }
+
+  /**
+   * Update the effective UserMode. Codex has no mid-turn mutation for
+   * approval/sandbox policies — they're turn-scoped on `turn/start` —
+   * so we just stash the new mode. It will be picked up on the next
+   * user message. Mid-turn callers see the in-flight turn finish
+   * under the previous policies.
+   */
+  async setMode(mode: UserMode, onEvent: (e: SessionEvent) => void): Promise<void> {
+    if (this.userMode === mode) return;
+    this.userMode = mode;
+    onEvent({ kind: "mode_changed", mode });
+  }
+
+  get currentUserMode(): UserMode {
+    return this.userMode;
   }
 
   async interrupt(): Promise<void> {

@@ -6,9 +6,11 @@ import {
   type SDKUserMessage,
   type Options as ClaudeQueryOptions,
   type CanUseTool,
+  type HookInput,
+  type HookJSONOutput,
   type PermissionResult,
 } from "@anthropic-ai/claude-agent-sdk";
-import type { ClaudeEffortLevel } from "@openclawdex/shared";
+import type { ClaudeEffortLevel, UserMode } from "@openclawdex/shared";
 import type {
   AgentSession,
   ContextUsage,
@@ -17,6 +19,39 @@ import type {
   RequestResolution,
   SessionEvent,
 } from "./agent-session";
+import { CLAUDE_MODE, claudePermissionModeToUserMode } from "./user-mode";
+
+/**
+ * Read-only tools — we never prompt for these, regardless of mode.
+ * Auto-allowing keeps the UX sane: prompting for every Read or Grep
+ * would bury users in approval cards with no security benefit.
+ * `TodoWrite` is included because it only mutates the in-session
+ * todo list, not the user's filesystem.
+ */
+const READ_ONLY_TOOLS = new Set([
+  "Read",
+  "Grep",
+  "Glob",
+  "LS",
+  "ToolSearch",
+  "WebFetch",
+  "WebSearch",
+  "StructuredOutput",
+  "TodoWrite",
+]);
+
+/**
+ * Privileged tools — prompt in BOTH "ask" and "acceptEdits" modes.
+ * These can do arbitrary things on the user's machine (run shell
+ * commands, spawn subagents that run shell commands, etc.), so the
+ * "acceptEdits" shortcut — which auto-allows file edits — still
+ * requires explicit approval for them.
+ */
+const PRIVILEGED_TOOLS = new Set([
+  "Bash",
+  "Agent",
+  "Task",
+]);
 
 // Re-export the shared types so existing imports from "./claude" keep working
 // while we migrate call sites over to "./agent-session".
@@ -76,7 +111,45 @@ export class ClaudeSession implements AgentSession {
     }
   >();
 
+  // Pending ExitPlanMode approvals keyed by requestId. Same pattern as
+  // pendingAskQuestions — canUseTool stashes a resolver; resolveRequest
+  // fulfills it with `allow` (user approved the plan) or `deny` (user
+  // rejected). Separate from pendingAskQuestions so the id namespaces
+  // don't collide and the dispatch in resolveRequest stays obvious.
+  private pendingExitPlanApprovals = new Map<
+    string,
+    {
+      resolve: (r: PermissionResult) => void;
+      toolInput: Record<string, unknown>;
+    }
+  >();
+
+  // Per-tool approvals awaiting a user decision. Same stash/resolve
+  // pattern as AskUserQuestion — canUseTool awaits the Promise,
+  // resolveRequest fulfills it.
+  private pendingToolApprovals = new Map<
+    string,
+    {
+      resolve: (r: PermissionResult) => void;
+      toolInput: Record<string, unknown>;
+    }
+  >();
+
+  // Most recent `onEvent` callback, captured on send(). Lets handlers
+  // that run outside the send-callback closure (e.g. resolveRequest,
+  // which is fired from a separate IPC message) emit SessionEvents
+  // without every caller having to re-plumb the callback.
+  private lastOnEvent: ((e: SessionEvent) => void) | null = null;
+
   private cwd: string | undefined;
+
+  // Cached copy of the SDK's current permission mode — NOT a source of
+  // truth. Seeded from the constructor / SDKSystemMessage init, then
+  // reconciled on every tool event via the PreToolUse hook (which
+  // reads `permission_mode` off BaseHookInput). User-initiated flips
+  // and plan approvals update this optimistically for UI snappiness;
+  // the hook corrects any drift.
+  private userMode: UserMode;
 
   constructor(
     claudePath: string,
@@ -85,6 +158,7 @@ export class ClaudeSession implements AgentSession {
       cwd?: string;
       model?: string;
       effort?: ClaudeEffortLevel;
+      userMode?: UserMode;
     },
   ) {
     this.claudePath = claudePath;
@@ -92,6 +166,7 @@ export class ClaudeSession implements AgentSession {
     this.cwd = opts?.cwd;
     this.model = opts?.model;
     this.effort = opts?.effort;
+    this.userMode = opts?.userMode ?? "bypassPermissions";
   }
 
   private static toUserMessage(text: string, images?: ImageInput[]): SDKUserMessage {
@@ -180,6 +255,43 @@ export class ClaudeSession implements AgentSession {
   }
 
   /**
+   * Reconcile our cached `userMode` against the SDK's ground truth.
+   * Called from the PreToolUse hook on every tool event and from the
+   * init message. If the SDK reports a mode we haven't recorded yet
+   * (user flip we didn't predict, ExitPlanMode transition, a tool's
+   * internal permission update, etc.), we update the cache and emit
+   * `mode_changed` so the renderer dropdown converges to truth.
+   */
+  private reconcileModeFromSdk(raw: string | undefined): void {
+    if (!raw) return;
+    const observed = claudePermissionModeToUserMode(raw);
+    if (observed === this.userMode) return;
+    this.userMode = observed;
+    this.lastOnEvent?.({ kind: "mode_changed", mode: observed });
+  }
+
+  /**
+   * Mode-reconcile hook — wired to multiple lifecycle events
+   * (PreToolUse, PostToolUse, Stop, UserPromptSubmit) so we observe
+   * `permission_mode` off the hook input at every plausible moment
+   * the CLI's mode could shift. We don't gate anything here (that's
+   * `canUseTool`'s job); we only sync our cached `userMode` to ground
+   * truth. Returning `{ continue: true }` is the hook equivalent of
+   * "no-op, proceed".
+   *
+   * Why multiple taps: PreToolUse alone misses transitions caused by
+   * the *current* tool (ExitPlanMode flips mode in its handler — we
+   * see that on PostToolUse, not PreToolUse) and transitions that
+   * land at end of turn with no follow-up tool call (Stop).
+   */
+  private buildModeReconcileHook(): (input: HookInput) => Promise<HookJSONOutput> {
+    return async (input: HookInput): Promise<HookJSONOutput> => {
+      this.reconcileModeFromSdk(input.permission_mode);
+      return { continue: true };
+    };
+  }
+
+  /**
    * Build the `canUseTool` callback passed to `query()`. The callback
    * is invoked by the SDK once per tool call the model wants to make.
    *
@@ -198,48 +310,182 @@ export class ClaudeSession implements AgentSession {
    */
   private buildCanUseTool(onEvent: (e: SessionEvent) => void): CanUseTool {
     return async (toolName, toolInput, options): Promise<PermissionResult> => {
-      if (toolName !== "AskUserQuestion") {
-        // Every other tool is pre-approved (we ship with
-        // `permissionMode: "bypassPermissions"`). We're only
-        // intercepting to handle AskUserQuestion, so fall through to
-        // allow with the unmodified input.
-        return { behavior: "allow" };
+      // Special-case tools always take precedence over mode logic.
+      if (toolName === "AskUserQuestion") {
+        return this.interceptAskUserQuestion(toolInput, options, onEvent);
+      }
+      if (toolName === "ExitPlanMode") {
+        return this.interceptExitPlanMode(toolInput, options, onEvent);
       }
 
-      const requestId = randomUUID();
-      const request: PendingRequest = {
-        kind: "ask_user_question",
-        requestId,
-        toolName,
-        input: toolInput,
-      };
+      // Decide whether this tool needs an approval prompt given the
+      // current UserMode. We MUST echo `updatedInput: toolInput` on
+      // allow — the SDK validates the response shape with Zod in all
+      // non-bypass modes and rejects bare `{behavior: "allow"}` with
+      // "Invalid input: expected record, received undefined".
+      const allow: PermissionResult = { behavior: "allow", updatedInput: toolInput };
 
-      const answerPromise = new Promise<PermissionResult>((resolve) => {
-        this.pendingAskQuestions.set(requestId, {
-          resolve,
-          rawQuestions: toolInput.questions,
-        });
-      });
+      // Bypass and plan modes: no prompting. In plan mode, the SDK's
+      // own mode gate blocks mutating tools before they run — we
+      // shouldn't also prompt because the user already picked plan
+      // mode with full knowledge that edits are blocked.
+      if (this.userMode === "bypassPermissions" || this.userMode === "plan") {
+        return allow;
+      }
 
-      // If the SDK's abort signal fires (e.g. the user interrupted the
-      // turn while we were waiting for answers), resolve with `deny` so
-      // the SDK can unwind cleanly instead of hanging forever.
-      const onAbort = () => {
-        const pending = this.pendingAskQuestions.get(requestId);
-        if (!pending) return;
-        this.pendingAskQuestions.delete(requestId);
-        pending.resolve({
-          behavior: "deny",
-          message: "User cancelled before answering.",
-          interrupt: true,
-        });
-      };
-      options.signal.addEventListener("abort", onAbort, { once: true });
+      // Read-only tools never prompt.
+      if (READ_ONLY_TOOLS.has(toolName)) return allow;
 
-      onEvent({ kind: "pending_request", request });
+      // acceptEdits mode: file-edit tools pass through; privileged
+      // (Bash / Agent / Task) still prompt. Anything we don't
+      // recognize falls into "prompt" for safety.
+      if (this.userMode === "acceptEdits" && !PRIVILEGED_TOOLS.has(toolName)) {
+        return allow;
+      }
 
-      return answerPromise;
+      // ask mode (or acceptEdits + privileged tool, or unknown tool
+      // in acceptEdits): prompt the user.
+      return this.interceptToolApproval(toolName, toolInput, options, onEvent);
     };
+  }
+
+  /** canUseTool gate for AskUserQuestion — paused until the UI answers. */
+  private async interceptAskUserQuestion(
+    toolInput: Record<string, unknown>,
+    options: { signal: AbortSignal },
+    onEvent: (e: SessionEvent) => void,
+  ): Promise<PermissionResult> {
+    const requestId = randomUUID();
+    const request: PendingRequest = {
+      kind: "ask_user_question",
+      requestId,
+      toolName: "AskUserQuestion",
+      input: toolInput,
+    };
+
+    const answerPromise = new Promise<PermissionResult>((resolve) => {
+      this.pendingAskQuestions.set(requestId, {
+        resolve,
+        rawQuestions: toolInput.questions,
+      });
+    });
+
+    // If the SDK's abort signal fires (e.g. the user interrupted the
+    // turn while we were waiting for answers), resolve with `deny` so
+    // the SDK can unwind cleanly instead of hanging forever.
+    const onAbort = () => {
+      const pending = this.pendingAskQuestions.get(requestId);
+      if (!pending) return;
+      this.pendingAskQuestions.delete(requestId);
+      pending.resolve({
+        behavior: "deny",
+        message: "User cancelled before answering.",
+        interrupt: true,
+      });
+    };
+    options.signal.addEventListener("abort", onAbort, { once: true });
+
+    onEvent({ kind: "pending_request", request });
+
+    return answerPromise;
+  }
+
+  /**
+   * canUseTool gate for arbitrary mutating / privileged tools when
+   * the session is in "ask" mode (or "acceptEdits" for shell-like
+   * tools). Emits a `tool_approval` pending request carrying the
+   * tool name and its input, blocks until the user decides.
+   *
+   * Input preview rendering (diff for Edit, command for Bash, etc.)
+   * lives in the renderer's `ToolApprovalCard` — we just carry the
+   * raw `toolInput` across the IPC boundary so we don't lock the
+   * preview logic to the main process.
+   */
+  private async interceptToolApproval(
+    toolName: string,
+    toolInput: Record<string, unknown>,
+    options: { signal: AbortSignal },
+    onEvent: (e: SessionEvent) => void,
+  ): Promise<PermissionResult> {
+    const requestId = randomUUID();
+    const request: PendingRequest = {
+      kind: "tool_approval",
+      requestId,
+      toolName,
+      toolInput,
+    };
+
+    const answerPromise = new Promise<PermissionResult>((resolve) => {
+      this.pendingToolApprovals.set(requestId, { resolve, toolInput });
+    });
+
+    const onAbort = () => {
+      const pending = this.pendingToolApprovals.get(requestId);
+      if (!pending) return;
+      this.pendingToolApprovals.delete(requestId);
+      pending.resolve({
+        behavior: "deny",
+        message: "User cancelled before approving the tool call.",
+        interrupt: true,
+      });
+    };
+    options.signal.addEventListener("abort", onAbort, { once: true });
+
+    onEvent({ kind: "pending_request", request });
+
+    return answerPromise;
+  }
+
+  /**
+   * canUseTool gate for ExitPlanMode. The SDK marks this tool
+   * `shouldDefer: true`, meaning native Claude Code would render its
+   * own "Apply plan?" dialog. In our wrapper we instead emit a
+   * `pending_request` with the plan markdown, show a PlanApprovalCard
+   * in the renderer, and block on the user's choice.
+   *
+   * On approve: resolve with `allow`, flip userMode off plan, emit
+   * `mode_changed` so the dropdown reflects the transition.
+   * On reject: resolve with `deny` — the agent sees a failure and
+   * stays in plan mode.
+   */
+  private async interceptExitPlanMode(
+    toolInput: Record<string, unknown>,
+    options: { signal: AbortSignal },
+    onEvent: (e: SessionEvent) => void,
+  ): Promise<PermissionResult> {
+    const requestId = randomUUID();
+    const rawPlan = toolInput.plan;
+    const plan = typeof rawPlan === "string" ? rawPlan : "";
+    const rawFilePath = toolInput.planFilePath;
+    const planFilePath = typeof rawFilePath === "string" ? rawFilePath : undefined;
+
+    const request: PendingRequest = {
+      kind: "exit_plan_approval",
+      requestId,
+      toolName: "ExitPlanMode",
+      plan,
+      ...(planFilePath && { planFilePath }),
+    };
+
+    const answerPromise = new Promise<PermissionResult>((resolve) => {
+      this.pendingExitPlanApprovals.set(requestId, { resolve, toolInput });
+    });
+
+    const onAbort = () => {
+      const pending = this.pendingExitPlanApprovals.get(requestId);
+      if (!pending) return;
+      this.pendingExitPlanApprovals.delete(requestId);
+      pending.resolve({
+        behavior: "deny",
+        message: "User cancelled before approving the plan.",
+        interrupt: true,
+      });
+    };
+    options.signal.addEventListener("abort", onAbort, { once: true });
+
+    onEvent({ kind: "pending_request", request });
+
+    return answerPromise;
   }
 
   /**
@@ -248,6 +494,7 @@ export class ClaudeSession implements AgentSession {
    * into the same session.
    */
   send(message: string, images: ImageInput[] | undefined, onEvent: (e: SessionEvent) => void): void {
+    this.lastOnEvent = onEvent;
     this.pushMessage(message, images);
 
     if (this.streamLoopRunning) return;
@@ -256,9 +503,32 @@ export class ClaudeSession implements AgentSession {
     const options: ClaudeQueryOptions = {
       pathToClaudeCodeExecutable: this.claudePath,
       includePartialMessages: true,
-      permissionMode: "bypassPermissions",
-      allowDangerouslySkipPermissions: true,
+      permissionMode: CLAUDE_MODE[this.userMode],
+      // The SDK *requires* this flag when — and only when — the mode is
+      // `bypassPermissions`. Setting it alongside `plan` / `default` /
+      // `acceptEdits` either errors or suppresses those modes' gates.
+      ...(this.userMode === "bypassPermissions" && { allowDangerouslySkipPermissions: true }),
       canUseTool: this.buildCanUseTool(onEvent),
+      // Observe the CLI's actual `permission_mode` at every lifecycle
+      // event we can hook and reconcile our cached `userMode` against
+      // it. This catches any mode transition we didn't predict —
+      // whether it originated from our own `setPermissionMode`, from
+      // a tool's internal permission update (e.g. ExitPlanMode's
+      // handler), or from a future CLI change — without us having to
+      // enumerate them. PreToolUse alone misses end-of-turn flips
+      // (no follow-up tool) and flips caused by the current tool
+      // (ExitPlanMode mutates mode mid-handler — visible only on
+      // PostToolUse). One callback, four taps.
+      hooks: (() => {
+        const reconcile = this.buildModeReconcileHook();
+        const matcher = [{ hooks: [reconcile] }];
+        return {
+          PreToolUse: matcher,
+          PostToolUse: matcher,
+          Stop: matcher,
+          UserPromptSubmit: matcher,
+        };
+      })(),
       resume: this.resumeSessionId,
       cwd: this.cwd,
       ...(this.model && { model: this.model }),
@@ -316,6 +586,12 @@ export class ClaudeSession implements AgentSession {
     switch (msg.type) {
       case "system": {
         if (msg.subtype === "init") {
+          // Init carries the authoritative permission mode the CLI is
+          // starting (or resuming) in. Reconcile before emitting the
+          // init event so any downstream consumer reading `userMode`
+          // sees ground truth.
+          const initMode = (msg as { permissionMode?: string }).permissionMode;
+          this.reconcileModeFromSdk(initMode);
           onEvent({
             kind: "init",
             sessionId: msg.session_id,
@@ -348,13 +624,20 @@ export class ClaudeSession implements AgentSession {
         // events reference the same question, so the renderer keys the
         // card on the tool_use entry and resolves via the pending
         // request.
+        //
+        // Mode transitions (ExitPlanMode, etc.) are NOT handled here —
+        // the PreToolUse hook reconciles `userMode` against the CLI's
+        // authoritative `permission_mode` on every tool event, so we
+        // don't need to sniff tool names and guess.
         const content = (msg as { message?: { content?: unknown } }).message?.content;
         if (Array.isArray(content)) {
           for (const block of content) {
             if (block && typeof block === "object" && (block as { type?: string }).type === "tool_use") {
               const name = (block as { name?: string }).name;
               const input = (block as { input?: Record<string, unknown> }).input ?? {};
-              if (name) onEvent({ kind: "tool_use", toolName: name, toolInput: input });
+              if (name) {
+                onEvent({ kind: "tool_use", toolName: name, toolInput: input });
+              }
             }
           }
         }
@@ -373,7 +656,7 @@ export class ClaudeSession implements AgentSession {
    * normal output. If no resolver exists for the requestId (e.g. the
    * renderer is replaying an old thread) this is a silent no-op.
    */
-  resolveRequest(resolution: RequestResolution): void {
+  async resolveRequest(resolution: RequestResolution): Promise<void> {
     switch (resolution.kind) {
       case "ask_user_question": {
         const pending = this.pendingAskQuestions.get(resolution.requestId);
@@ -388,7 +671,102 @@ export class ClaudeSession implements AgentSession {
         });
         return;
       }
+      case "ask_user_question_cancel": {
+        const pending = this.pendingAskQuestions.get(resolution.requestId);
+        if (!pending) return;
+        this.pendingAskQuestions.delete(resolution.requestId);
+        pending.resolve({
+          behavior: "deny",
+          message: "User dismissed the question.",
+          interrupt: true,
+        });
+        return;
+      }
+      case "tool_approval": {
+        const pending = this.pendingToolApprovals.get(resolution.requestId);
+        if (!pending) return;
+        this.pendingToolApprovals.delete(resolution.requestId);
+        if (resolution.approved) {
+          pending.resolve({
+            behavior: "allow",
+            updatedInput: pending.toolInput,
+          });
+        } else {
+          const note = resolution.message?.trim();
+          pending.resolve({
+            behavior: "deny",
+            message: note
+              ? `The user rejected this tool call with the following feedback: "${note}". Address their feedback before retrying — do not ask them to repeat it.`
+              : "User rejected the tool call.",
+          });
+        }
+        return;
+      }
+      case "exit_plan_approval": {
+        const pending = this.pendingExitPlanApprovals.get(resolution.requestId);
+        if (!pending) return;
+        this.pendingExitPlanApprovals.delete(resolution.requestId);
+        if (resolution.approved) {
+          // Just allow the tool through. The CLI's ExitPlanMode
+          // handler picks the next permission mode on its own
+          // (driven by the model-supplied `allowedPrompts` and the
+          // CLI's post-approval defaults) — forcing a specific mode
+          // from our side via `updatedPermissions` or
+          // `setPermissionMode` would override whatever the CLI
+          // decides, including valid edge cases like transitioning
+          // to `default` when the plan needs approvals.
+          //
+          // We don't touch `this.userMode` here either. The
+          // PostToolUse hook (wired alongside PreToolUse / Stop /
+          // UserPromptSubmit) observes the CLI's new
+          // `permission_mode` immediately after ExitPlanMode's
+          // handler runs and emits `mode_changed` from ground truth.
+          pending.resolve({
+            behavior: "allow",
+            updatedInput: pending.toolInput,
+          });
+        } else {
+          const note = resolution.message?.trim();
+          pending.resolve({
+            behavior: "deny",
+            message: note
+              ? `The user rejected this plan with the following feedback: "${note}". Revise the plan to address their feedback — do not ask them what to change.`
+              : "User rejected the proposed plan.",
+          });
+        }
+        return;
+      }
     }
+  }
+
+  /**
+   * Flip the effective UserMode. If a query is live, push the mapped
+   * `PermissionMode` into the SDK and wait for the ack before
+   * committing local state — rejection (e.g. `bypassPermissions`
+   * without `allowDangerouslySkipPermissions`) leaves `userMode`
+   * untouched, so the UI never shows a mode the CLI never entered.
+   * If no query is live, we just stash the new mode for the next
+   * send(); the SDK will adopt it from the query options and the
+   * init-message reconciliation (or the PreToolUse hook) will confirm.
+   */
+  async setMode(mode: UserMode, onEvent: (e: SessionEvent) => void): Promise<void> {
+    if (this.userMode === mode) return;
+    const q = this.queryInstance;
+    if (q) {
+      try {
+        await q.setPermissionMode(CLAUDE_MODE[mode]);
+      } catch (err) {
+        console.error("[claude] setPermissionMode failed:", err);
+        return;
+      }
+    }
+    this.userMode = mode;
+    onEvent({ kind: "mode_changed", mode });
+  }
+
+  /** Expose the derived UserMode for external observers (main process). */
+  get currentUserMode(): UserMode {
+    return this.userMode;
   }
 
   /** Interrupt the current turn. */
@@ -413,6 +791,22 @@ export class ClaudeSession implements AgentSession {
       });
     }
     this.pendingAskQuestions.clear();
+    for (const [, pending] of this.pendingExitPlanApprovals) {
+      pending.resolve({
+        behavior: "deny",
+        message: "Session closed.",
+        interrupt: true,
+      });
+    }
+    this.pendingExitPlanApprovals.clear();
+    for (const [, pending] of this.pendingToolApprovals) {
+      pending.resolve({
+        behavior: "deny",
+        message: "Session closed.",
+        interrupt: true,
+      });
+    }
+    this.pendingToolApprovals.clear();
     try {
       this.queryInstance?.return(undefined);
     } catch {

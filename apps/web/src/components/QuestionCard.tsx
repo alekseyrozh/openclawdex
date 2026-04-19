@@ -1,5 +1,5 @@
-import { useState, useRef } from "react";
-import { Check, PaperPlaneTilt } from "@phosphor-icons/react";
+import { useEffect, useRef, useState } from "react";
+import { CaretLeft, CaretRight, Check } from "@phosphor-icons/react";
 import { AskUserInput } from "@openclawdex/shared";
 
 /* ── Types ────────────────────────────────────────────────────── */
@@ -17,12 +17,17 @@ function Radio({ selected }: { selected: boolean }) {
     <span
       className="shrink-0 w-[16px] h-[16px] rounded-full flex items-center justify-center transition-colors"
       style={{
-        border: selected ? "2px solid var(--accent)" : "2px solid var(--border-emphasis)",
-        background: selected ? "var(--accent)" : "transparent",
+        border: selected
+          ? "2px solid var(--text-primary)"
+          : "2px solid var(--border-emphasis)",
+        background: selected ? "var(--text-primary)" : "transparent",
       }}
     >
       {selected && (
-        <span className="w-[6px] h-[6px] rounded-full" style={{ background: "#fff" }} />
+        <span
+          className="w-[6px] h-[6px] rounded-full"
+          style={{ background: "var(--surface-0)" }}
+        />
       )}
     </span>
   );
@@ -33,75 +38,153 @@ function Checkbox({ selected }: { selected: boolean }) {
     <span
       className="shrink-0 w-[16px] h-[16px] rounded-[4px] flex items-center justify-center transition-colors"
       style={{
-        border: selected ? "2px solid var(--accent)" : "2px solid var(--border-emphasis)",
-        background: selected ? "var(--accent)" : "transparent",
+        border: selected
+          ? "2px solid var(--text-primary)"
+          : "2px solid var(--border-emphasis)",
+        background: selected ? "var(--text-primary)" : "transparent",
       }}
     >
-      {selected && <Check size={10} weight="bold" color="#fff" />}
+      {selected && <Check size={10} weight="bold" color="var(--surface-0)" />}
     </span>
   );
 }
 
-/* ── Claude sparkle icon (small) ──────────────────────────────── */
+/* ── Paginator arrow button ───────────────────────────────────── */
 
-function ClaudeIconSmall() {
+function PaginatorButton({
+  onClick,
+  disabled,
+  ariaLabel,
+  children,
+}: {
+  onClick: () => void;
+  disabled: boolean;
+  ariaLabel: string;
+  children: React.ReactNode;
+}) {
+  // Naked icon by default: no background, no border. Hover reveals a
+  // subtle rounded highlight so the target feels tactile without ever
+  // looking like a hard-edged button in rest state. Styling lives in
+  // index.css (`.paginator-btn`) so :hover tracks reliably through
+  // click/blur — JS mouse handlers were leaving a stuck bg after click.
+  // `onMouseDown` preventDefault keeps focus off the button, so there's
+  // no lingering focus ring either.
   return (
-    <svg viewBox="0 0 248 248" fill="currentColor" className="w-[14px] h-[14px] shrink-0 text-[#D97757]">
-      <path d="M52.4285 162.873L98.7844 136.879L99.5485 134.602L98.7844 133.334H96.4921L88.7237 132.862L62.2346 132.153L39.3113 131.207L17.0249 130.026L11.4214 128.844L6.2 121.873L6.7094 118.447L11.4214 115.257L18.171 115.847L33.0711 116.911L55.485 118.447L71.6586 119.392L95.728 121.873H99.5485L100.058 120.337L98.7844 119.392L97.7656 118.447L74.5877 102.732L49.4995 86.1905L36.3823 76.62L29.3779 71.7757L25.8121 67.2858L24.2839 57.3608L30.6515 50.2716L39.3113 50.8623L41.4763 51.4531L50.2636 58.1879L68.9842 72.7209L93.4357 90.6804L97.0015 93.6343L98.4374 92.6652L98.6571 91.9801L97.0015 89.2625L83.757 65.2772L69.621 40.8192L63.2534 30.6579L61.5978 24.632C60.9565 22.1032 60.579 20.0111 60.579 17.4246L67.8381 7.49965L71.9133 6.19995L81.7193 7.49965L85.7946 11.0443L91.9074 24.9865L101.714 46.8451L116.996 76.62L121.453 85.4816L123.873 93.6343L124.764 96.1155H126.292V94.6976L127.566 77.9197L129.858 57.3608L132.15 30.8942L132.915 23.4505L136.608 14.4708L143.994 9.62643L149.725 12.344L154.437 19.0788L153.8 23.4505L150.998 41.6463L145.522 70.1215L141.957 89.2625H143.994L146.414 86.7813L156.093 74.0206L172.266 53.698L179.398 45.6635L187.803 36.802L193.152 32.5484H203.34L210.726 43.6549L207.415 55.1159L196.972 68.3492L188.312 79.5739L175.896 96.2095L168.191 109.585L168.882 110.689L170.738 110.53L198.755 104.504L213.91 101.787L231.994 98.7149L240.144 102.496L241.036 106.395L237.852 114.311L218.495 119.037L195.826 123.645L162.07 131.592L161.696 131.893L162.137 132.547L177.36 133.925L183.855 134.279H199.774L229.447 136.524L237.215 141.605L241.8 147.867L241.036 152.711L229.065 158.737L213.019 154.956L175.45 145.977L162.587 142.787H160.805V143.85L171.502 154.366L191.242 172.089L215.82 195.011L217.094 200.682L213.91 205.172L210.599 204.699L188.949 188.394L180.544 181.069L161.696 165.118H160.422V166.772L164.752 173.152L187.803 207.771L188.949 218.405L187.294 221.832L181.308 223.959L174.813 222.777L161.187 203.754L147.305 182.486L136.098 163.345L134.745 164.2L128.075 235.42L125.019 239.082L117.887 241.8L111.902 237.31L108.718 229.984L111.902 215.452L115.722 196.547L118.779 181.541L121.58 162.873L123.291 156.636L123.14 156.219L121.773 156.449L107.699 175.752L86.304 204.699L69.3663 222.777L65.291 224.431L58.2867 220.768L58.9235 214.27L62.8713 208.48L86.304 178.705L100.44 160.155L109.551 149.507L109.462 147.967L108.959 147.924L46.6977 188.512L35.6182 189.93L30.7788 185.44L31.4156 178.115L33.7079 175.752L52.4285 162.873Z" />
-    </svg>
+    <button
+      onMouseDown={(e) => e.preventDefault()}
+      onClick={onClick}
+      disabled={disabled}
+      aria-label={ariaLabel}
+      className="paginator-btn w-7 h-7 flex items-center justify-center rounded-full transition-colors"
+      style={{ cursor: disabled ? "default" : "pointer" }}
+    >
+      {children}
+    </button>
   );
 }
 
 /* ── Main component ───────────────────────────────────────────── */
 
-interface QuestionCardProps {
+export interface QuestionnaireFormProps {
   toolInput: Record<string, unknown> | undefined;
   /**
    * Submit the user's selections.
    *
-   * - `answers` is keyed by the question text (matches the SDK's
+   * - `answers` is keyed by the full question text (matches the SDK's
    *   `AskUserQuestionOutput.answers` shape so the desktop side can feed
    *   it back as the tool's `updatedInput` via `canUseTool`).
-   * - `displayText` is a human-readable rendering for the chat bubble,
-   *   composed the same way a user-typed reply would look.
+   * - `displayText` is a plaintext fallback (used when older messages are
+   *   rehydrated without structured metadata).
+   * - `answerChips` is the structured header/value pair list used by the
+   *   renderer to show the chip-style user bubble.
    */
-  onSubmit: (payload: { answers: Record<string, string>; displayText: string }) => void;
-  /** Whether a user message exists after this tool call (already answered). */
-  alreadyAnswered: boolean;
+  onSubmit: (payload: {
+    answers: Record<string, string>;
+    displayText: string;
+    questionAnswers: Array<{ question: string; value: string }>;
+  }) => void;
+  /** Dismiss the questionnaire. ESC in the form also triggers this. */
+  onCancel: () => void;
 }
 
-export function QuestionCard({ toolInput, onSubmit, alreadyAnswered }: QuestionCardProps) {
+/**
+ * Renders the AskUserQuestion options as a form inside the composer. No
+ * outer card chrome — the composer owns the surrounding surface. ESC
+ * dismisses, Enter on the "Other" input submits when everything is
+ * answered.
+ */
+export function QuestionnaireForm({
+  toolInput,
+  onSubmit,
+  onCancel,
+}: QuestionnaireFormProps) {
   const parsed = AskUserInput.safeParse(toolInput);
   const [answers, setAnswers] = useState<Answers>({});
   const [otherTexts, setOtherTexts] = useState<Record<string, string>>({});
-  const [submitted, setSubmitted] = useState(alreadyAnswered);
+  const [currentIndex, setCurrentIndex] = useState(0);
   const otherInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  // Make the form focusable so ESC fires even before the user clicks
+  // into any control. Focus on mount, let children intercept as needed.
+  useEffect(() => {
+    rootRef.current?.focus();
+  }, []);
 
   if (!parsed.success) {
-    // Fallback: render as a plain tool indicator
     return (
       <div
-        className="flex items-center gap-2 py-1.5 px-1 text-[13px]"
+        className="flex items-center justify-between px-4 py-3 text-[13px]"
         style={{ color: "var(--text-muted)", fontFamily: "var(--font-code)" }}
       >
-        <span>AskUserQuestion</span>
+        <span>Malformed AskUserQuestion input</span>
+        <button
+          onClick={onCancel}
+          className="text-[12px] font-medium px-2 py-1 rounded-md"
+          style={{ color: "var(--text-secondary)" }}
+        >
+          Dismiss
+        </button>
       </div>
     );
   }
 
   const { questions } = parsed.data;
+  const totalQuestions = questions.length;
+  const canPaginate = totalQuestions > 1;
+  const safeIndex = Math.min(currentIndex, totalQuestions - 1);
+  const currentQuestion = questions[safeIndex];
+
+  function isQuestionAnswered(q: (typeof questions)[number]): boolean {
+    const ans = answers[q.header];
+    if (!ans) return false;
+    if (q.multiSelect) {
+      const arr = ans as string[];
+      if (arr.length === 0) return false;
+      if (arr.includes(OTHER_KEY) && !otherTexts[q.header]?.trim()) return false;
+    } else {
+      if (ans === OTHER_KEY && !otherTexts[q.header]?.trim()) return false;
+    }
+    return true;
+  }
 
   function toggleSingle(questionKey: string, label: string) {
-    if (submitted) return;
     setAnswers((prev) => ({ ...prev, [questionKey]: label }));
     if (label === OTHER_KEY) {
-      // Focus the "Other" input after render
       setTimeout(() => otherInputRefs.current[questionKey]?.focus(), 0);
+      return;
+    }
+    // Auto-advance to the next question on single-select picks (but not
+    // on "Other", which needs a free-text follow-up). Advance in the
+    // same render as the answer update so React commits both together —
+    // a delay here causes the Next button to flash enabled before the
+    // index changes, which reads as a glitch.
+    if (canPaginate && safeIndex < totalQuestions - 1) {
+      setCurrentIndex((i) => Math.min(i + 1, totalQuestions - 1));
     }
   }
 
   function toggleMulti(questionKey: string, label: string) {
-    if (submitted) return;
     setAnswers((prev) => {
       const current = (prev[questionKey] as string[] | undefined) ?? [];
       const next = current.includes(label)
@@ -121,32 +204,22 @@ export function QuestionCard({ toolInput, onSubmit, alreadyAnswered }: QuestionC
     return ans === label;
   }
 
-  // Check if all questions are answered
-  const allAnswered = questions.every((q) => {
-    const ans = answers[q.header];
-    if (!ans) return false;
-    if (q.multiSelect) {
-      const arr = ans as string[];
-      if (arr.length === 0) return false;
-      // If "Other" is selected, must have text
-      if (arr.includes(OTHER_KEY) && !(otherTexts[q.header]?.trim())) return false;
-    } else {
-      if (ans === OTHER_KEY && !(otherTexts[q.header]?.trim())) return false;
-    }
-    return true;
-  });
+  const allAnswered = questions.every(isQuestionAnswered);
+  const currentAnswered = isQuestionAnswered(currentQuestion);
+
+  function goPrev() {
+    setCurrentIndex((i) => Math.max(i - 1, 0));
+  }
+  function goNext() {
+    setCurrentIndex((i) => Math.min(i + 1, totalQuestions - 1));
+  }
 
   function handleSubmit() {
-    if (!allAnswered || submitted) return;
-    setSubmitted(true);
+    if (!allAnswered) return;
 
-    // Build two parallel views of the user's choices:
-    //   - `answersByQuestion` keyed by the full question text (what the
-    //     SDK's AskUserQuestion tool expects in its `answers` field).
-    //   - `lines` formatted for the chat bubble, keyed by the short
-    //     `header` chip label for readability.
     const answersByQuestion: Record<string, string> = {};
     const lines: string[] = [];
+    const questionAnswers: Array<{ question: string; value: string }> = [];
 
     for (const q of questions) {
       const ans = answers[q.header];
@@ -155,73 +228,123 @@ export function QuestionCard({ toolInput, onSubmit, alreadyAnswered }: QuestionC
       let value: string;
       if (q.multiSelect) {
         const arr = ans as string[];
-        const labels = arr.map((a) =>
-          a === OTHER_KEY ? otherTexts[q.header] ?? "" : a,
-        );
-        value = labels.join(", ");
+        value = arr
+          .map((a) => (a === OTHER_KEY ? otherTexts[q.header] ?? "" : a))
+          .join(", ");
       } else {
         value = ans === OTHER_KEY ? otherTexts[q.header] ?? "" : (ans as string);
       }
 
       answersByQuestion[q.question] = value;
       lines.push(`**${q.header}**: ${value}`);
+      questionAnswers.push({ question: q.question, value });
     }
 
     onSubmit({
       answers: answersByQuestion,
       displayText: lines.join("\n"),
+      questionAnswers,
     });
   }
 
   return (
     <div
-      className="rounded-2xl overflow-hidden my-3"
-      style={{
-        background: "var(--surface-1)",
-        border: "1px solid var(--border-emphasis)",
-        animation: "fadeIn 120ms ease",
+      ref={rootRef}
+      tabIndex={-1}
+      onKeyDown={(e) => {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          onCancel();
+          return;
+        }
+        // ⌘/Ctrl+Enter mirrors the primary action — Submit on the last
+        // question, Next otherwise. Plain Enter inside the "Other" text
+        // input still submits via the input's own handler (when all
+        // questions are answered) so users in flow don't need a chord.
+        if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+          const isLast = safeIndex === totalQuestions - 1;
+          if (isLast && allAnswered) {
+            e.preventDefault();
+            handleSubmit();
+          } else if (!isLast && currentAnswered) {
+            e.preventDefault();
+            goNext();
+          }
+          return;
+        }
+        // Arrow keys navigate between questions — but let text inputs
+        // handle them for cursor movement (the "Other" free-text field).
+        const inTextInput =
+          e.target instanceof HTMLInputElement ||
+          e.target instanceof HTMLTextAreaElement;
+        if (!inTextInput && canPaginate) {
+          if (e.key === "ArrowRight" && safeIndex < totalQuestions - 1) {
+            e.preventDefault();
+            goNext();
+          } else if (e.key === "ArrowLeft" && safeIndex > 0) {
+            e.preventDefault();
+            goPrev();
+          }
+        }
       }}
+      className="flex flex-col outline-none"
+      style={{ animation: "fadeIn 120ms ease" }}
     >
-      {/* Header */}
-      <div
-        className="flex items-center gap-2 px-4 py-3"
-        style={{ borderBottom: "1px solid var(--border-subtle)" }}
-      >
-        <ClaudeIconSmall />
-        <span
-          className="text-[13px] font-semibold"
-          style={{ color: "var(--text-secondary)" }}
+      {/* Pagination header — only shown when there's more than one
+          question. Matches the "N of M" counter pattern in the
+          reference design. */}
+      {canPaginate && (
+        <div
+          className="flex items-center justify-between px-4 py-2.5"
+          style={{ borderBottom: "1px solid var(--border-subtle)" }}
         >
-          Questions
-        </span>
-      </div>
+          <span
+            className="text-[12px] font-medium"
+            style={{ color: "var(--text-muted)" }}
+          >
+            Question {safeIndex + 1} of {totalQuestions}
+          </span>
+          <div className="flex items-center gap-1">
+            <PaginatorButton
+              onClick={goPrev}
+              disabled={safeIndex === 0}
+              ariaLabel="Previous question"
+            >
+              <CaretLeft size={14} weight="bold" />
+            </PaginatorButton>
+            <PaginatorButton
+              onClick={goNext}
+              disabled={safeIndex === totalQuestions - 1 || !currentAnswered}
+              ariaLabel="Next question"
+            >
+              <CaretRight size={14} weight="bold" />
+            </PaginatorButton>
+          </div>
+        </div>
+      )}
 
-      {/* Questions */}
-      <div className="px-4 py-3 flex flex-col gap-5">
-        {questions.map((q) => {
+      {/* Current question.
+          NOTE: we can't use the JS-driven `ScrollArea` here — that
+          component relies on `absolute inset-0` internals that require
+          a parent with a flex-given height, and the composer is
+          content-sized. `thin-scrollbar` reuses the same thumb color
+          and radius so the two styles read as the same scroller. */}
+      <div
+        className="px-4 py-3.5 flex flex-col gap-5 overflow-y-auto thin-scrollbar"
+        style={{ maxHeight: "60vh" }}
+      >
+        {(() => {
+          const q = currentQuestion;
           const key = q.header;
           return (
             <div key={key} className="flex flex-col gap-2.5">
-              {/* Header chip + question text */}
-              <div className="flex flex-col gap-1.5">
-                <span
-                  className="text-[11px] font-semibold uppercase tracking-wider px-2 py-[2px] rounded-md w-fit"
-                  style={{
-                    color: "var(--accent)",
-                    background: "rgba(51, 156, 255, 0.10)",
-                  }}
-                >
-                  {q.header}
-                </span>
-                <span
-                  className="text-[14px] font-medium leading-snug"
-                  style={{ color: "var(--text-primary)" }}
-                >
-                  {q.question}
-                </span>
-              </div>
+              <span
+                className="text-[14px] font-medium leading-snug"
+                style={{ color: "var(--text-primary)" }}
+              >
+                {q.question}
+              </span>
 
-              {/* Options */}
               <div className="flex flex-col gap-1.5">
                 {q.options.map((opt) => {
                   const selected = isSelected(key, opt.label, q.multiSelect);
@@ -233,31 +356,21 @@ export function QuestionCard({ toolInput, onSubmit, alreadyAnswered }: QuestionC
                           ? toggleMulti(key, opt.label)
                           : toggleSingle(key, opt.label)
                       }
-                      disabled={submitted}
-                      className="w-full flex items-start gap-3 rounded-xl px-3 py-2.5 text-left transition-all"
+                      className="w-full flex items-start gap-3 rounded-xl px-3 py-2.5 text-left transition-all cursor-pointer"
                       style={{
-                        background: selected
-                          ? "rgba(51, 156, 255, 0.08)"
-                          : "var(--surface-2)",
+                        background: "var(--surface-3)",
                         border: selected
-                          ? "1px solid rgba(51, 156, 255, 0.3)"
+                          ? "1px solid var(--border-emphasis)"
                           : "1px solid var(--border-default)",
-                        cursor: submitted ? "default" : "pointer",
-                        opacity: submitted && !selected ? 0.4 : 1,
                       }}
                       onMouseEnter={(e) => {
-                        if (!submitted) {
-                          e.currentTarget.style.borderColor = selected
-                            ? "rgba(51, 156, 255, 0.5)"
-                            : "var(--border-emphasis)";
-                        }
+                        e.currentTarget.style.borderColor =
+                          "var(--border-emphasis)";
                       }}
                       onMouseLeave={(e) => {
-                        if (!submitted) {
-                          e.currentTarget.style.borderColor = selected
-                            ? "rgba(51, 156, 255, 0.3)"
-                            : "var(--border-default)";
-                        }
+                        e.currentTarget.style.borderColor = selected
+                          ? "var(--border-emphasis)"
+                          : "var(--border-default)";
                       }}
                     >
                       <div className="mt-0.5">
@@ -285,7 +398,6 @@ export function QuestionCard({ toolInput, onSubmit, alreadyAnswered }: QuestionC
                   );
                 })}
 
-                {/* Other option */}
                 {(() => {
                   const otherSelected = isSelected(key, OTHER_KEY, q.multiSelect);
                   return (
@@ -296,31 +408,21 @@ export function QuestionCard({ toolInput, onSubmit, alreadyAnswered }: QuestionC
                             ? toggleMulti(key, OTHER_KEY)
                             : toggleSingle(key, OTHER_KEY)
                         }
-                        disabled={submitted}
-                        className="w-full flex items-start gap-3 rounded-xl px-3 py-2.5 text-left transition-all"
+                        className="w-full flex items-start gap-3 rounded-xl px-3 py-2.5 text-left transition-all cursor-pointer"
                         style={{
-                          background: otherSelected
-                            ? "rgba(51, 156, 255, 0.08)"
-                            : "var(--surface-2)",
+                          background: "var(--surface-3)",
                           border: otherSelected
-                            ? "1px solid rgba(51, 156, 255, 0.3)"
+                            ? "1px solid var(--border-emphasis)"
                             : "1px solid var(--border-default)",
-                          cursor: submitted ? "default" : "pointer",
-                          opacity: submitted && !otherSelected ? 0.4 : 1,
                         }}
                         onMouseEnter={(e) => {
-                          if (!submitted) {
-                            e.currentTarget.style.borderColor = otherSelected
-                              ? "rgba(51, 156, 255, 0.5)"
-                              : "var(--border-emphasis)";
-                          }
+                          e.currentTarget.style.borderColor =
+                            "var(--border-emphasis)";
                         }}
                         onMouseLeave={(e) => {
-                          if (!submitted) {
-                            e.currentTarget.style.borderColor = otherSelected
-                              ? "rgba(51, 156, 255, 0.3)"
-                              : "var(--border-default)";
-                          }
+                          e.currentTarget.style.borderColor = otherSelected
+                            ? "var(--border-emphasis)"
+                            : "var(--border-default)";
                         }}
                       >
                         <div className="mt-0.5">
@@ -337,7 +439,7 @@ export function QuestionCard({ toolInput, onSubmit, alreadyAnswered }: QuestionC
                           Other
                         </span>
                       </button>
-                      {otherSelected && !submitted && (
+                      {otherSelected && (
                         <input
                           ref={(el) => { otherInputRefs.current[key] = el; }}
                           type="text"
@@ -354,7 +456,7 @@ export function QuestionCard({ toolInput, onSubmit, alreadyAnswered }: QuestionC
                           placeholder="Type your answer..."
                           className="w-full rounded-xl px-3 py-2 text-[13px] font-medium outline-none transition-colors"
                           style={{
-                            background: "var(--surface-2)",
+                            background: "var(--surface-3)",
                             border: "1px solid var(--border-emphasis)",
                             color: "var(--text-primary)",
                             marginLeft: "28px",
@@ -368,50 +470,78 @@ export function QuestionCard({ toolInput, onSubmit, alreadyAnswered }: QuestionC
               </div>
             </div>
           );
-        })}
+        })()}
       </div>
 
-      {/* Submit button */}
-      {!submitted && (
-        <div
-          className="flex justify-end px-4 py-3"
-          style={{ borderTop: "1px solid var(--border-subtle)" }}
-        >
-          <button
-            onClick={handleSubmit}
-            disabled={!allAnswered}
-            className="flex items-center gap-2 px-4 py-2 rounded-xl text-[13px] font-semibold transition-all"
-            style={{
-              background: allAnswered ? "var(--accent)" : "var(--surface-3)",
-              color: allAnswered ? "#fff" : "var(--text-faint)",
-              cursor: allAnswered ? "pointer" : "default",
-            }}
-            onMouseEnter={(e) => {
-              if (allAnswered) e.currentTarget.style.background = "#4AA8FF";
-            }}
-            onMouseLeave={(e) => {
-              if (allAnswered) e.currentTarget.style.background = "var(--accent)";
-            }}
-          >
-            Submit answers
-            <PaperPlaneTilt size={14} weight="bold" />
-          </button>
-        </div>
-      )}
-
-      {/* Submitted confirmation */}
-      {submitted && !alreadyAnswered && (
-        <div
-          className="flex items-center gap-2 px-4 py-2.5"
-          style={{
-            borderTop: "1px solid var(--border-subtle)",
-            color: "var(--diff-added)",
+      {/* Action row */}
+      <div
+        className="flex items-center justify-between px-3 py-2.5"
+        style={{ borderTop: "1px solid var(--border-subtle)" }}
+      >
+        <button
+          onClick={onCancel}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[12px] font-medium transition-colors"
+          style={{ color: "var(--text-muted)" }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.color = "var(--text-primary)";
+            e.currentTarget.style.background = "var(--surface-3)";
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.color = "var(--text-muted)";
+            e.currentTarget.style.background = "transparent";
           }}
         >
-          <Check size={14} weight="bold" />
-          <span className="text-[12px] font-medium">Answers submitted</span>
-        </div>
-      )}
+          Dismiss
+          <span
+            className="text-[10px] font-semibold uppercase tracking-wider px-1.5 py-[2px] rounded-md"
+            style={{
+              background: "var(--surface-3)",
+              color: "var(--text-faint)",
+            }}
+          >
+            ESC
+          </span>
+        </button>
+        {(() => {
+          // On the last question the primary action submits everything;
+          // otherwise it advances to the next unanswered question. Next
+          // only needs the *current* question answered; Submit needs all.
+          const isLast = safeIndex === totalQuestions - 1;
+          const enabled = isLast ? allAnswered : currentAnswered;
+          const label = isLast ? "Submit" : "Next";
+          const handleClick = isLast ? handleSubmit : goNext;
+          return (
+            <button
+              onClick={handleClick}
+              disabled={!enabled}
+              className="flex items-center gap-2 px-4 py-2 rounded-full text-[13px] font-semibold transition-all"
+              style={{
+                background: enabled ? "var(--text-primary)" : "var(--surface-3)",
+                color: enabled ? "var(--surface-0)" : "var(--text-faint)",
+                cursor: enabled ? "pointer" : "default",
+              }}
+              onMouseEnter={(e) => {
+                if (enabled) e.currentTarget.style.background = "rgba(255,255,255,0.85)";
+              }}
+              onMouseLeave={(e) => {
+                if (enabled) e.currentTarget.style.background = "var(--text-primary)";
+              }}
+            >
+              {label}
+              <span
+                className="text-[10px] font-semibold uppercase tracking-wider px-1.5 py-[2px] rounded-md"
+                style={
+                  enabled
+                    ? { background: "rgba(0,0,0,0.12)", color: "rgba(0,0,0,0.55)" }
+                    : { background: "var(--surface-4)", color: "var(--text-faint)" }
+                }
+              >
+                ⌘↵
+              </span>
+            </button>
+          );
+        })()}
+      </div>
     </div>
   );
 }
