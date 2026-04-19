@@ -188,14 +188,22 @@ export function codexModeOptions(
     case "ask":
       // "untrusted" = harness escalates every command that isn't in
       // Codex's built-in trusted allowlist (ls, cat, etc.). Paired
-      // with read-only so even file edits require approval — this is
-      // what the UI label "Confirm each file change before applying"
-      // actually demands. Previous `on-request` was model-driven and
-      // silently let curl/network calls through.
+      // with *workspace-write* — NOT read-only — because Codex's
+      // built-in `read_only.md` prompt literally tells the agent
+      // "The sandbox only permits reading files," which makes the
+      // agent refuse edits before even trying (no apply_patch = no
+      // approval RPC = user sees "can't edit, session is read-only"
+      // and wonders why Ask mode blocked them).
+      //
+      // Under untrusted, core/src/safety.rs:55 returns AskUser for
+      // every apply_patch regardless of sandbox, so workspace-write
+      // doesn't weaken the approval gate — it just tells the agent
+      // edits are on the table so it'll try, hit the approval, and
+      // the user gets the confirmation dialog they expected.
       return {
         approvalPolicy: "untrusted",
-        sandbox: "read-only",
-        sandboxPolicy: { type: "readOnly" },
+        sandbox: "workspace-write",
+        sandboxPolicy: workspaceWrite,
         collaborationMode: "default",
         collaborationSettings: buildSettings("default"),
       };
