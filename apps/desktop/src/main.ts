@@ -106,10 +106,10 @@ function getOrCreateSession(
   if (existing) return existing;
 
   // Resolve initial mode: explicit opts > pending override > last
-  // rollout entry > "bypassPermissions".
+  // rollout entry > "acceptEdits".
   const override = pendingModeOverrides.get(threadId);
   pendingModeOverrides.delete(threadId);
-  let userMode: UserMode = opts?.userMode ?? override ?? "bypassPermissions";
+  let userMode: UserMode = opts?.userMode ?? override ?? "acceptEdits";
   if (!opts?.userMode && override === undefined && opts?.resumeSessionId) {
     const fromRollout =
       provider === "claude"
@@ -453,6 +453,10 @@ function setupIpcHandlers(): void {
             emitToRenderer({ type: "mode_changed", threadId, mode: e.mode });
             break;
 
+          case "plan_card":
+            emitToRenderer({ type: "plan_card", threadId, plan: e.plan });
+            break;
+
           case "error":
             emitToRenderer({
               type: "error",
@@ -495,6 +499,9 @@ function setupIpcHandlers(): void {
         });
         return;
       }
+      // Every resolution either resumes a paused turn (Claude
+      // canUseTool, Codex approval RPCs) or queues a new one
+      // (Codex plan approve/reject). "running" is always correct.
       emitToRenderer({ type: "status", threadId, status: "running" });
       await session.resolveRequest(parsed.data);
     },

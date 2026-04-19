@@ -28,7 +28,7 @@ export interface Thread {
    * reconcile on every `mode_changed` event, which fires both on
    * user-initiated dropdown changes and on model-initiated
    * `EnterPlanMode` / `ExitPlanMode` calls. New threads initialize
-   * from `localStorage.lastUserMode`, falling back to `bypassPermissions`.
+   * from `localStorage.lastUserMode`, falling back to `acceptEdits`.
    */
   userMode: UserMode;
   historyLoaded?: boolean;
@@ -52,7 +52,7 @@ export interface MessageImage {
 
 export interface Message {
   id: string;
-  role: "user" | "assistant" | "tool_use";
+  role: "user" | "assistant" | "tool_use" | "plan";
   content: string;
   timestamp: Date;
   fileChanges?: FileChange[];
@@ -123,6 +123,20 @@ function lastSavedProvider(): Provider {
 const USER_MODE_STORAGE_KEY = "lastUserMode";
 const USER_MODES: readonly UserMode[] = ["plan", "ask", "acceptEdits", "bypassPermissions"];
 
+/**
+ * Tool names that represent a non-privileged file edit. When the user
+ * switches to `acceptEdits` while a tool_approval is pending for one
+ * of these, we auto-approve since the new mode would have allowed it.
+ * Matches the Claude canUseTool gate (edit-family tools pass in
+ * acceptEdits) plus Codex's `apply_patch` (file change approval RPC).
+ */
+const FILE_EDIT_TOOL_NAMES = new Set([
+  "Edit",
+  "Write",
+  "NotebookEdit",
+  "apply_patch",
+]);
+
 function lastSavedUserMode(): UserMode {
   try {
     const raw = localStorage.getItem(USER_MODE_STORAGE_KEY);
@@ -130,7 +144,7 @@ function lastSavedUserMode(): UserMode {
       return raw as UserMode;
     }
   } catch {}
-  return "bypassPermissions";
+  return "acceptEdits";
 }
 
 function newThread(projectId: string | null, provider: Provider = lastSavedProvider()): Thread {
@@ -162,7 +176,7 @@ function sessionToThread(s: SessionInfo): Thread {
     contextStats: s.contextStats,
     archived: s.archived ?? false,
     pinned: s.pinned ?? false,
-    userMode: s.userMode ?? "bypassPermissions",
+    userMode: s.userMode ?? "acceptEdits",
   };
 }
 
@@ -170,6 +184,9 @@ function historyToMessages(items: HistoryMessage[]): Message[] {
   return items.map((h) => {
     if (h.role === "tool_use") {
       return { id: h.id, role: "tool_use" as const, content: "", timestamp: new Date(), toolName: h.toolName, toolInput: h.toolInput };
+    }
+    if (h.role === "plan") {
+      return { id: h.id, role: "plan" as const, content: h.content, timestamp: new Date() };
     }
     const images: MessageImage[] | undefined =
       h.role === "user" && h.images && h.images.length > 0
@@ -276,6 +293,15 @@ function applyIpcEvent(thread: Thread, event: IpcEvent): Thread {
     }
     case "mode_changed": {
       return { ...thread, userMode: event.mode };
+    }
+    case "plan_card": {
+      const planMsg: Message = {
+        id: msgId(),
+        role: "plan",
+        content: event.plan,
+        timestamp: new Date(),
+      };
+      return { ...thread, messages: [...thread.messages, planMsg] };
     }
   }
 }
@@ -763,6 +789,16 @@ export function App() {
     ) => {
       if (request.kind !== "exit_plan_approval") return;
       const note = message?.trim();
+      // Persist the plan in the transcript so it doesn't disappear
+      // when the approval card is dismissed. Matches what history
+      // replay shows (a read-only plan card) — the collapsed form is
+      // chosen inside PlanApprovalCard when rendered with `readOnly`.
+      const planMsg: Message = {
+        id: msgId(),
+        role: "plan",
+        content: request.plan,
+        timestamp: new Date(),
+      };
       const userMsg: Message = {
         id: msgId(),
         role: "user",
@@ -775,7 +811,7 @@ export function App() {
       };
       const updateThread = (t: Thread): Thread =>
         t.id === threadId
-          ? { ...t, status: "running" as const, pendingRequest: undefined, messages: [...t.messages, userMsg] }
+          ? { ...t, status: "running" as const, pendingRequest: undefined, messages: [...t.messages, planMsg, userMsg] }
           : t;
       if (pendingThreadRef.current?.id === threadId) {
         setPendingThread((prev) => prev ? updateThread(prev) as Thread : prev);
@@ -1037,8 +1073,8 @@ export function App() {
     } catch { /* localStorage full or disabled — not fatal */ }
 
     // Optimistic update. Covers both real threads and the pending one.
-    const pending = pendingThreadRef.current;
-    if (pending && pending.id === threadId) {
+    const pendingThread = pendingThreadRef.current;
+    if (pendingThread && pendingThread.id === threadId) {
       setPendingThread((prev) => (prev ? { ...prev, userMode: mode } : prev));
     } else {
       setThreads((prev) =>
@@ -1046,20 +1082,36 @@ export function App() {
       );
     }
 
-    const thread = threadsRef.current.find((t) => t.id === threadId);
-    const sessionId = thread?.sessionId;
-    // Only push to main for committed sessions — pending threads hold
-    // the chosen mode in memory until the first send threads it through.
-    if (sessionId) {
-      const prevMode = thread.userMode;
-      window.openclawdex?.setThreadMode(sessionId, mode)?.catch((err) => {
-        reportIpcError("Change thread mode", err);
-        setThreads((p) =>
-          p.map((t) => (t.id === threadId ? { ...t, userMode: prevMode } : t)),
-        );
-      });
+    const thread = threadsRef.current.find((t) => t.id === threadId)
+      ?? (pendingThread?.id === threadId ? pendingThread : undefined);
+    // GOTCHA: pass `thread.id` (the UI-generated id), NOT
+    // `thread.sessionId` (Claude CLI's session id). The main process
+    // `sessions` Map is keyed by the UI id — that's what `session:send`
+    // and `interrupt` use. Earlier code passed sessionId here, and
+    // `sessions.get(sessionId)` returned undefined, so setMode
+    // silently no-op'd and mode flips never reached the session.
+    const prevMode = thread?.userMode ?? mode;
+    window.openclawdex?.setThreadMode(threadId, mode)?.catch((err) => {
+      reportIpcError("Change thread mode", err);
+      setThreads((p) =>
+        p.map((t) => (t.id === threadId ? { ...t, userMode: prevMode } : t)),
+      );
+    });
+
+    // If a tool_approval is pending and the new mode would have allowed
+    // that tool automatically, auto-approve so the user doesn't have to
+    // click twice. Mirrors the canUseTool gate logic for Claude; Codex
+    // approvals match on apply_patch for file-change RPCs.
+    const pendingReq = thread?.pendingRequest;
+    if (pendingReq?.kind === "tool_approval") {
+      const autoAllow =
+        mode === "bypassPermissions" ||
+        (mode === "acceptEdits" && FILE_EDIT_TOOL_NAMES.has(pendingReq.toolName));
+      if (autoAllow) {
+        handleApproveTool(threadId, pendingReq, true);
+      }
     }
-  }, []);
+  }, [handleApproveTool]);
 
   // ── Sidebar drag ──────────────────────────────────────────────
 

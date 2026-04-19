@@ -151,6 +151,16 @@ export class ClaudeSession implements AgentSession {
   // the hook corrects any drift.
   private userMode: UserMode;
 
+  // When the user flips mode via setMode, we stash the target here so
+  // the hook-based reconciler doesn't race-revert our change before
+  // the SDK catches up. Cleared once the hook observes the expected
+  // mode (confirmation) OR once a tool call happens (we've waited long
+  // enough — trust user intent). Without this guard, mid-stream
+  // setPermissionMode updates that fail to propagate in the SDK cause
+  // the next PreToolUse hook to read the stale mode and overwrite
+  // `userMode`, undoing the user's switch.
+  private pendingUserModeIntent: UserMode | null = null;
+
   constructor(
     claudePath: string,
     opts?: {
@@ -166,7 +176,7 @@ export class ClaudeSession implements AgentSession {
     this.cwd = opts?.cwd;
     this.model = opts?.model;
     this.effort = opts?.effort;
-    this.userMode = opts?.userMode ?? "bypassPermissions";
+    this.userMode = opts?.userMode ?? "acceptEdits";
   }
 
   private static toUserMessage(text: string, images?: ImageInput[]): SDKUserMessage {
@@ -264,10 +274,69 @@ export class ClaudeSession implements AgentSession {
    */
   private reconcileModeFromSdk(raw: string | undefined): void {
     if (!raw) return;
-    const observed = claudePermissionModeToUserMode(raw);
-    if (observed === this.userMode) return;
-    this.userMode = observed;
-    this.lastOnEvent?.({ kind: "mode_changed", mode: observed });
+
+    // Pending user intent always wins while the SDK catches up.
+    // Clear the flag once the SDK confirms the expected mode.
+    if (this.pendingUserModeIntent !== null) {
+      const expectedSdk = CLAUDE_MODE[this.pendingUserModeIntent];
+      if (raw === expectedSdk) {
+        // console.log(`[claude] reconcile: SDK confirmed ${expectedSdk} (user wanted ${this.pendingUserModeIntent}) — clearing pending`);
+        this.pendingUserModeIntent = null;
+      } else {
+        // console.log(`[claude] reconcile: SDK says ${raw} but user wanted ${this.pendingUserModeIntent} (sdk ${expectedSdk}) — ignoring`);
+      }
+      return;
+    }
+
+    // If the SDK reports `acceptEdits` or `bypassPermissions`, force
+    // it back to `"default"`. Our architecture relies on the SDK
+    // being in `"default"` (so `canUseTool` fires for every tool) or
+    // `"plan"` (for the special plan-mode semantics). A resumed
+    // session could come up in acceptEdits/bypass if it was started
+    // under older code or if the SDK persists the mode across
+    // resume — either way, leaving it there means the SDK auto-
+    // accepts at its own layer and bypasses our gate entirely.
+    if (raw === "acceptEdits" || raw === "bypassPermissions") {
+      // console.log(`[claude] reconcile: SDK reports ${raw}, forcing to "default" so our gate regains control`);
+      const q = this.queryInstance;
+      if (q) {
+        q.setPermissionMode("default").catch((err) => {
+          console.error(`[claude] force-flip to default failed:`, err);
+        });
+      }
+      return;
+    }
+
+    // With CLAUDE_MODE pinning ask/acceptEdits/bypass all to SDK
+    // "default", SDK-reported "default" is ambiguous — it could mean
+    // any of the three. Never overwrite `userMode` based on a
+    // "default" report; the user's own setMode is authoritative for
+    // those three.
+    //
+    // The ONLY unambiguous SDK-driven transition we care about is
+    // plan ↔ non-plan (ExitPlanMode's auto-transition on approval,
+    // or SDK entering plan mode via its own path).
+    const sdkInPlan = raw === "plan";
+    const userInPlan = this.userMode === "plan";
+
+    if (sdkInPlan && !userInPlan) {
+      // console.log(`[claude] reconcile: SDK entered plan — updating userMode`);
+      this.userMode = "plan";
+      this.lastOnEvent?.({ kind: "mode_changed", mode: "plan" });
+      return;
+    }
+
+    if (!sdkInPlan && userInPlan) {
+      // ExitPlanMode approved — Claude's native post-plan default is
+      // acceptEdits ("ready to implement"). User can flip afterward
+      // if they wanted something else.
+      // console.log(`[claude] reconcile: SDK left plan — transitioning to acceptEdits`);
+      this.userMode = "acceptEdits";
+      this.lastOnEvent?.({ kind: "mode_changed", mode: "acceptEdits" });
+      return;
+    }
+
+    // sdk=default + user=non-plan  OR  sdk=plan + user=plan → no-op.
   }
 
   /**
@@ -310,6 +379,7 @@ export class ClaudeSession implements AgentSession {
    */
   private buildCanUseTool(onEvent: (e: SessionEvent) => void): CanUseTool {
     return async (toolName, toolInput, options): Promise<PermissionResult> => {
+      // console.log(`[claude] canUseTool: ${toolName} userMode=${this.userMode}`);
       // Special-case tools always take precedence over mode logic.
       if (toolName === "AskUserQuestion") {
         return this.interceptAskUserQuestion(toolInput, options, onEvent);
@@ -503,11 +573,12 @@ export class ClaudeSession implements AgentSession {
     const options: ClaudeQueryOptions = {
       pathToClaudeCodeExecutable: this.claudePath,
       includePartialMessages: true,
+      // Only `plan` uses its native SDK mode — see CLAUDE_MODE in
+      // user-mode.ts for why the other three all map to "default".
+      // We intentionally don't pass allowDangerouslySkipPermissions:
+      // bypass semantics are implemented in our `canUseTool` gate,
+      // not by asking the SDK to skip its own prompts.
       permissionMode: CLAUDE_MODE[this.userMode],
-      // The SDK *requires* this flag when — and only when — the mode is
-      // `bypassPermissions`. Setting it alongside `plan` / `default` /
-      // `acceptEdits` either errors or suppresses those modes' gates.
-      ...(this.userMode === "bypassPermissions" && { allowDangerouslySkipPermissions: true }),
       canUseTool: this.buildCanUseTool(onEvent),
       // Observe the CLI's actual `permission_mode` at every lifecycle
       // event we can hook and reconcile our cached `userMode` against
@@ -750,18 +821,36 @@ export class ClaudeSession implements AgentSession {
    * init-message reconciliation (or the PreToolUse hook) will confirm.
    */
   async setMode(mode: UserMode, onEvent: (e: SessionEvent) => void): Promise<void> {
-    if (this.userMode === mode) return;
+    if (this.userMode === mode) {
+      // console.log(`[claude] setMode: no-op (already ${mode})`);
+      return;
+    }
     const q = this.queryInstance;
-    if (q) {
+    const sdkFrom = CLAUDE_MODE[this.userMode];
+    const sdkTo = CLAUDE_MODE[mode];
+    // console.log(`[claude] setMode: ${this.userMode} → ${mode} (sdk ${sdkFrom}→${sdkTo}, liveQuery=${q !== null})`);
+
+    // Update local state first — our `canUseTool` gate reads
+    // `this.userMode` directly and is the sole authority for
+    // ask/acceptEdits/bypass semantics. `pendingUserModeIntent`
+    // prevents the reconcile hook from stomping this with a stale
+    // SDK value before the SDK catches up.
+    this.userMode = mode;
+    this.pendingUserModeIntent = mode;
+    onEvent({ kind: "mode_changed", mode });
+
+    // Only call the SDK when the permission mode actually changes —
+    // i.e. transitioning between plan and non-plan. Flips among
+    // ask/acceptEdits/bypass are all within the SDK's "default" and
+    // need no SDK round-trip; our gate handles them purely locally.
+    if (q && sdkFrom !== sdkTo) {
       try {
-        await q.setPermissionMode(CLAUDE_MODE[mode]);
+        await q.setPermissionMode(sdkTo);
+        // console.log(`[claude] setPermissionMode(${sdkTo}) acked by SDK`);
       } catch (err) {
-        console.error("[claude] setPermissionMode failed:", err);
-        return;
+        console.error(`[claude] setPermissionMode(${sdkTo}) FAILED (local userMode already updated):`, err);
       }
     }
-    this.userMode = mode;
-    onEvent({ kind: "mode_changed", mode });
   }
 
   /** Expose the derived UserMode for external observers (main process). */
