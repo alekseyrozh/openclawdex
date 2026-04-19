@@ -4,6 +4,7 @@ import path from "path";
 import { z } from "zod";
 import type { UserMode } from "@openclawdex/shared";
 import { codexTurnContextToUserMode } from "./user-mode";
+import { extractProposedPlans } from "./codex-plan";
 
 /**
  * Read Codex thread state from the CLI's on-disk rollout files.
@@ -57,7 +58,8 @@ export type CodexHistoryMsg =
       images?: Array<{ mediaType: string; base64: string }>;
     }
   | { id: string; role: "assistant"; content: string }
-  | { id: string; role: "tool_use"; toolName: string; toolInput?: Record<string, unknown> };
+  | { id: string; role: "tool_use"; toolName: string; toolInput?: Record<string, unknown> }
+  | { id: string; role: "plan"; content: string };
 
 function parseDataUrlImage(
   value: string,
@@ -288,6 +290,22 @@ export function readCodexHistoryFromFile(file: string): CodexHistoryMsg[] {
         .join("");
       if (!text.trim() && images.length === 0) continue;
       if (msg.role === "user" && isInjectedContext(text)) continue;
+
+      if (msg.role === "assistant") {
+        // Pull any `<proposed_plan>` blocks out into their own history
+        // items so the renderer can show them as plan cards instead of
+        // leaking the XML tags into the transcript. Mirrors how the
+        // live stream surfaces `item.type === "plan"` as a distinct
+        // event — see codex.ts and t3code's CodexAdapter.
+        const { clean, plans } = extractProposedPlans(text);
+        if (clean.length > 0) {
+          result.push({ id: `codex-${itemIdx++}`, role: "assistant", content: clean });
+        }
+        for (const plan of plans) {
+          result.push({ id: `codex-${itemIdx++}`, role: "plan", content: plan });
+        }
+        continue;
+      }
 
       result.push({
         id: `codex-${itemIdx++}`,

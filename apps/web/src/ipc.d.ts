@@ -48,7 +48,7 @@ declare global {
     archiveThread: (sessionId: string, archived: boolean) => Promise<void>;
     deleteThread: (sessionId: string) => Promise<void>;
     changeThreadProject: (sessionId: string, projectId: string | null) => Promise<void>;
-    setThreadMode: (sessionId: string, mode: UserMode) => Promise<UserMode>;
+    setThreadMode: (threadId: string, mode: UserMode) => Promise<UserMode>;
     onEvent: (callback: (event: unknown) => void) => () => void;
   }
 

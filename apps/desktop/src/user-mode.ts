@@ -9,11 +9,52 @@ import type { UserMode } from "@openclawdex/shared";
 
 // ── Claude ───────────────────────────────────────────────────
 
+/**
+ * Permission mode we pass to the SDK's `query()` call and to
+ * `q.setPermissionMode()` for live mode flips.
+ *
+ * Only `plan` gets its own native SDK mode (we need it for the
+ * `ExitPlanMode` tool and read-only SDK-level enforcement). The
+ * other three all map to SDK `"default"`, which makes the SDK call
+ * `canUseTool` for every tool so our gate (which reads
+ * `this.userMode`) is the sole authority.
+ *
+ * Why this is the only way, verified empirically (2026-04):
+ *
+ * | Combo                         | Edit    | Bash    |
+ * | flag=false + SDK `default`    | prompts | prompts |
+ * | flag=true  + SDK `default`    | prompts | prompts |
+ * | flag=false + SDK `acceptEdits`| silent  | silent  |  ← surprise
+ * | flag=true  + SDK `acceptEdits`| silent  | silent  |
+ * | flag=true  + SDK `bypass`     | silent  | silent  |
+ *
+ * SDK `"acceptEdits"` is misleadingly named — it's effectively
+ * "bypass-lite" and auto-accepts Bash (including `rm`) without
+ * routing through `canUseTool`. There is NO SDK combination that
+ * yields "edits silent, Bash prompts"; that granularity only lives
+ * in our gate.
+ *
+ * `bypassPermissions` at the SDK layer additionally requires
+ * `allowDangerouslySkipPermissions: true` at launch, which the SDK
+ * refuses to flip to mid-stream on sessions that didn't have it.
+ * Using the flag "just in case" doesn't help either — it doesn't
+ * make `acceptEdits` prompt for Bash.
+ *
+ * Conclusion: keep the SDK in `"default"` for ask/acceptEdits/
+ * bypass, let our `canUseTool` gate decide. Mode flips among the
+ * three are pure local-state updates — no SDK round-trip, no
+ * session restart, no flaky propagation.
+ *
+ * Known tradeoff: the rollout file records `permissionMode:
+ * "default"` for all three, so resume can't distinguish ask from
+ * acceptEdits from bypass. Fix later by persisting `userMode` on
+ * `known_threads` and preferring it over rollout on resume.
+ */
 export const CLAUDE_MODE: Record<UserMode, PermissionMode> = {
   plan: "plan",
   ask: "default",
-  acceptEdits: "acceptEdits",
-  bypassPermissions: "bypassPermissions",
+  acceptEdits: "default",
+  bypassPermissions: "default",
 };
 
 /**
@@ -137,6 +178,10 @@ Your active mode changes only when new developer instructions with a different \
 The \`request_user_input\` tool is unavailable in Default mode. If you call it while in Default mode, it will return an error.
 
 In Default mode, strongly prefer making reasonable assumptions and executing the user's request rather than stopping to ask questions. If you absolutely must ask a question because the answer cannot be discovered from local context and a reasonable assumption would be risky, ask the user directly with a concise plain-text question. Never write a multiple choice question as a textual assistant message.
+
+## \`<proposed_plan>\` is Plan-mode-only
+
+The \`<proposed_plan>\` … \`</proposed_plan>\` wrapper is a Plan-mode-only formatting convention. Do not emit it in Default mode, even if the user asks for "a plan" or for you to "plan first." Explain plans in normal Markdown prose or bullets instead. If the user wants the proposed-plan flow, they can switch to Plan mode.
 </collaboration_mode>`;
 
 function developerInstructionsFor(mode: CodexCollaborationMode): string {
@@ -208,12 +253,16 @@ export function codexModeOptions(
         collaborationSettings: buildSettings("default"),
       };
     case "acceptEdits":
-      // Runs inside workspace-write sandbox; only escalates when the
-      // sandbox blocks something (e.g. writing outside cwd, network
-      // where not allowed). Normal edits + in-workspace commands run
-      // without prompting.
+      // Same server policy as `ask` (untrusted + workspace-write) —
+      // the server escalates every non-trusted command AND every
+      // apply_patch. We distinguish acceptEdits from ask purely on
+      // the client side in `codex.ts`: file-change approval RPCs get
+      // auto-approved, command approvals still surface the card.
+      // Gets us parity with Claude's acceptEdits (edits silent,
+      // shell prompts), using Codex's built-in trusted-command
+      // allowlist for the safe-read carve-out.
       return {
-        approvalPolicy: "on-failure",
+        approvalPolicy: "untrusted",
         sandbox: "workspace-write",
         sandboxPolicy: workspaceWrite,
         collaborationMode: "default",

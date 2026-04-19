@@ -182,8 +182,8 @@ contextBridge.exposeInMainWorld("openclawdex", {
    * The renderer should still wait for the `mode_changed` event
    * before treating the dropdown as authoritative.
    */
-  setThreadMode: (sessionId: string, mode: UserMode): Promise<UserMode> =>
-    ipcRenderer.invoke("threads:set-mode", sessionId, mode),
+  setThreadMode: (threadId: string, mode: UserMode): Promise<UserMode> =>
+    ipcRenderer.invoke("threads:set-mode", threadId, mode),
 
   /**
    * Subscribe to events coming from the main process.

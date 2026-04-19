@@ -1,5 +1,5 @@
-import { useContext, useEffect } from "react";
-import { ArrowSquareOut } from "@phosphor-icons/react";
+import { useContext, useEffect, useState } from "react";
+import { ArrowSquareOut, CaretRight } from "@phosphor-icons/react";
 import { MarkdownContent, OpenFileContext } from "./ChatView";
 import { ScrollArea } from "./ScrollArea";
 
@@ -30,15 +30,29 @@ export function PlanApprovalCard({
   planFilePath,
   onApprove,
   onReject,
+  readOnly = false,
 }: {
   plan: string;
   planFilePath?: string;
   onApprove: () => void;
   onReject: () => void;
+  /**
+   * When true the card renders as a static transcript entry — no
+   * action buttons, no keyboard shortcuts, and a past-tense heading.
+   * Used when replaying Codex rollouts where the plan has already been
+   * resolved by the time we reload the thread.
+   */
+  readOnly?: boolean;
 }) {
   const ctx = useContext(OpenFileContext);
+  // Replayed plans start collapsed — the transcript shouldn't be
+  // dominated by a long plan block the user already resolved. Live
+  // approval cards stay fully visible: the decision can't be made
+  // without reading the plan.
+  const [expanded, setExpanded] = useState(!readOnly);
 
   useEffect(() => {
+    if (readOnly) return;
     function handler(e: KeyboardEvent) {
       if (e.key === "Escape") {
         e.preventDefault();
@@ -50,7 +64,7 @@ export function PlanApprovalCard({
     }
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [onApprove, onReject]);
+  }, [onApprove, onReject, readOnly]);
 
   const trimmed = plan.trim();
   return (
@@ -63,29 +77,40 @@ export function PlanApprovalCard({
     >
       <div className="px-4 pt-3.5 pb-3 flex flex-col gap-2.5 min-w-0">
         <div className="flex items-baseline justify-between gap-3 min-w-0">
-          <div
-            className="text-[13px] font-semibold leading-snug"
-            style={{ color: "var(--text-primary)" }}
-          >
-            Apply this plan?
-          </div>
+          {readOnly ? (
+            <button
+              type="button"
+              onClick={() => setExpanded((v) => !v)}
+              className="flex items-center gap-1.5 text-[13px] font-semibold leading-snug cursor-pointer min-w-0"
+              style={{ color: "var(--text-primary)" }}
+            >
+              <CaretRight
+                size={12}
+                weight="bold"
+                className="shrink-0 transition-transform"
+                style={{ transform: expanded ? "rotate(90deg)" : "rotate(0deg)" }}
+              />
+              Proposed plan
+            </button>
+          ) : (
+            <div
+              className="text-[13px] font-semibold leading-snug"
+              style={{ color: "var(--text-primary)" }}
+            >
+              Apply this plan?
+            </div>
+          )}
           {planFilePath && ctx ? (
             <button
               type="button"
               onClick={() => ctx.open(planFilePath)}
               title={`Open in ${ctx.editorLabel}: ${planFilePath}`}
-              className="flex items-center gap-1.5 px-2 py-1 rounded-lg font-mono text-[11.5px] min-w-0 transition-colors cursor-pointer"
-              style={{
-                color: "var(--text-secondary)",
-                background: "rgba(255,255,255,0.05)",
-                border: "1px solid var(--border-subtle)",
-              }}
+              className="flex items-center gap-1.5 font-mono text-[11.5px] min-w-0 transition-colors cursor-pointer bg-transparent border-0 p-0"
+              style={{ color: "var(--text-secondary)" }}
               onMouseEnter={(e) => {
-                e.currentTarget.style.background = "rgba(255,255,255,0.09)";
                 e.currentTarget.style.color = "var(--text-primary)";
               }}
               onMouseLeave={(e) => {
-                e.currentTarget.style.background = "rgba(255,255,255,0.05)";
                 e.currentTarget.style.color = "var(--text-secondary)";
               }}
             >
@@ -104,6 +129,7 @@ export function PlanApprovalCard({
             )
           )}
         </div>
+        {expanded && (
         <div
           className="rounded-lg overflow-hidden"
           style={{ background: "var(--surface-0)" }}
@@ -123,8 +149,10 @@ export function PlanApprovalCard({
             </div>
           </ScrollArea>
         </div>
+        )}
       </div>
 
+      {readOnly ? null : (
       <div className="flex items-center justify-between px-3 pb-2">
         <button
           onClick={onReject}
@@ -160,6 +188,7 @@ export function PlanApprovalCard({
           <Kbd dark>⌘↵</Kbd>
         </button>
       </div>
+      )}
     </div>
   );
 }

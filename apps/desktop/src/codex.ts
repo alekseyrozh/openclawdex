@@ -81,33 +81,39 @@ const CodexUserInputRequestParams = z.object({
 });
 
 // Codex's three approval RPC param shapes — minimal subset we need.
-// All carry thread/turn/item ids plus a human-readable `reason`; the
-// command form additionally carries the command string and cwd. We
-// forward what's useful into the ToolApprovalCard's `toolInput`.
+// Wire format is camelCase (Rust serde `rename_all = "camelCase"`).
+//
+// GOTCHA: use `.nullish()` (not `.optional()`) because Codex's Rust
+// structs are inconsistent about `skip_serializing_if = "Option::is_none"`.
+// `FileChangeRequestApprovalParams.reason` has no such attribute, so
+// `None` serializes as `"reason": null` — and plain `.optional()`
+// rejects nulls. A null breaks parse → we reply `-32602 error` →
+// app-server returns `ReviewDecision::Denied` to the apply_patch
+// runtime → agent sees "patch was rejected" with no UI ever shown.
 const CodexCommandApprovalParams = z.object({
-  thread_id: z.string().optional(),
-  turn_id: z.string().optional(),
-  item_id: z.string().optional(),
-  approval_id: z.string().optional(),
-  reason: z.string().optional(),
-  command: z.string().optional(),
-  cwd: z.string().optional(),
+  threadId: z.string().nullish(),
+  turnId: z.string().nullish(),
+  itemId: z.string().nullish(),
+  approvalId: z.string().nullish(),
+  reason: z.string().nullish(),
+  command: z.string().nullish(),
+  cwd: z.string().nullish(),
 });
 
 const CodexFileChangeApprovalParams = z.object({
-  thread_id: z.string().optional(),
-  turn_id: z.string().optional(),
-  item_id: z.string().optional(),
-  reason: z.string().optional(),
-  grant_root: z.string().optional(),
+  threadId: z.string().nullish(),
+  turnId: z.string().nullish(),
+  itemId: z.string().nullish(),
+  reason: z.string().nullish(),
+  grantRoot: z.string().nullish(),
 });
 
 const CodexPermissionsApprovalParams = z.object({
-  thread_id: z.string().optional(),
-  turn_id: z.string().optional(),
-  item_id: z.string().optional(),
-  reason: z.string().optional(),
-  permissions: z.unknown().optional(),
+  threadId: z.string().nullish(),
+  turnId: z.string().nullish(),
+  itemId: z.string().nullish(),
+  reason: z.string().nullish(),
+  permissions: z.unknown().nullish(),
 });
 
 type RpcPending = {
@@ -198,6 +204,14 @@ export class CodexSession implements AgentSession {
   // build the correct response payload and reply on the paused call.
   private pendingToolApprovals = new Map<string, PendingToolApproval>();
 
+  // Cache of file_change item payloads keyed by item_id. The
+  // FileChangeRequestApproval RPC only carries `itemId` + `reason`
+  // (not the diff) — the actual changes ship as an `item.started`
+  // file_change notification immediately before. We stash that
+  // payload here so `handleFileChangeApproval` can enrich the
+  // approval card with file paths and diff previews.
+  private fileChangesByItemId = new Map<string, unknown>();
+
   // Outstanding `<proposed_plan>` approvals — client-side only.
   // Codex doesn't pause anything waiting for plan approval; we
   // synthesize the approve/revise dialog on top of the plan item so
@@ -220,7 +234,7 @@ export class CodexSession implements AgentSession {
     this.cwd = opts?.cwd;
     this.modelLabel = opts?.model ?? "codex";
     this.effort = opts?.effort;
-    this.userMode = opts?.userMode ?? "bypassPermissions";
+    this.userMode = opts?.userMode ?? "acceptEdits";
     this.threadId = opts?.resumeThreadId ?? null;
 
     this.initPromise = new Promise<void>((resolve, reject) => {
@@ -333,6 +347,8 @@ export class CodexSession implements AgentSession {
    */
   private handleServerRequest(req: z.infer<typeof JsonRpcServerRequest>): void {
     const method = this.normalizeMethod(req.method);
+    // Temporary diagnostic — remove once approval plumbing is verified.
+    // console.log(`[codex] server request: ${req.method} (id=${req.id})`);
 
     if (method === "item.tool.requestUserInput") {
       this.handleRequestUserInput(req);
@@ -389,6 +405,11 @@ export class CodexSession implements AgentSession {
       toolInput,
     };
     const emit = this.currentTurn?.onEvent ?? this.lastOnEvent;
+    if (!emit) {
+      // console.log(`[codex] emitToolApproval: NO EMITTER — dropping ${kind} approval (jsonRpcId=${req.id})`);
+    } else {
+      // console.log(`[codex] emitToolApproval: ${kind} requestId=${requestId} toolName=${toolName}`);
+    }
     emit?.({ kind: "pending_request", request });
   }
 
@@ -422,14 +443,36 @@ export class CodexSession implements AgentSession {
       });
       return;
     }
+
+    // In `acceptEdits` we auto-approve file-change RPCs on the
+    // client. We run with `approvalPolicy: "untrusted"` (same as
+    // `ask`) specifically so the server escalates every apply_patch
+    // and every command — giving our gate a chance to be selective.
+    // For acceptEdits the selection is "edits yes, commands via
+    // card"; here we handle the edit half.
+    if (this.userMode === "acceptEdits") {
+      // console.log(`[codex] fileChange approval auto-accept (acceptEdits mode) id=${parsed.data.itemId ?? "(none)"}`);
+      void this.writeJsonLine({
+        jsonrpc: "2.0",
+        id: req.id,
+        result: { decision: "accept" },
+      });
+      return;
+    }
+
     // FileChangeRequestApproval doesn't carry the diff itself — the
     // file_change item was emitted as its own `item.*` event before
-    // this RPC arrived. Pass `item_id` through so a future UI can
-    // cross-reference; for now the card shows the reason + target.
+    // this RPC arrived, and we cached its payload in
+    // `fileChangesByItemId`. Look it up so the approval card can
+    // show the actual path + diff instead of just an opaque itemId.
+    const itemId = parsed.data.itemId ?? undefined;
+    const cachedChanges = itemId ? this.fileChangesByItemId.get(itemId) : undefined;
+    // console.log(`[codex] fileChange approval lookup: itemId=${itemId ?? "(none)"} cachedFound=${cachedChanges !== undefined}`);
     const toolInput: Record<string, unknown> = {
       ...(parsed.data.reason && { reason: parsed.data.reason }),
-      ...(parsed.data.grant_root && { grant_root: parsed.data.grant_root }),
-      ...(parsed.data.item_id && { item_id: parsed.data.item_id }),
+      ...(parsed.data.grantRoot && { grantRoot: parsed.data.grantRoot }),
+      ...(itemId && { itemId }),
+      ...(cachedChanges !== undefined && { changes: cachedChanges }),
     };
     this.emitToolApproval(req, "fileChange", "apply_patch", toolInput);
   }
@@ -631,11 +674,19 @@ export class CodexSession implements AgentSession {
       const item = rawItem;
       const itemType = typeof item.type === "string" ? item.type : null;
 
+      // Codex's wire format for `item.type` is camelCase (per TS
+      // schema export at codex-rs/app-server-protocol/schema/
+      // typescript/v2/ThreadItem.ts). Accept snake_case too because
+      // earlier versions of the protocol may have used it and we
+      // want to be resilient to either.
+      const t = itemType ?? "";
+      const isType = (...names: string[]) => names.includes(t);
+
       // turn_context can also arrive wrapped as an item. Handled here —
       // before the `currentTurn` gate below — so mode reconciliation
       // works even on the item.started that immediately follows
       // turn/start, when other item handlers require currentTurn.
-      if (itemType === "turn_context") {
+      if (isType("turnContext", "turn_context")) {
         const payload = this.pickTurnContextPayload("turn_context", item);
         if (payload) this.reconcileModeFromTurnContext(payload);
         return;
@@ -643,40 +694,54 @@ export class CodexSession implements AgentSession {
 
       if (!itemType || !this.currentTurn) return;
 
-      if (itemType === "agent_message" && method === "item.completed") {
-        const text = typeof item.text === "string" ? item.text : "";
-        if (text) this.currentTurn.onEvent({ kind: "text_delta", text });
+      if (isType("agentMessage", "agent_message") && method === "item.completed") {
+        // Don't re-emit the full text here — the streaming deltas
+        // (`item/agentMessage/delta`) have already built the message
+        // in the renderer. Emitting again would duplicate the whole
+        // message in the chat. We only land here to acknowledge the
+        // completion; the item itself is a no-op for UI purposes.
         return;
       }
 
-      if (itemType === "command_execution") {
+      if (isType("commandExecution", "command_execution")) {
         this.currentTurn.onEvent({
           kind: "tool_use",
           toolUseId: typeof item.id === "string" ? item.id : undefined,
           toolName: "shell",
           toolInput: {
             command: item.command,
-            output: item.aggregated_output,
-            exit_code: item.exit_code,
+            // Codex serializes these as camelCase on the wire.
+            output: item.aggregatedOutput ?? item.aggregated_output,
+            exit_code: item.exitCode ?? item.exit_code,
           } as Record<string, unknown>,
         });
         return;
       }
 
-      if (itemType === "file_change" && method === "item.completed") {
-        this.currentTurn.onEvent({
-          kind: "tool_use",
-          toolUseId: typeof item.id === "string" ? item.id : undefined,
-          toolName: "apply_patch",
-          toolInput: {
-            changes: item.changes,
-            status: item.status,
-          } as Record<string, unknown>,
-        });
+      if (isType("fileChange", "file_change")) {
+        // Cache every file_change item keyed by id so a follow-up
+        // FileChangeRequestApproval RPC (which only carries itemId)
+        // can render the diff. Fires on both started + completed;
+        // always prefer the latest payload.
+        if (typeof item.id === "string" && item.changes !== undefined && item.changes !== null) {
+          this.fileChangesByItemId.set(item.id, item.changes);
+          // console.log(`[codex] cached file_change changes id=${item.id} method=${method} len=${Array.isArray(item.changes) ? item.changes.length : "?"}`);
+        }
+        if (method === "item.completed") {
+          this.currentTurn.onEvent({
+            kind: "tool_use",
+            toolUseId: typeof item.id === "string" ? item.id : undefined,
+            toolName: "apply_patch",
+            toolInput: {
+              changes: item.changes,
+              status: item.status,
+            } as Record<string, unknown>,
+          });
+        }
         return;
       }
 
-      if (itemType === "mcp_tool_call") {
+      if (isType("mcpToolCall", "mcp_tool_call")) {
         this.currentTurn.onEvent({
           kind: "tool_use",
           toolUseId: typeof item.id === "string" ? item.id : undefined,
@@ -686,7 +751,7 @@ export class CodexSession implements AgentSession {
         return;
       }
 
-      if (itemType === "web_search") {
+      if (isType("webSearch", "web_search")) {
         this.currentTurn.onEvent({
           kind: "tool_use",
           toolUseId: typeof item.id === "string" ? item.id : undefined,
@@ -701,9 +766,22 @@ export class CodexSession implements AgentSession {
       // Wait for `item.completed` — earlier `started`/`updated` events
       // stream partial text (see `item/plan/delta`) and we don't want
       // to flash a half-written plan as an approval card.
-      if (itemType === "plan" && method === "item.completed") {
+      //
+      // Gate the approve/reject dialog on plan mode. The `<proposed_plan>`
+      // tag is a generic rendering hint in Codex — the parser runs
+      // regardless of mode, and the model sometimes emits the block
+      // outside plan mode too. Codex's own TUI only opens its
+      // implementation popup when `active_mode_kind == Plan` (see
+      // chatwidget.rs:2445); outside plan mode it just renders the
+      // plan into history. We mirror that: in plan mode → approval
+      // dialog; otherwise → direct transcript card.
+      if (isType("plan") && method === "item.completed") {
         const text = typeof item.text === "string" ? item.text : "";
         if (text.length === 0) return;
+        if (this.userMode !== "plan") {
+          this.currentTurn.onEvent({ kind: "plan_card", plan: text });
+          return;
+        }
         const requestId = randomUUID();
         this.pendingPlanApprovals.add(requestId);
         const request: PendingRequest = {
@@ -716,7 +794,7 @@ export class CodexSession implements AgentSession {
         return;
       }
 
-      if (itemType === "todo_list") {
+      if (isType("todoList", "todo_list")) {
         this.currentTurn.onEvent({
           kind: "tool_use",
           toolUseId: typeof item.id === "string" ? item.id : undefined,
@@ -726,7 +804,7 @@ export class CodexSession implements AgentSession {
         return;
       }
 
-      if (itemType === "error" && method === "item.completed") {
+      if (isType("error") && method === "item.completed") {
         const msg = typeof item.message === "string" ? item.message : "Unknown Codex error";
         this.currentTurn.onEvent({ kind: "error", message: msg });
       }
@@ -736,6 +814,7 @@ export class CodexSession implements AgentSession {
     if (method === "turn.started") return;
 
     if (method === "turn.completed") {
+      // console.log(`[codex] turn.completed`);
       if (!this.currentTurn) return;
       const turn = this.currentTurn;
       this.currentTurn = null;
@@ -744,6 +823,7 @@ export class CodexSession implements AgentSession {
     }
 
     if (method === "turn.failed") {
+      // console.log(`[codex] turn.failed`);
       const msg =
         (params && typeof params === "object" && typeof (params as Record<string, unknown>).error === "object"
           ? String(((params as Record<string, unknown>).error as Record<string, unknown>).message ?? "Turn failed")
@@ -911,6 +991,7 @@ export class CodexSession implements AgentSession {
       await new Promise<void>((resolve, reject) => {
         this.currentTurn = { onEvent, resolve, reject, turnId: null };
         const turnOpts = codexModeOptions(this.userMode, this.cwd, this.modelLabel, this.effort);
+        // console.log(`[codex] turn/start userMode=${this.userMode} approvalPolicy=${turnOpts.approvalPolicy} sandbox=${turnOpts.sandbox} collabMode=${turnOpts.collaborationMode}`);
         void this.rpc("turn/start", {
           threadId: this.threadId,
           input,
@@ -1000,18 +1081,26 @@ export class CodexSession implements AgentSession {
       }
       case "exit_plan_approval": {
         // Client-side flow: Codex doesn't pause for plan approval
-        // (no tool call is waiting). We just interpret the decision
-        // and drive the next turn accordingly.
+        // (no tool call is waiting). The turn that produced the
+        // `<proposed_plan>` may still be running — Plan mode emits
+        // the plan mid-turn and keeps streaming. Interrupt it so
+        // our follow-up turn isn't queued behind an open-ended one.
+        //
+        // In every case (approve, reject-with-feedback, reject-
+        // without-feedback) we queue a follow-up turn so the agent
+        // acknowledges the decision — matches Claude's behavior
+        // where the denial text becomes tool-result context and the
+        // model responds.
         if (!this.pendingPlanApprovals.delete(resolution.requestId)) return;
         const emit = this.lastOnEvent;
         if (!emit) return;
 
+        await this.interrupt();
+
         if (resolution.approved) {
-          // Switch out of plan mode so the next turn runs with edit
-          // permissions, then queue a synthetic user message asking
-          // the agent to proceed. acceptEdits is the natural "go
-          // implement" mode — no approval prompts for file edits,
-          // but Bash still gates.
+          // Switch out of plan mode so the next turn runs with
+          // edit permissions, then ask the agent to proceed.
+          // acceptEdits is the natural "go implement" mode.
           await this.setMode("acceptEdits", emit);
           this.send(
             "Please proceed with implementing the plan.",
@@ -1019,20 +1108,26 @@ export class CodexSession implements AgentSession {
             emit,
           );
         } else {
-          // Stay in plan mode; if the user left feedback, queue it
-          // as the next turn so the agent refines. No feedback = no
-          // new turn; the composer is focused and the user can type.
+          // Stay in plan mode. Forward the user's feedback if any,
+          // otherwise a bare rejection message. Either way the
+          // agent sees a user turn and can respond, so the UI
+          // lifecycle (status → running → idle) stays clean.
           const feedback = resolution.message?.trim();
-          if (feedback && feedback.length > 0) {
-            this.send(feedback, undefined, emit);
-          }
+          const message = feedback && feedback.length > 0
+            ? feedback
+            : "I rejected the proposed plan. Please revise it or ask clarifying questions before trying again.";
+          this.send(message, undefined, emit);
         }
         return;
       }
       case "tool_approval": {
         const pending = this.pendingToolApprovals.get(resolution.requestId);
-        if (!pending) return;
+        if (!pending) {
+          // console.log(`[codex] tool_approval resolve: no pending entry for ${resolution.requestId}`);
+          return;
+        }
         this.pendingToolApprovals.delete(resolution.requestId);
+        // console.log(`[codex] tool_approval resolve: kind=${pending.kind} approved=${resolution.approved} jsonRpcId=${pending.jsonRpcId}`);
 
         // Each approval flavor has a different response shape. Command
         // + file-change use a `decision` enum; permissions echo a

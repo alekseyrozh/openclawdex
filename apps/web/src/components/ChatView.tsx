@@ -691,7 +691,7 @@ const MODES: ModeDef[] = [
   },
 ];
 
-const DEFAULT_MODE: ModeDef = MODES[3]; // bypassPermissions — matches legacy threads.
+const DEFAULT_MODE: ModeDef = MODES[2]; // acceptEdits — matches new-thread default.
 function modeById(id: UserMode | undefined): ModeDef {
   return MODES.find((m) => m.id === id) ?? DEFAULT_MODE;
 }
@@ -1114,13 +1114,16 @@ function toolSummary(name: string, input?: Record<string, unknown>): string {
       return cmd ? `$ ${cmd}` : "shell";
     }
     case "apply_patch": {
-      // Codex file_change: {changes: [{path, kind}], status}
+      // Codex file_change: {changes: [{path, kind: {type: "add"|"delete"|"update"}}], status}
+      // `kind` is an object on the wire, not a string — stringifying it
+      // directly produced "[object Object]" in the label.
       const changes = Array.isArray(input.changes) ? input.changes : [];
       if (changes.length === 0) return "apply_patch";
-      const first = changes[0] as { path?: string; kind?: string };
+      const first = changes[0] as { path?: string; kind?: { type?: string } };
       const base = first?.path ? first.path.split("/").at(-1) : null;
       const more = changes.length > 1 ? ` +${changes.length - 1}` : "";
-      return base ? `${first.kind ?? "edit"} ${base}${more}` : "apply_patch";
+      const kindLabel = typeof first?.kind?.type === "string" ? first.kind.type : "edit";
+      return base ? `${kindLabel} ${base}${more}` : "apply_patch";
     }
     case "update_plan": {
       // Codex todo_list: rendered as a plan update
@@ -1390,6 +1393,23 @@ function MessageBlock({
         toolInput={message.toolInput}
         onOpenFile={onOpenFile}
       />
+    );
+  }
+
+  if (message.role === "plan") {
+    // A `<proposed_plan>` block extracted from the assistant message
+    // during history replay. Rendered as a read-only version of the
+    // live approval card so refreshed threads match the interactive UI.
+    return (
+      <div className="my-3 max-w-[720px]">
+        <PlanApprovalCard
+          plan={message.content}
+          planFilePath={message.planFilePath}
+          onApprove={() => {}}
+          onReject={() => {}}
+          readOnly
+        />
+      </div>
     );
   }
 
@@ -3270,7 +3290,8 @@ export function ChatView({
                     while (
                       i < msgs.length &&
                       (msgs[i].role === "assistant" ||
-                        msgs[i].role === "tool_use")
+                        msgs[i].role === "tool_use" ||
+                        msgs[i].role === "plan")
                     ) {
                       i++;
                     }
@@ -3283,6 +3304,19 @@ export function ChatView({
                       (last, m) => (m.role === "assistant" ? m : last),
                       undefined,
                     );
+                    // Plan messages carry the real content when the
+                    // assistant message was entirely a `<proposed_plan>`
+                    // block (we strip it out during history parsing).
+                    // Prefer the plan for the copy button so it actually
+                    // copies something meaningful; fall back to any
+                    // surrounding prose otherwise.
+                    const lastPlanMsg = turnMsgs.reduce<
+                      Message | undefined
+                    >(
+                      (last, m) => (m.role === "plan" ? m : last),
+                      undefined,
+                    );
+                    const hoverBarMsg = lastPlanMsg ?? lastAssistantMsg;
                     // The last *visible* message in the turn determines the
                     // hover bar's top margin: assistant text has `py-4`, so
                     // we overlap it with `-mt-4`; tool rows only have `py-1.5`,
@@ -3299,6 +3333,7 @@ export function ChatView({
                       );
                     const endsWithToolUse =
                       lastVisibleMsg?.role === "tool_use";
+                    const endsWithPlan = lastVisibleMsg?.role === "plan";
                     // Turn is complete if there are more messages after it, or thread is idle
                     const isTurnComplete =
                       i < msgs.length || thread.status === "idle";
@@ -3328,11 +3363,11 @@ export function ChatView({
                             />
                           );
                         })}
-                        {lastAssistantMsg && isTurnComplete && (
+                        {hoverBarMsg && isTurnComplete && (
                           <div
-                            className={`${endsWithToolUse ? "mt-1" : "-mt-4"} px-1 transition-opacity duration-300 opacity-0 group-hover/turn:opacity-100`}
+                            className={`${endsWithPlan ? "mt-3" : endsWithToolUse ? "mt-1" : "-mt-4"} px-1 transition-opacity duration-300 opacity-0 group-hover/turn:opacity-100`}
                           >
-                            <MessageHoverBar message={lastAssistantMsg} />
+                            <MessageHoverBar message={hoverBarMsg} />
                           </div>
                         )}
                       </div>,

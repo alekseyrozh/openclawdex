@@ -85,6 +85,7 @@ export const HistoryMessage = z.discriminatedUnion("role", [
   z.object({ id: z.string(), role: z.literal("user"), content: z.string(), images: z.array(HistoryImage).optional() }),
   z.object({ id: z.string(), role: z.literal("assistant"), content: z.string() }),
   z.object({ id: z.string(), role: z.literal("tool_use"), toolName: z.string(), toolInput: z.record(z.string(), z.unknown()).optional() }),
+  z.object({ id: z.string(), role: z.literal("plan"), content: z.string(), planFilePath: z.string().optional() }),
 ]);
 export type HistoryMessage = z.infer<typeof HistoryMessage>;
 
@@ -375,6 +376,17 @@ export const IpcModeChanged = z.object({
   mode: UserMode,
 });
 
+// A `<proposed_plan>` block the backend extracted from an assistant
+// message when no approval is wanted (e.g. Codex outside plan mode —
+// the tag is a rendering hint, not a gate, so we just append a plan
+// card to the transcript). In plan mode we use `pending_request` with
+// `exit_plan_approval` instead so the user can approve/reject.
+export const IpcPlanCard = z.object({
+  type: z.literal("plan_card"),
+  threadId: z.string(),
+  plan: z.string(),
+});
+
 export const IpcEvent = z.discriminatedUnion("type", [
   IpcAssistantText,
   IpcStatus,
@@ -384,5 +396,6 @@ export const IpcEvent = z.discriminatedUnion("type", [
   IpcToolUse,
   IpcPendingRequest,
   IpcModeChanged,
+  IpcPlanCard,
 ]);
 export type IpcEvent = z.infer<typeof IpcEvent>;

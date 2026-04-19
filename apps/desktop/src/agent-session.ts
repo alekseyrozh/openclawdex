@@ -91,6 +91,14 @@ export type SessionEvent =
    * `thread.userMode`.
    */
   | { kind: "mode_changed"; mode: UserMode }
+  /**
+   * A `<proposed_plan>` block extracted from an assistant message when
+   * no approval is wanted (e.g. Codex outside plan mode — the tag is a
+   * rendering hint, not a gate). The renderer appends it to the
+   * transcript as a read-only plan card. In plan mode the backend
+   * emits a `pending_request` with `exit_plan_approval` instead.
+   */
+  | { kind: "plan_card"; plan: string }
   | { kind: "error"; message: string }
   | { kind: "done" };
 

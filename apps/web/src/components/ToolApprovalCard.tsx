@@ -69,10 +69,7 @@ export function ToolApprovalCard({
         <Preview toolName={toolName} toolInput={toolInput} />
       </div>
 
-      <div
-        className="flex items-center justify-between px-3 py-2"
-        style={{ borderTop: "1px solid var(--border-subtle)" }}
-      >
+      <div className="flex items-center justify-between px-3 py-2">
         <button
           onClick={onReject}
           className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[12px] font-medium transition-colors"
@@ -136,6 +133,8 @@ function subjectLabel(toolName: string): string {
       return "Write this file?";
     case "NotebookEdit":
       return "Edit this notebook cell?";
+    case "apply_patch":
+      return "Edit this file?";
     case "Agent":
     case "Task":
       return "Spawn this subagent?";
@@ -170,6 +169,24 @@ function Preview({
     case "Task": {
       const description = typeof toolInput.description === "string" ? toolInput.description : "";
       return <CodeBlock text={description || "(no description provided)"} />;
+    }
+    case "apply_patch": {
+      // Codex file-change approval. Match the Claude Edit card style:
+      // just the file path, no diff — the full diff is already
+      // visible in the file_change tool_use card rendered above.
+      const changes = Array.isArray(toolInput.changes)
+        ? (toolInput.changes as Array<{ path?: unknown }>)
+        : null;
+      if (changes && changes.length > 0) {
+        const paths = changes
+          .map((c) => (typeof c.path === "string" ? c.path : null))
+          .filter((p): p is string => p !== null);
+        if (paths.length > 0) {
+          return <CodeBlock text={paths.join("\n")} />;
+        }
+      }
+      const summary = JSON.stringify(toolInput);
+      return <CodeBlock text={summary.length > 160 ? summary.slice(0, 160) + "…" : summary} />;
     }
     default: {
       const summary = JSON.stringify(toolInput);
