@@ -22,6 +22,10 @@ jobs:
       - name: Verify version matches package.json
         run: |
           input="${{ inputs.version }}"
+          if [[ ! "$input" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Version input '$input' must match format v<major>.<minor>.<patch> (e.g. v0.4.1)"
+            exit 1
+          fi
           expected="${input#v}"
           actual=$(node -p "require('./apps/desktop/package.json').version")
           if [ "$expected" != "$actual" ]; then
