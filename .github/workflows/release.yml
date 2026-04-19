@@ -19,6 +19,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Verify version matches package.json
+        run: |
+          input="${{ inputs.version }}"
+          expected="${input#v}"
+          actual=$(node -p "require('./apps/desktop/package.json').version")
+          if [ "$expected" != "$actual" ]; then
+            echo "::error::Version mismatch: input '$input' implies '$expected' but apps/desktop/package.json has '$actual'"
+            exit 1
+          fi
+          echo "Version check passed: $actual"
+
       - name: Create and push tag
         run: |
           git tag "${{ inputs.version }}"
