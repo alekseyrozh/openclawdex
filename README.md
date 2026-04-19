@@ -9,12 +9,25 @@
 </p>
 
 <p align="center">
-  Lightweight desktop UI for orchestrating Claude Code and OpenAI Codex coding agents through their CLIs, with a native Mac feel. No separate login &mdash; it uses your existing CLI auth.
+  Lightweight desktop UI for orchestrating Claude Code and OpenAI Codex coding agents through their CLIs, with a native Mac feel. No separate login &ndash; it uses your existing CLI auth.
 </p>
 
 <p align="center">
   <img src="assets/screenshot.png" width="720" alt="OpenClawdex screenshot">
 </p>
+
+## Features
+
+- **No separate login** &mdash; Uses your existing `claude` and `codex` CLI auth; no API keys to paste, no OAuth flow, your Max / ChatGPT plan just works
+- **Two agents, one UI** &mdash; Run Claude Code and OpenAI Codex side by side, switch the model and reasoning effort
+- **Parallel threads** &mdash; Spawn as many concurrent agent sessions as you want; each runs in its own subprocess
+- **Project organization** &mdash; Group threads by project with multiple folders per project; drag-and-drop threads between projects
+- **Pinned & archived threads** &mdash; Keep important threads pinned at the top, archive ones you're done with
+- **Persistent history** &mdash; Threads survive restarts; Codex history is rebuilt from `~/.codex/sessions` rollouts, Claude history via the Agent SDK
+- **Interactive prompts** &mdash; Inline cards for tool approvals, plan approvals, and the agent's `AskUserQuestion` requests
+- **Open in your editor** &mdash; Click any file path or diff to jump straight into VS Code, Cursor or other editor; no built-in diff sidebar to fight with
+- **Permission modes** &mdash; Switch between ask, plan, accept-edits, or bypass-permissions per thread
+- **Native macOS feel** &mdash; Vibrancy sidebar, hidden-inset title bar, traffic lights, dark theme with blue accent
 
 ## Install
 
