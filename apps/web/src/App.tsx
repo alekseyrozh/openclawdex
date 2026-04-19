@@ -74,6 +74,12 @@ export interface Message {
    * bubble. `content` still holds the plaintext fallback.
    */
   questionAnswers?: Array<{ question: string; value: string }>;
+  /**
+   * Path to a file that contains the full plan text. Carried on `plan`
+   * messages so the read-only history card can offer an "Open in editor"
+   * button, matching the live ExitPlanMode approval UI.
+   */
+  planFilePath?: string;
 }
 
 export interface FileChange {
@@ -186,7 +192,13 @@ function historyToMessages(items: HistoryMessage[]): Message[] {
       return { id: h.id, role: "tool_use" as const, content: "", timestamp: new Date(), toolName: h.toolName, toolInput: h.toolInput };
     }
     if (h.role === "plan") {
-      return { id: h.id, role: "plan" as const, content: h.content, timestamp: new Date() };
+      return {
+        id: h.id,
+        role: "plan" as const,
+        content: h.content,
+        timestamp: new Date(),
+        ...(h.planFilePath && { planFilePath: h.planFilePath }),
+      };
     }
     const images: MessageImage[] | undefined =
       h.role === "user" && h.images && h.images.length > 0

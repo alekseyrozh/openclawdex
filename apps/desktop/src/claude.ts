@@ -553,6 +553,13 @@ export class ClaudeSession implements AgentSession {
     };
     options.signal.addEventListener("abort", onAbort, { once: true });
 
+    // Emit the ExitPlanMode tool_use indicator eagerly so it appears
+    // right before the PlanApprovalCard in the transcript. The complete
+    // assistant message carrying this block is delivered by the SDK
+    // only after canUseTool resolves — too late to land in the correct
+    // spot. The assistant-case block loop skips ExitPlanMode to avoid
+    // a duplicate indicator when that message finally arrives.
+    onEvent({ kind: "tool_use", toolName: "ExitPlanMode", toolInput });
     onEvent({ kind: "pending_request", request });
 
     return answerPromise;
@@ -706,7 +713,11 @@ export class ClaudeSession implements AgentSession {
             if (block && typeof block === "object" && (block as { type?: string }).type === "tool_use") {
               const name = (block as { name?: string }).name;
               const input = (block as { input?: Record<string, unknown> }).input ?? {};
-              if (name) {
+              // ExitPlanMode is emitted eagerly from interceptExitPlanMode
+              // so the indicator lands just before the PlanApprovalCard.
+              // Skip it here to avoid a duplicate when the SDK delivers
+              // the complete assistant message.
+              if (name && name !== "ExitPlanMode") {
                 onEvent({ kind: "tool_use", toolName: name, toolInput: input });
               }
             }

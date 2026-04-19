@@ -666,7 +666,8 @@ function setupIpcHandlers(): void {
           role: "tool_use";
           toolName: string;
           toolInput?: Record<string, unknown>;
-        };
+        }
+      | { id: string; role: "plan"; content: string; planFilePath?: string };
 
     const result: HistoryMsg[] = [];
 
@@ -720,6 +721,26 @@ function setupIpcHandlers(): void {
             toolName: t.name,
             toolInput: t.input,
           });
+          // ExitPlanMode is the definitive "plan shown to user" signal
+          // (it's the tool that triggers the approval prompt). Emit an
+          // additional `plan` item alongside the tool_use indicator so
+          // the history matches the live transcript, which shows both
+          // the tool call and the PlanApprovalCard.
+          if (t.name === "ExitPlanMode") {
+            const rawPlan = t.input?.plan;
+            const plan = typeof rawPlan === "string" ? rawPlan : "";
+            if (plan.trim()) {
+              const rawFilePath = t.input?.planFilePath;
+              const planFilePath =
+                typeof rawFilePath === "string" ? rawFilePath : undefined;
+              result.push({
+                id: `${m.uuid}-${t.id}-plan`,
+                role: "plan",
+                content: plan,
+                ...(planFilePath && { planFilePath }),
+              });
+            }
+          }
         }
       }
     }

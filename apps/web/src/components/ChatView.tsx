@@ -1404,6 +1404,7 @@ function MessageBlock({
       <div className="my-3 max-w-[720px]">
         <PlanApprovalCard
           plan={message.content}
+          planFilePath={message.planFilePath}
           onApprove={() => {}}
           onReject={() => {}}
           readOnly

@@ -105,18 +105,12 @@ export function PlanApprovalCard({
               type="button"
               onClick={() => ctx.open(planFilePath)}
               title={`Open in ${ctx.editorLabel}: ${planFilePath}`}
-              className="flex items-center gap-1.5 px-2 py-1 rounded-lg font-mono text-[11.5px] min-w-0 transition-colors cursor-pointer"
-              style={{
-                color: "var(--text-secondary)",
-                background: "rgba(255,255,255,0.05)",
-                border: "1px solid var(--border-subtle)",
-              }}
+              className="flex items-center gap-1.5 font-mono text-[11.5px] min-w-0 transition-colors cursor-pointer bg-transparent border-0 p-0"
+              style={{ color: "var(--text-secondary)" }}
               onMouseEnter={(e) => {
-                e.currentTarget.style.background = "rgba(255,255,255,0.09)";
                 e.currentTarget.style.color = "var(--text-primary)";
               }}
               onMouseLeave={(e) => {
-                e.currentTarget.style.background = "rgba(255,255,255,0.05)";
                 e.currentTarget.style.color = "var(--text-secondary)";
               }}
             >
