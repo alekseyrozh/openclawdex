@@ -3507,6 +3507,17 @@ export function ChatView({
                 if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();
                   handleSubmit();
+                  return;
+                }
+                if (e.key === "Tab" && e.shiftKey) {
+                  e.preventDefault();
+                  const idx = MODES.findIndex(
+                    (m) => m.id === selectedMode.id,
+                  );
+                  const next = MODES[(idx + 1) % MODES.length];
+                  if (thread && next.id !== selectedMode.id) {
+                    onSetMode?.(thread.id, next.id);
+                  }
                 }
               }}
               onTextPaste={handlePaste}

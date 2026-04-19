@@ -353,11 +353,19 @@ export function readCodexUserModeFromFile(file: string): UserMode | null {
     let raw: unknown;
     try { raw = JSON.parse(line); } catch { continue; }
     if (!raw || typeof raw !== "object") continue;
-    const entry = raw as { type?: string; payload?: { approval_policy?: unknown; sandbox_policy?: { type?: unknown } } };
+    const entry = raw as {
+      type?: string;
+      payload?: {
+        approval_policy?: unknown;
+        sandbox_policy?: { type?: unknown };
+        collaboration_mode?: { mode?: unknown };
+      };
+    };
     if (entry.type !== "turn_context" || !entry.payload) continue;
     const approval = typeof entry.payload.approval_policy === "string" ? entry.payload.approval_policy : undefined;
     const sandboxType = typeof entry.payload.sandbox_policy?.type === "string" ? entry.payload.sandbox_policy.type : undefined;
-    last = codexTurnContextToUserMode(approval, sandboxType);
+    const collaborationMode = typeof entry.payload.collaboration_mode?.mode === "string" ? entry.payload.collaboration_mode.mode : undefined;
+    last = codexTurnContextToUserMode(approval, sandboxType, collaborationMode);
   }
   return last;
 }
