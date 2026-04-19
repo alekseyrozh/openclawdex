@@ -176,6 +176,8 @@ export function codexModeOptions(
   });
   switch (mode) {
     case "plan":
+      // Agent-aware plan mode + hard sandbox. No approvals since
+      // the agent is producing a plan, not running things.
       return {
         approvalPolicy: "never",
         sandbox: "read-only",
@@ -184,14 +186,24 @@ export function codexModeOptions(
         collaborationSettings: buildSettings("plan"),
       };
     case "ask":
+      // "untrusted" = harness escalates every command that isn't in
+      // Codex's built-in trusted allowlist (ls, cat, etc.). Paired
+      // with read-only so even file edits require approval — this is
+      // what the UI label "Confirm each file change before applying"
+      // actually demands. Previous `on-request` was model-driven and
+      // silently let curl/network calls through.
       return {
-        approvalPolicy: "on-request",
-        sandbox: "workspace-write",
-        sandboxPolicy: workspaceWrite,
+        approvalPolicy: "untrusted",
+        sandbox: "read-only",
+        sandboxPolicy: { type: "readOnly" },
         collaborationMode: "default",
         collaborationSettings: buildSettings("default"),
       };
     case "acceptEdits":
+      // Runs inside workspace-write sandbox; only escalates when the
+      // sandbox blocks something (e.g. writing outside cwd, network
+      // where not allowed). Normal edits + in-workspace commands run
+      // without prompting.
       return {
         approvalPolicy: "on-failure",
         sandbox: "workspace-write",
@@ -200,10 +212,14 @@ export function codexModeOptions(
         collaborationSettings: buildSettings("default"),
       };
     case "bypassPermissions":
+      // True bypass — no approvals AND no sandbox limits. Users
+      // selecting this know they want the agent off the leash; if
+      // they wanted "no prompts but still sandboxed" we'd need a
+      // separate mode.
       return {
         approvalPolicy: "never",
-        sandbox: "workspace-write",
-        sandboxPolicy: workspaceWrite,
+        sandbox: "danger-full-access",
+        sandboxPolicy: { type: "dangerFullAccess" },
         collaborationMode: "default",
         collaborationSettings: buildSettings("default"),
       };

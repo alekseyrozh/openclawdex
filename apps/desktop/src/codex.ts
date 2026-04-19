@@ -80,6 +80,36 @@ const CodexUserInputRequestParams = z.object({
   questions: z.array(CodexUserInputQuestion),
 });
 
+// Codex's three approval RPC param shapes — minimal subset we need.
+// All carry thread/turn/item ids plus a human-readable `reason`; the
+// command form additionally carries the command string and cwd. We
+// forward what's useful into the ToolApprovalCard's `toolInput`.
+const CodexCommandApprovalParams = z.object({
+  thread_id: z.string().optional(),
+  turn_id: z.string().optional(),
+  item_id: z.string().optional(),
+  approval_id: z.string().optional(),
+  reason: z.string().optional(),
+  command: z.string().optional(),
+  cwd: z.string().optional(),
+});
+
+const CodexFileChangeApprovalParams = z.object({
+  thread_id: z.string().optional(),
+  turn_id: z.string().optional(),
+  item_id: z.string().optional(),
+  reason: z.string().optional(),
+  grant_root: z.string().optional(),
+});
+
+const CodexPermissionsApprovalParams = z.object({
+  thread_id: z.string().optional(),
+  turn_id: z.string().optional(),
+  item_id: z.string().optional(),
+  reason: z.string().optional(),
+  permissions: z.unknown().optional(),
+});
+
 type RpcPending = {
   method: string;
   resolve: (value: unknown) => void;
@@ -98,6 +128,23 @@ type PendingUserInputRequest = {
   jsonRpcId: string | number;
   textToCodexId: Map<string, string>;
   multiSelectByText: Map<string, boolean>;
+};
+
+/**
+ * Paused approval RPC (command / file change / permissions). We
+ * reply on the original JSON-RPC call with a `decision` payload
+ * whose shape depends on which flavor of approval was requested,
+ * so track `kind` alongside the id.
+ *
+ * For `permissions`, we also keep the originally-requested profile
+ * so an "approve" can echo it back as the granted set; "reject" is
+ * an empty profile.
+ */
+type PendingToolApprovalKind = "command" | "fileChange" | "permissions";
+type PendingToolApproval = {
+  jsonRpcId: string | number;
+  kind: PendingToolApprovalKind;
+  requestedPermissions?: unknown;
 };
 
 type TurnWaiter = {
@@ -144,6 +191,12 @@ export class CodexSession implements AgentSession {
   // looks these up to translate the user's answers back into Codex's
   // shape and reply on the originating JSON-RPC call.
   private pendingUserInputs = new Map<string, PendingUserInputRequest>();
+
+  // Paused approval RPCs from app-server (command execution, file
+  // change, permissions escalation), keyed by the requestId we
+  // emitted to the renderer. `resolveRequest` looks these up to
+  // build the correct response payload and reply on the paused call.
+  private pendingToolApprovals = new Map<string, PendingToolApproval>();
 
   // Outstanding `<proposed_plan>` approvals — client-side only.
   // Codex doesn't pause anything waiting for plan approval; we
@@ -281,8 +334,23 @@ export class CodexSession implements AgentSession {
   private handleServerRequest(req: z.infer<typeof JsonRpcServerRequest>): void {
     const method = this.normalizeMethod(req.method);
 
-    if (method === "item.tool.requestUserInput" || method === "item/tool/requestUserInput") {
+    if (method === "item.tool.requestUserInput") {
       this.handleRequestUserInput(req);
+      return;
+    }
+
+    if (method === "item.commandExecution.requestApproval") {
+      this.handleCommandApproval(req);
+      return;
+    }
+
+    if (method === "item.fileChange.requestApproval") {
+      this.handleFileChangeApproval(req);
+      return;
+    }
+
+    if (method === "item.permissions.requestApproval") {
+      this.handlePermissionsApproval(req);
       return;
     }
 
@@ -294,6 +362,93 @@ export class CodexSession implements AgentSession {
         message: `Unsupported server request: ${req.method}`,
       },
     });
+  }
+
+  /**
+   * Emit a `tool_approval` PendingRequest and record the JSON-RPC id
+   * + approval kind for the resolver. Shared helper for all three
+   * approval flavors — only the request shape differs.
+   */
+  private emitToolApproval(
+    req: z.infer<typeof JsonRpcServerRequest>,
+    kind: PendingToolApprovalKind,
+    toolName: string,
+    toolInput: Record<string, unknown>,
+    requestedPermissions?: unknown,
+  ): void {
+    const requestId = randomUUID();
+    this.pendingToolApprovals.set(requestId, {
+      jsonRpcId: req.id,
+      kind,
+      ...(requestedPermissions !== undefined && { requestedPermissions }),
+    });
+    const request: PendingRequest = {
+      kind: "tool_approval",
+      requestId,
+      toolName,
+      toolInput,
+    };
+    const emit = this.currentTurn?.onEvent ?? this.lastOnEvent;
+    emit?.({ kind: "pending_request", request });
+  }
+
+  private handleCommandApproval(req: z.infer<typeof JsonRpcServerRequest>): void {
+    const parsed = CodexCommandApprovalParams.safeParse(req.params);
+    if (!parsed.success) {
+      void this.writeJsonLine({
+        jsonrpc: "2.0",
+        id: req.id,
+        error: { code: -32602, message: `Invalid command approval params: ${parsed.error.message}` },
+      });
+      return;
+    }
+    // Surface as a Bash-shaped tool call so the existing
+    // ToolApprovalCard renders the command preview correctly.
+    const toolInput: Record<string, unknown> = {
+      command: parsed.data.command ?? "",
+      ...(parsed.data.reason && { description: parsed.data.reason }),
+      ...(parsed.data.cwd && { cwd: parsed.data.cwd }),
+    };
+    this.emitToolApproval(req, "command", "Bash", toolInput);
+  }
+
+  private handleFileChangeApproval(req: z.infer<typeof JsonRpcServerRequest>): void {
+    const parsed = CodexFileChangeApprovalParams.safeParse(req.params);
+    if (!parsed.success) {
+      void this.writeJsonLine({
+        jsonrpc: "2.0",
+        id: req.id,
+        error: { code: -32602, message: `Invalid fileChange approval params: ${parsed.error.message}` },
+      });
+      return;
+    }
+    // FileChangeRequestApproval doesn't carry the diff itself — the
+    // file_change item was emitted as its own `item.*` event before
+    // this RPC arrived. Pass `item_id` through so a future UI can
+    // cross-reference; for now the card shows the reason + target.
+    const toolInput: Record<string, unknown> = {
+      ...(parsed.data.reason && { reason: parsed.data.reason }),
+      ...(parsed.data.grant_root && { grant_root: parsed.data.grant_root }),
+      ...(parsed.data.item_id && { item_id: parsed.data.item_id }),
+    };
+    this.emitToolApproval(req, "fileChange", "apply_patch", toolInput);
+  }
+
+  private handlePermissionsApproval(req: z.infer<typeof JsonRpcServerRequest>): void {
+    const parsed = CodexPermissionsApprovalParams.safeParse(req.params);
+    if (!parsed.success) {
+      void this.writeJsonLine({
+        jsonrpc: "2.0",
+        id: req.id,
+        error: { code: -32602, message: `Invalid permissions approval params: ${parsed.error.message}` },
+      });
+      return;
+    }
+    const toolInput: Record<string, unknown> = {
+      ...(parsed.data.reason && { reason: parsed.data.reason }),
+      ...(parsed.data.permissions !== undefined && { permissions: parsed.data.permissions }),
+    };
+    this.emitToolApproval(req, "permissions", "RequestPermissions", toolInput, parsed.data.permissions);
   }
 
   /**
@@ -874,10 +1029,34 @@ export class CodexSession implements AgentSession {
         }
         return;
       }
-      case "tool_approval":
-        // Codex handles tool approvals server-side via approvalPolicy.
-        // When we wire app-server approval request RPCs, dispatch here.
+      case "tool_approval": {
+        const pending = this.pendingToolApprovals.get(resolution.requestId);
+        if (!pending) return;
+        this.pendingToolApprovals.delete(resolution.requestId);
+
+        // Each approval flavor has a different response shape. Command
+        // + file-change use a `decision` enum; permissions echo a
+        // `GrantedPermissionProfile` (empty object = granted nothing).
+        let result: Record<string, unknown>;
+        if (pending.kind === "permissions") {
+          result = resolution.approved
+            ? {
+                permissions: pending.requestedPermissions ?? {},
+                scope: "turn",
+              }
+            : { permissions: {}, scope: "turn" };
+        } else {
+          // command | fileChange — same `{ decision }` shape.
+          result = { decision: resolution.approved ? "accept" : "decline" };
+        }
+
+        await this.writeJsonLine({
+          jsonrpc: "2.0",
+          id: pending.jsonRpcId,
+          result,
+        });
         return;
+      }
     }
   }
 
@@ -932,6 +1111,19 @@ export class CodexSession implements AgentSession {
       }).catch(() => { /* process likely already dead */ });
     }
     this.pendingUserInputs.clear();
+    // Decline any paused approval RPCs so app-server unwinds the
+    // tool call rather than holding the connection open.
+    for (const [, pending] of this.pendingToolApprovals) {
+      const result = pending.kind === "permissions"
+        ? { permissions: {}, scope: "turn" }
+        : { decision: "decline" };
+      void this.writeJsonLine({
+        jsonrpc: "2.0",
+        id: pending.jsonRpcId,
+        result,
+      }).catch(() => { /* process likely already dead */ });
+    }
+    this.pendingToolApprovals.clear();
     this.pendingPlanApprovals.clear();
     try {
       this.child.kill();
