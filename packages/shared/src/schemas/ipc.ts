@@ -26,6 +26,9 @@ export const ProjectInfo = z.object({
   id: z.string(),
   name: z.string(),
   folders: z.array(ProjectFolder),
+  // Sidebar position. Optional on the wire so older payloads still parse;
+  // undefined treated as "unsorted" (sorts last, stable).
+  sortOrder: z.number().optional(),
 });
 export type ProjectInfo = z.infer<typeof ProjectInfo>;
 
@@ -58,6 +61,10 @@ export const SessionInfo = z.object({
   pinned: z.boolean().optional(),
   archived: z.boolean().optional(),
   userMode: UserMode.optional(),
+  // Sidebar position within its bucket (pinned / per-project / orphan).
+  // Lower sorts first; ties break on `lastModified` desc. Backfilled from
+  // `createdAt` at migration time so existing threads keep their order.
+  sortOrder: z.number().optional(),
 });
 export type SessionInfo = z.infer<typeof SessionInfo>;
 
@@ -186,6 +193,13 @@ export const ThreadsChangeProjectInput = z.tuple([
   z.string().min(1).nullable(),
 ]);
 export const ThreadsSetModeInput = z.tuple([z.string().min(1), UserMode]);
+
+// Ordered id list for sidebar drag-and-drop reorder. The handler writes
+// each id's position back as its `sort_order`, so the passed array IS
+// the authoritative order — clients must send the full list, not a
+// delta. Empty is accepted (no-op) so the UI doesn't have to special-
+// case an empty group.
+export const ReorderInput = z.tuple([z.array(z.string().min(1))]);
 
 // ── Events flowing from main process → renderer ──────────────
 

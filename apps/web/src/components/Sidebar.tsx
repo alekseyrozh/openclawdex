@@ -17,6 +17,45 @@ import type { Thread } from "../App";
 import type { ProjectInfo } from "@openclawdex/shared";
 import { ScrollArea } from "./ScrollArea";
 import { DropdownSurface, DropdownItem } from "./Dropdown";
+import {
+  DndContext,
+  DragOverlay,
+  MeasuringStrategy,
+  PointerSensor,
+  useDndContext,
+  useSensor,
+  useSensors,
+  closestCenter,
+  type CollisionDetection,
+  type DragEndEvent,
+  type DragStartEvent,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  arrayMove,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
+import { restrictToVerticalAxis } from "@dnd-kit/modifiers";
+
+/**
+ * Stable sort by `sortOrder` (asc) with `lastModified` (desc) as the
+ * tiebreaker. Items with no `sortOrder` (e.g. pre-migration rows or
+ * in-memory pending threads) sort after those that do — otherwise a
+ * newly created thread would jump to the top of every bucket.
+ */
+function bySortOrder<T extends { sortOrder?: number; lastModified?: Date }>(
+  a: T,
+  b: T,
+): number {
+  const ao = a.sortOrder ?? Number.POSITIVE_INFINITY;
+  const bo = b.sortOrder ?? Number.POSITIVE_INFINITY;
+  if (ao !== bo) return ao - bo;
+  const al = a.lastModified?.getTime() ?? 0;
+  const bl = b.lastModified?.getTime() ?? 0;
+  return bl - al;
+}
 
 function timeAgo(date: Date): string {
   const s = Math.floor((Date.now() - date.getTime()) / 1000);
@@ -44,6 +83,18 @@ interface SidebarProps {
   onDeleteThread: (threadId: string) => void;
   onArchiveThread: (threadId: string) => void;
   onPinThread: (threadId: string) => void;
+  /**
+   * Commit a new sidebar order for projects. Receives the full ordered
+   * id list (not a delta) so the parent can write it straight to the
+   * backing store.
+   */
+  onReorderProjects: (orderedIds: string[]) => void;
+  /**
+   * Commit a new order for one thread bucket — pinned, a single
+   * project's threads, or orphans. The sidebar only ever fires this
+   * for intra-bucket drops; cross-bucket moves aren't supported yet.
+   */
+  onReorderThreads: (orderedIds: string[]) => void;
   isLoading?: boolean;
 }
 
@@ -61,21 +112,52 @@ export function Sidebar({
   onDeleteThread,
   onArchiveThread,
   onPinThread,
+  onReorderProjects,
+  onReorderThreads,
   isLoading,
 }: SidebarProps) {
   const [archivedOpen, setArchivedOpen] = useState(false);
+  // Id of the currently-dragged row (thread or project). Drives the
+  // DragOverlay portal so the floating preview follows the cursor 1:1
+  // while the original sits hidden in its source slot.
+  const [activeId, setActiveId] = useState<string | null>(null);
+
+  // 5px activation distance means a plain click still selects the
+  // thread — drag only kicks in once the user actually moves the
+  // pointer. Keeps the sidebar feeling like a list, not a drag target.
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+  );
+
+  // Cross-bucket drags are a no-op (see handleDragEnd), so during a
+  // drag we only want items in the *same* bucket as the active row to
+  // react to the cursor. Without this filter, closestCenter happily
+  // picks candidates from every SortableContext on screen — which
+  // renders as phantom gaps opening up in unrelated lists while you
+  // drag (e.g. a thread drag shifting the Projects header).
+  const collisionDetection: CollisionDetection = (args) => {
+    const activeBucket = args.active.data.current?.bucket as
+      | string
+      | undefined;
+    if (!activeBucket) return closestCenter(args);
+    const sameBucket = args.droppableContainers.filter(
+      (c) => c.data.current?.bucket === activeBucket,
+    );
+    return closestCenter({ ...args, droppableContainers: sameBucket });
+  };
 
   // Split active vs archived
   const activeThreads = threads.filter((t) => !t.archived);
   const archivedThreads = threads.filter((t) => t.archived);
 
   // Pinned threads (non-archived only)
-  const pinnedThreads = activeThreads.filter((t) => t.pinned);
+  const pinnedThreads = activeThreads.filter((t) => t.pinned).slice().sort(bySortOrder);
   const unpinnedThreads = activeThreads.filter((t) => !t.pinned);
 
   // Threads per project (active, unpinned only — pinned ones show in their own section)
   const threadsByProject = new Map<string, Thread[]>();
-  for (const p of projects) {
+  const sortedProjects = projects.slice().sort(bySortOrder);
+  for (const p of sortedProjects) {
     threadsByProject.set(p.id, []);
   }
   for (const t of unpinnedThreads) {
@@ -83,9 +165,65 @@ export function Sidebar({
       threadsByProject.get(t.projectId)!.push(t);
     }
   }
+  for (const [projectId, list] of threadsByProject) {
+    threadsByProject.set(projectId, list.slice().sort(bySortOrder));
+  }
 
   // Ungrouped threads (orphaned — project was deleted)
-  const ungrouped = unpinnedThreads.filter((t) => !t.projectId);
+  const ungrouped = unpinnedThreads.filter((t) => !t.projectId).slice().sort(bySortOrder);
+
+  // Look up the currently-dragged item so DragOverlay can render a
+  // static preview that tracks the cursor. Threads and projects share
+  // the same id namespace from the user's POV but not in our data —
+  // so probe threads first, then projects.
+  const activeThread = activeId ? threads.find((t) => t.id === activeId) ?? null : null;
+  const activeProject =
+    activeId && !activeThread ? projects.find((p) => p.id === activeId) ?? null : null;
+
+  /**
+   * Route a dnd-kit drop to the right reorder handler. Each sortable
+   * item carries `data.bucket` — one of `"projects"`, `"pinned"`,
+   * `"orphan"`, or `"project:<id>"`. We only commit intra-bucket
+   * moves; cross-bucket drops are ignored (the user gets no visible
+   * change, which is the least surprising outcome for v1).
+   */
+  function handleDragStart(e: DragStartEvent) {
+    setActiveId(String(e.active.id));
+  }
+
+  function handleDragEnd(e: DragEndEvent) {
+    setActiveId(null);
+    const { active, over } = e;
+    if (!over || active.id === over.id) return;
+    const activeBucket = active.data.current?.bucket as string | undefined;
+    const overBucket = over.data.current?.bucket as string | undefined;
+    if (!activeBucket || activeBucket !== overBucket) return;
+
+    if (activeBucket === "projects") {
+      const ids = sortedProjects.map((p) => p.id);
+      const from = ids.indexOf(String(active.id));
+      const to = ids.indexOf(String(over.id));
+      if (from < 0 || to < 0) return;
+      onReorderProjects(arrayMove(ids, from, to));
+      return;
+    }
+
+    // Thread bucket — figure out which list of ids is being reordered.
+    let ids: string[] | null = null;
+    if (activeBucket === "pinned") {
+      ids = pinnedThreads.map((t) => t.id);
+    } else if (activeBucket === "orphan") {
+      ids = ungrouped.map((t) => t.id);
+    } else if (activeBucket.startsWith("project:")) {
+      const projectId = activeBucket.slice("project:".length);
+      ids = (threadsByProject.get(projectId) ?? []).map((t) => t.id);
+    }
+    if (!ids) return;
+    const from = ids.indexOf(String(active.id));
+    const to = ids.indexOf(String(over.id));
+    if (from < 0 || to < 0) return;
+    onReorderThreads(arrayMove(ids, from, to));
+  }
 
   return (
     <div
@@ -167,7 +305,19 @@ export function Sidebar({
               <ThreadSkeleton />
             </div>
           ) : (
-            <>
+            <DndContext
+              sensors={sensors}
+              collisionDetection={collisionDetection}
+              onDragStart={handleDragStart}
+              onDragEnd={handleDragEnd}
+              onDragCancel={() => setActiveId(null)}
+              modifiers={[restrictToVerticalAxis]}
+              // Continuous remeasurement — needed because we shrink the
+              // dragged project's DOM (hiding its thread children) on
+              // drag start, and the vertical list strategy has to pick
+              // up the new, smaller rect to compute sibling offsets.
+              measuring={{ droppable: { strategy: MeasuringStrategy.Always } }}
+            >
               {/* Pinned section — top-level, sibling to Projects */}
               {pinnedThreads.length > 0 && (
                 <>
@@ -180,18 +330,25 @@ export function Sidebar({
                     </span>
                   </div>
                   <div className="px-3 mb-2">
-                    {pinnedThreads.map((thread) => (
-                      <ThreadRow
-                        key={thread.id}
-                        thread={thread}
-                        active={thread.id === activeThreadId}
-                        onSelect={onSelectThread}
-                        onRename={(name) => onRenameThread(thread.id, name)}
-                        onDelete={() => onDeleteThread(thread.id)}
-                        onArchive={() => onArchiveThread(thread.id)}
-                        onPin={() => onPinThread(thread.id)}
-                      />
-                    ))}
+                    <SortableContext
+                      items={pinnedThreads.map((t) => t.id)}
+                      strategy={verticalListSortingStrategy}
+                    >
+                      {pinnedThreads.map((thread) => (
+                        <SortableThreadRow
+                          key={thread.id}
+                          id={thread.id}
+                          bucket="pinned"
+                          thread={thread}
+                          active={thread.id === activeThreadId}
+                          onSelect={onSelectThread}
+                          onRename={(name) => onRenameThread(thread.id, name)}
+                          onDelete={() => onDeleteThread(thread.id)}
+                          onArchive={() => onArchiveThread(thread.id)}
+                          onPin={() => onPinThread(thread.id)}
+                        />
+                      ))}
+                    </SortableContext>
                   </div>
                 </>
               )}
@@ -241,43 +398,98 @@ export function Sidebar({
 
               <div className="px-3">
               {/* Project groups */}
-              {projects.map((project) => {
-                const projectThreads = threadsByProject.get(project.id) ?? [];
-                return (
-                  <ProjectGroup
-                    key={project.id}
-                    project={project}
-                    threads={projectThreads}
-                    activeThreadId={activeThreadId}
-                    onSelectThread={onSelectThread}
-                    onNewThread={() => onNewThread(project.id)}
-                    onRename={(name) => onRenameProject(project.id, name)}
-                    onDelete={() => onDeleteProject(project.id)}
-                    onRenameThread={onRenameThread}
-                    onDeleteThread={onDeleteThread}
-                    onArchiveThread={onArchiveThread}
-                    onPinThread={onPinThread}
-                  />
-                );
-              })}
+              <SortableContext
+                items={sortedProjects.map((p) => p.id)}
+                strategy={verticalListSortingStrategy}
+              >
+                {sortedProjects.map((project) => {
+                  const projectThreads = threadsByProject.get(project.id) ?? [];
+                  return (
+                    <SortableProjectGroup
+                      key={project.id}
+                      project={project}
+                      threads={projectThreads}
+                      activeThreadId={activeThreadId}
+                      onSelectThread={onSelectThread}
+                      onNewThread={() => onNewThread(project.id)}
+                      onRename={(name) => onRenameProject(project.id, name)}
+                      onDelete={() => onDeleteProject(project.id)}
+                      onRenameThread={onRenameThread}
+                      onDeleteThread={onDeleteThread}
+                      onArchiveThread={onArchiveThread}
+                      onPinThread={onPinThread}
+                    />
+                  );
+                })}
+              </SortableContext>
 
               {/* Ungrouped threads (orphans) */}
-              {ungrouped.map((thread) => (
-                <ThreadRow
-                  key={thread.id}
-                  thread={thread}
-                  active={thread.id === activeThreadId}
-                  onSelect={onSelectThread}
-                  onRename={(name) => onRenameThread(thread.id, name)}
-                  onDelete={() => onDeleteThread(thread.id)}
-                  onArchive={() => onArchiveThread(thread.id)}
-                  onPin={() => onPinThread(thread.id)}
-                />
-              ))}
+              <SortableContext
+                items={ungrouped.map((t) => t.id)}
+                strategy={verticalListSortingStrategy}
+              >
+                {ungrouped.map((thread) => (
+                  <SortableThreadRow
+                    key={thread.id}
+                    id={thread.id}
+                    bucket="orphan"
+                    thread={thread}
+                    active={thread.id === activeThreadId}
+                    onSelect={onSelectThread}
+                    onRename={(name) => onRenameThread(thread.id, name)}
+                    onDelete={() => onDeleteThread(thread.id)}
+                    onArchive={() => onArchiveThread(thread.id)}
+                    onPin={() => onPinThread(thread.id)}
+                  />
+                ))}
+              </SortableContext>
 
               </div>
 
-            </>
+              {/* Portal-rendered phantom that follows the cursor 1:1. The
+                  source row is hidden (opacity 0) while dragging, so the
+                  user only ever sees this preview — no magnet-to-slot. */}
+              <DragOverlay dropAnimation={null}>
+                {activeThread ? (
+                  <div style={{ cursor: "grabbing" }}>
+                    <ThreadRow
+                      thread={activeThread}
+                      active={false}
+                      onSelect={() => {}}
+                      onRename={() => {}}
+                      onDelete={() => {}}
+                      onArchive={() => {}}
+                    />
+                  </div>
+                ) : activeProject ? (
+                  <div
+                    className="flex items-center w-full px-2 py-[5px] rounded-xl"
+                    style={{
+                      background: "rgba(255,255,255,0.06)",
+                      cursor: "grabbing",
+                    }}
+                  >
+                    <span
+                      className="shrink-0 flex items-center justify-center"
+                      style={{ width: 16, height: 16, marginRight: 6 }}
+                    >
+                      <Folder
+                        size={16}
+                        weight="regular"
+                        style={{ color: "rgba(255, 255, 255, 0.6)" }}
+                      />
+                    </span>
+                    <span
+                      className="text-[13px] font-semibold truncate"
+                      style={{ color: "rgba(255, 255, 255, 0.6)" }}
+                    >
+                      {activeProject.name}
+                    </span>
+                  </div>
+                ) : null}
+              </DragOverlay>
+
+            </DndContext>
           )}
         </div>
       </ScrollArea>
@@ -638,6 +850,7 @@ function ProjectGroup({
   onDeleteThread,
   onArchiveThread,
   onPinThread,
+  isDragging,
 }: {
   project: ProjectInfo;
   threads: Thread[];
@@ -650,6 +863,12 @@ function ProjectGroup({
   onDeleteThread: (threadId: string) => void;
   onArchiveThread: (threadId: string) => void;
   onPinThread: (threadId: string) => void;
+  /**
+   * True only when THIS project is being dragged — not when one of its
+   * threads is. Hides the expanded thread list so the sortable wrapper
+   * measures as a single header-sized row (see SortableProjectGroup).
+   */
+  isDragging?: boolean;
 }) {
   const [collapsed, setCollapsed] = useState(
     () => localStorage.getItem(`project:collapsed:${project.id}`) === "true"
@@ -700,7 +919,7 @@ function ProjectGroup({
         >
           <span
             className="shrink-0 relative flex items-center justify-center"
-            style={{ width: 16, height: 16 }}
+            style={{ width: 16, height: 16, cursor: "pointer" }}
           >
             {/* Folder at rest — fades out on row hover/focus */}
             <span
@@ -845,20 +1064,27 @@ function ProjectGroup({
         </button>
       </div>
 
-      {!collapsed && (
+      {!collapsed && !isDragging && (
         threads.length > 0 ? (
-          threads.map((thread) => (
-            <ThreadRow
-              key={thread.id}
-              thread={thread}
-              active={thread.id === activeThreadId}
-              onSelect={onSelectThread}
-              onRename={(name) => onRenameThread(thread.id, name)}
-              onDelete={() => onDeleteThread(thread.id)}
-              onArchive={() => onArchiveThread(thread.id)}
-              onPin={() => onPinThread(thread.id)}
-            />
-          ))
+          <SortableContext
+            items={threads.map((t) => t.id)}
+            strategy={verticalListSortingStrategy}
+          >
+            {threads.map((thread) => (
+              <SortableThreadRow
+                key={thread.id}
+                id={thread.id}
+                bucket={`project:${project.id}`}
+                thread={thread}
+                active={thread.id === activeThreadId}
+                onSelect={onSelectThread}
+                onRename={(name) => onRenameThread(thread.id, name)}
+                onDelete={() => onDeleteThread(thread.id)}
+                onArchive={() => onArchiveThread(thread.id)}
+                onPin={() => onPinThread(thread.id)}
+              />
+            ))}
+          </SortableContext>
         ) : (
           <button
             onClick={onNewThread}
@@ -873,6 +1099,166 @@ function ProjectGroup({
         )
       )}
     </div>
+  );
+}
+
+/**
+ * Drag-aware wrapper around {@link ThreadRow}. `bucket` identifies the
+ * SortableContext this row belongs to so the top-level drag-end handler
+ * can tell a pinned-list drop from a per-project-list drop without
+ * having to consult all three lists.
+ *
+ * GOTCHA: `PointerSensor.activationConstraint.distance` prevents a
+ * simple click on the row (or its menu button) from firing a drag, so
+ * we can safely spread the drag listeners on the wrapper rather than
+ * carving out a dedicated drag handle.
+ */
+function SortableThreadRow({
+  id,
+  bucket,
+  ...rowProps
+}: {
+  id: string;
+  bucket: string;
+} & React.ComponentProps<typeof ThreadRow>) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    isDragging,
+    isOver,
+    activeIndex,
+    index,
+  } = useSortable({ id, data: { bucket } });
+  const wrapperStyle: React.CSSProperties = {
+    // GOTCHA: use `Translate.toString` (not `Transform.toString`) so we
+    // emit `translate3d(…)` only. The `Transform` variant can append
+    // `scaleX/scaleY` which dnd-kit occasionally sets to animate the
+    // gap-fill — and those scales visibly squashed the row icons.
+    transform: CSS.Translate.toString(transform),
+    position: "relative",
+    cursor: "grab",
+    touchAction: "none",
+    width: "100%",
+  };
+  // Hide the source row's pixels while dragging — the DragOverlay
+  // renders the visible phantom. Keep opacity on an inner div (not the
+  // wrapper) so the drop-line sibling stays visible when the cursor
+  // hovers back over the source slot.
+  const contentStyle: React.CSSProperties = { opacity: isDragging ? 0 : 1 };
+  // Drop-target indicator. When hovering a different row, outline goes
+  // in the gap on the side the active is approaching from. When
+  // hovering back over the source itself, outline fills the source
+  // slot as a "drop = stay here" signal.
+  const hasActive = activeIndex !== -1;
+  const showAbove =
+    isOver && hasActive && !isDragging && activeIndex > index;
+  const showBelow =
+    isOver && hasActive && !isDragging && activeIndex < index;
+  const showSelf = isOver && isDragging;
+  return (
+    <div ref={setNodeRef} style={wrapperStyle} {...attributes} {...listeners}>
+      {showAbove && <DropOutline variant="above" />}
+      {showSelf && <DropOutline variant="self" />}
+      <div style={contentStyle}>
+        <ThreadRow {...rowProps} />
+      </div>
+      {showBelow && <DropOutline variant="below" />}
+    </div>
+  );
+}
+
+/**
+ * Drag-aware wrapper around {@link ProjectGroup}. The listeners go on
+ * the header container inside ProjectGroup via a shared inner div —
+ * we keep the collapse toggle and new-thread button clickable thanks
+ * to the 5px pointer-sensor threshold.
+ */
+function SortableProjectGroup(props: React.ComponentProps<typeof ProjectGroup>) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    isDragging,
+    isOver,
+    activeIndex,
+    index,
+  } = useSortable({ id: props.project.id, data: { bucket: "projects" } });
+  const wrapperStyle: React.CSSProperties = {
+    transform: CSS.Translate.toString(transform),
+    position: "relative",
+    cursor: "grab",
+    touchAction: "none",
+    width: "100%",
+  };
+  const contentStyle: React.CSSProperties = { opacity: isDragging ? 0 : 1 };
+  const hasActive = activeIndex !== -1;
+  const showAbove =
+    isOver && hasActive && !isDragging && activeIndex > index;
+  const showBelow =
+    isOver && hasActive && !isDragging && activeIndex < index;
+  const showSelf = isOver && isDragging;
+  return (
+    <div ref={setNodeRef} style={wrapperStyle} {...attributes} {...listeners}>
+      {showAbove && <DropOutline variant="above" />}
+      {showSelf && <DropOutline variant="self" />}
+      <div style={contentStyle}>
+        {/* While this project is the active drag, collapse its footprint
+            to just the header by telling ProjectGroup to skip the thread
+            children. Combined with MeasuringStrategy.Always on DndContext,
+            the source slot shrinks to one row so siblings only shift by
+            a header's worth of height instead of the whole expanded tree. */}
+        <ProjectGroup {...props} isDragging={isDragging} />
+      </div>
+      {showBelow && <DropOutline variant="below" />}
+    </div>
+  );
+}
+
+/**
+ * Dashed outline marking the drop target area.
+ *
+ * - `"above"`: gap sits above this row (active was below, dragging up).
+ *              Outline is anchored to the row's top, extending upward
+ *              by one active-row height so it fills the opened gap.
+ * - `"below"`: gap sits below this row. Outline extends downward.
+ * - `"self"`:  cursor is back over the source's own slot. Outline
+ *              fills the wrapper (whose inner content is opacity 0 and
+ *              whose height already matches the reserved slot).
+ */
+function DropOutline({ variant }: { variant: "above" | "below" | "self" }) {
+  const { active } = useDndContext();
+  const h = active?.rect.current.initial?.height ?? 0;
+
+  let pos: React.CSSProperties;
+  if (variant === "self") {
+    pos = { top: 0, bottom: 0 };
+  } else if (h <= 0) {
+    // Active's rect hasn't been measured yet — bail rather than render
+    // a zero-height ghost box.
+    return null;
+  } else if (variant === "above") {
+    pos = { top: -h, height: h };
+  } else {
+    pos = { bottom: -h, height: h };
+  }
+
+  return (
+    <div
+      aria-hidden
+      style={{
+        position: "absolute",
+        left: 6,
+        right: 6,
+        border: "1px dashed rgba(255, 255, 255, 0.22)",
+        borderRadius: 10,
+        pointerEvents: "none",
+        zIndex: 2,
+        ...pos,
+      }}
+    />
   );
 }
 

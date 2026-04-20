@@ -43,6 +43,13 @@
       "when": 1776422872624,
       "tag": "0005_faithful_joystick",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1776707120266,
+      "tag": "0006_overjoyed_shooting_star",
+      "breakpoints": true
     }
   ]
 }

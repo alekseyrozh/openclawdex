@@ -6,7 +6,7 @@ import path from "path";
 import { randomUUID } from "crypto";
 import { execSync, spawn } from "child_process";
 import fs from "fs";
-import { eq } from "drizzle-orm";
+import { eq, asc } from "drizzle-orm";
 import { findClaudeBinary, ClaudeSession } from "./claude";
 import { isCodexInstalled, CodexSession } from "./codex";
 import {
@@ -48,6 +48,7 @@ import {
   ThreadsDeleteInput,
   ThreadsChangeProjectInput,
   ThreadsSetModeInput,
+  ReorderInput,
 } from "@openclawdex/shared";
 import { initDb, getDb } from "./db";
 import { knownThreads, projects, projectFolders } from "./db/schema";
@@ -359,6 +360,10 @@ function setupIpcHandlers(): void {
                   createdAt: Date.now(),
                   projectId: opts?.projectId ?? null,
                   provider,
+                  // Negative epoch — sorts above `createdAt`-backfilled
+                  // rows and above dense `0..N-1` reorder indices, so
+                  // new threads land at the top of their bucket.
+                  sortOrder: -Date.now(),
                 })
                 .onConflictDoNothing();
             } catch (err) {
@@ -531,6 +536,7 @@ function setupIpcHandlers(): void {
           archived: knownThreads.archived,
           provider: knownThreads.provider,
           createdAt: knownThreads.createdAt,
+          sortOrder: knownThreads.sortOrder,
         })
         .from(knownThreads),
     ]);
@@ -575,6 +581,7 @@ function setupIpcHandlers(): void {
           contextStats,
           pinned: row.pinned ?? false,
           archived: row.archived ?? false,
+          sortOrder: row.sortOrder,
           ...(override ? { userMode: override } : diskMode ? { userMode: diskMode } : {}),
         });
       } else {
@@ -598,6 +605,7 @@ function setupIpcHandlers(): void {
           contextStats,
           pinned: row.pinned ?? false,
           archived: row.archived ?? false,
+          sortOrder: row.sortOrder,
           ...(override ? { userMode: override } : diskMode ? { userMode: diskMode } : {}),
         });
       }
@@ -766,7 +774,9 @@ function setupIpcHandlers(): void {
     const now = Date.now();
 
     const db = getDb();
-    await db.insert(projects).values({ id: projectId, name, createdAt: now });
+    await db
+      .insert(projects)
+      .values({ id: projectId, name, createdAt: now, sortOrder: -now });
     await db
       .insert(projectFolders)
       .values({ id: folderId, projectId, folderPath, createdAt: now });
@@ -778,16 +788,17 @@ function setupIpcHandlers(): void {
     };
   });
 
-  /** List all projects with their folders. */
+  /** List all projects with their folders, ordered by sidebar sort order. */
   ipcMain.handle("projects:list", async () => {
     const db = getDb();
     const [allProjects, allFolders] = await Promise.all([
-      db.select().from(projects),
+      db.select().from(projects).orderBy(asc(projects.sortOrder), asc(projects.createdAt)),
       db.select().from(projectFolders),
     ]);
     return allProjects.map((p) => ({
       id: p.id,
       name: p.name,
+      sortOrder: p.sortOrder,
       folders: allFolders
         .filter((f) => f.projectId === p.id)
         .map((f) => ({ id: f.id, path: f.folderPath })),
@@ -842,6 +853,26 @@ function setupIpcHandlers(): void {
   /** Remove a folder from a project. */
   ipcMain.handle("projects:remove-folder", async (_event, folderId: string) => {
     await getDb().delete(projectFolders).where(eq(projectFolders.id, folderId));
+  });
+
+  /**
+   * Persist a new sidebar order for projects. Callers send the full
+   * ordered id list; each id's position becomes its `sort_order`. Ids
+   * not in the list are left untouched — this isn't a sync-mode
+   * endpoint, just a "these N projects are now in this order" write.
+   */
+  ipcMain.handle("projects:reorder", async (_event, ...args: unknown[]) => {
+    const [ids] = parseIpcArgs("projects:reorder", ReorderInput, args);
+    if (ids.length === 0) return;
+    const db = getDb();
+    await db.transaction(async (tx) => {
+      for (let i = 0; i < ids.length; i++) {
+        await tx
+          .update(projects)
+          .set({ sortOrder: i })
+          .where(eq(projects.id, ids[i]));
+      }
+    });
   });
 
   // ── Git helpers ──────────────────────────────────────────────
@@ -1108,6 +1139,27 @@ function setupIpcHandlers(): void {
         .where(eq(knownThreads.sessionId, sessionId));
     },
   );
+
+  /**
+   * Persist a new sidebar order for threads. Same protocol as
+   * `projects:reorder` — the passed list IS the new order, one-based
+   * index → `sort_order`. Each DnD drop rewrites a single bucket
+   * (pinned, per-project, or orphans) so cross-bucket positions don't
+   * interfere.
+   */
+  ipcMain.handle("threads:reorder", async (_event, ...args: unknown[]) => {
+    const [ids] = parseIpcArgs("threads:reorder", ReorderInput, args);
+    if (ids.length === 0) return;
+    const db = getDb();
+    await db.transaction(async (tx) => {
+      for (let i = 0; i < ids.length; i++) {
+        await tx
+          .update(knownThreads)
+          .set({ sortOrder: i })
+          .where(eq(knownThreads.sessionId, ids[i]));
+      }
+    });
+  });
 
   /**
    * Change the effective {@link UserMode} for a thread.
