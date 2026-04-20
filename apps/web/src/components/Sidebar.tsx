@@ -919,7 +919,7 @@ function ProjectGroup({
         >
           <span
             className="shrink-0 relative flex items-center justify-center"
-            style={{ width: 16, height: 16 }}
+            style={{ width: 16, height: 16, cursor: "pointer" }}
           >
             {/* Folder at rest — fades out on row hover/focus */}
             <span
