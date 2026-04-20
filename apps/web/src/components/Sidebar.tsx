@@ -32,6 +32,10 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
+import {
+  restrictToVerticalAxis,
+  restrictToParentElement,
+} from "@dnd-kit/modifiers";
 
 /**
  * Stable sort by `sortOrder` (asc) with `lastModified` (desc) as the
@@ -265,7 +269,12 @@ export function Sidebar({
               <ThreadSkeleton />
             </div>
           ) : (
-            <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+            <DndContext
+              sensors={sensors}
+              collisionDetection={closestCenter}
+              onDragEnd={handleDragEnd}
+              modifiers={[restrictToVerticalAxis, restrictToParentElement]}
+            >
               {/* Pinned section — top-level, sibling to Projects */}
               {pinnedThreads.length > 0 && (
                 <>
@@ -1022,13 +1031,18 @@ function SortableThreadRow({
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
     useSortable({ id, data: { bucket } });
   const style: React.CSSProperties = {
-    transform: CSS.Transform.toString(transform),
+    // GOTCHA: use `Translate.toString` (not `Transform.toString`) so we
+    // emit `translate3d(…)` only. The `Transform` variant can append
+    // `scaleX/scaleY` which dnd-kit occasionally sets to animate the
+    // gap-fill — and those scales visibly squashed the row icons.
+    transform: CSS.Translate.toString(transform),
     transition,
     opacity: isDragging ? 0.4 : 1,
     zIndex: isDragging ? 1 : undefined,
     position: "relative",
     cursor: isDragging ? "grabbing" : "grab",
     touchAction: "none",
+    width: "100%",
   };
   return (
     <div ref={setNodeRef} style={style} {...attributes} {...listeners}>
@@ -1047,13 +1061,18 @@ function SortableProjectGroup(props: React.ComponentProps<typeof ProjectGroup>) 
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
     useSortable({ id: props.project.id, data: { bucket: "projects" } });
   const style: React.CSSProperties = {
-    transform: CSS.Transform.toString(transform),
+    // GOTCHA: use `Translate.toString` (not `Transform.toString`) so we
+    // emit `translate3d(…)` only. The `Transform` variant can append
+    // `scaleX/scaleY` which dnd-kit occasionally sets to animate the
+    // gap-fill — and those scales visibly squashed the row icons.
+    transform: CSS.Translate.toString(transform),
     transition,
     opacity: isDragging ? 0.4 : 1,
     zIndex: isDragging ? 1 : undefined,
     position: "relative",
     cursor: isDragging ? "grabbing" : "grab",
     touchAction: "none",
+    width: "100%",
   };
   return (
     <div ref={setNodeRef} style={style} {...attributes} {...listeners}>
