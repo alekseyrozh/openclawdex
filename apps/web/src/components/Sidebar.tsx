@@ -20,6 +20,7 @@ import { DropdownSurface, DropdownItem } from "./Dropdown";
 import {
   DndContext,
   DragOverlay,
+  MeasuringStrategy,
   PointerSensor,
   useSensor,
   useSensors,
@@ -310,6 +311,11 @@ export function Sidebar({
               onDragEnd={handleDragEnd}
               onDragCancel={() => setActiveId(null)}
               modifiers={[restrictToVerticalAxis]}
+              // Continuous remeasurement — needed because we shrink the
+              // dragged project's DOM (hiding its thread children) on
+              // drag start, and the vertical list strategy has to pick
+              // up the new, smaller rect to compute sibling offsets.
+              measuring={{ droppable: { strategy: MeasuringStrategy.Always } }}
             >
               {/* Pinned section — top-level, sibling to Projects */}
               {pinnedThreads.length > 0 && (
@@ -843,6 +849,7 @@ function ProjectGroup({
   onDeleteThread,
   onArchiveThread,
   onPinThread,
+  isDragging,
 }: {
   project: ProjectInfo;
   threads: Thread[];
@@ -855,6 +862,12 @@ function ProjectGroup({
   onDeleteThread: (threadId: string) => void;
   onArchiveThread: (threadId: string) => void;
   onPinThread: (threadId: string) => void;
+  /**
+   * True only when THIS project is being dragged — not when one of its
+   * threads is. Hides the expanded thread list so the sortable wrapper
+   * measures as a single header-sized row (see SortableProjectGroup).
+   */
+  isDragging?: boolean;
 }) {
   const [collapsed, setCollapsed] = useState(
     () => localStorage.getItem(`project:collapsed:${project.id}`) === "true"
@@ -1050,7 +1063,7 @@ function ProjectGroup({
         </button>
       </div>
 
-      {!collapsed && (
+      {!collapsed && !isDragging && (
         threads.length > 0 ? (
           <SortableContext
             items={threads.map((t) => t.id)}
@@ -1150,7 +1163,12 @@ function SortableProjectGroup(props: React.ComponentProps<typeof ProjectGroup>) 
   };
   return (
     <div ref={setNodeRef} style={style} {...attributes} {...listeners}>
-      <ProjectGroup {...props} />
+      {/* While this project is the active drag, collapse its footprint
+          to just the header by telling ProjectGroup to skip the thread
+          children. Combined with MeasuringStrategy.Always on DndContext,
+          the source slot shrinks to one row so siblings only shift by
+          a header's worth of height instead of the whole expanded tree. */}
+      <ProjectGroup {...props} isDragging={isDragging} />
     </div>
   );
 }
