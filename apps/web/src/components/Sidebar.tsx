@@ -24,6 +24,7 @@ import {
   useSensor,
   useSensors,
   closestCenter,
+  type CollisionDetection,
   type DragEndEvent,
   type DragStartEvent,
 } from "@dnd-kit/core";
@@ -125,6 +126,23 @@ export function Sidebar({
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
   );
+
+  // Cross-bucket drags are a no-op (see handleDragEnd), so during a
+  // drag we only want items in the *same* bucket as the active row to
+  // react to the cursor. Without this filter, closestCenter happily
+  // picks candidates from every SortableContext on screen — which
+  // renders as phantom gaps opening up in unrelated lists while you
+  // drag (e.g. a thread drag shifting the Projects header).
+  const collisionDetection: CollisionDetection = (args) => {
+    const activeBucket = args.active.data.current?.bucket as
+      | string
+      | undefined;
+    if (!activeBucket) return closestCenter(args);
+    const sameBucket = args.droppableContainers.filter(
+      (c) => c.data.current?.bucket === activeBucket,
+    );
+    return closestCenter({ ...args, droppableContainers: sameBucket });
+  };
 
   // Split active vs archived
   const activeThreads = threads.filter((t) => !t.archived);
@@ -287,7 +305,7 @@ export function Sidebar({
           ) : (
             <DndContext
               sensors={sensors}
-              collisionDetection={closestCenter}
+              collisionDetection={collisionDetection}
               onDragStart={handleDragStart}
               onDragEnd={handleDragEnd}
               onDragCancel={() => setActiveId(null)}
