@@ -38,6 +38,14 @@ export interface Thread {
   pinned?: boolean;
   needsAttention?: boolean;
   /**
+   * Sidebar sort index within this thread's bucket. Persisted on the
+   * backing DB row; optional because pre-migration threads and
+   * freshly-created (not-yet-inserted) pending threads don't carry one.
+   * The renderer sorts by `sortOrder` asc with `lastModified` desc
+   * as the tiebreaker.
+   */
+  sortOrder?: number;
+  /**
    * The open pause-for-input request, if any. Set when the backend
    * emits a `pending_request` IPC event and cleared the moment the
    * user submits a resolution. `request.kind` drives which renderer
@@ -182,6 +190,7 @@ function sessionToThread(s: SessionInfo): Thread {
     contextStats: s.contextStats,
     archived: s.archived ?? false,
     pinned: s.pinned ?? false,
+    sortOrder: s.sortOrder,
     userMode: s.userMode ?? "acceptEdits",
   };
 }
@@ -1125,6 +1134,56 @@ export function App() {
     }
   }, [handleApproveTool]);
 
+  /**
+   * Persist a new sidebar order for projects. The renderer already
+   * re-sorted its local `projects` state optimistically; this flushes
+   * that order to the DB so it survives reloads. On failure we roll
+   * back by re-reading from the main process.
+   */
+  const handleReorderProjects = useCallback((orderedIds: string[]) => {
+    setProjects((prev) => {
+      const byId = new Map(prev.map((p) => [p.id, p]));
+      const next: ProjectInfo[] = orderedIds.flatMap((id, i) => {
+        const p = byId.get(id);
+        return p ? [{ ...p, sortOrder: i }] : [];
+      });
+      // Append any projects not in the reorder set (shouldn't happen
+      // today, but keeps the list whole if the caller sends a partial
+      // order by mistake).
+      const missing = prev.filter((p) => !orderedIds.includes(p.id));
+      return [...next, ...missing];
+    });
+    window.openclawdex?.reorderProjects?.(orderedIds)?.catch((err) => {
+      reportIpcError("Reorder projects", err);
+      refreshProjects();
+    });
+  }, [refreshProjects]);
+
+  /**
+   * Persist a new sidebar order for threads within one bucket (pinned,
+   * per-project, or orphaned). Only session-backed threads are passed
+   * through to IPC — a freshly-dragged pending thread has no DB row
+   * yet, so its order is client-side only until first send.
+   */
+  const handleReorderThreads = useCallback((orderedIds: string[]) => {
+    setThreads((prev) => {
+      const byId = new Map(prev.map((t) => [t.id, t]));
+      const reordered: Thread[] = orderedIds.flatMap((id, i) => {
+        const t = byId.get(id);
+        return t ? [{ ...t, sortOrder: i }] : [];
+      });
+      const untouched = prev.filter((t) => !orderedIds.includes(t.id));
+      return [...reordered, ...untouched];
+    });
+    const sessionIds = orderedIds
+      .map((id) => threadsRef.current.find((t) => t.id === id)?.sessionId)
+      .filter((s): s is string => typeof s === "string" && s.length > 0);
+    if (sessionIds.length === 0) return;
+    window.openclawdex?.reorderThreads?.(sessionIds)?.catch((err) => {
+      reportIpcError("Reorder threads", err);
+    });
+  }, []);
+
   // ── Sidebar drag ──────────────────────────────────────────────
 
   const onDragStart = useCallback((e: React.MouseEvent) => {
@@ -1174,6 +1233,8 @@ export function App() {
           onDeleteThread={handleDeleteThread}
           onArchiveThread={handleArchiveThread}
           onPinThread={handlePinThread}
+          onReorderProjects={handleReorderProjects}
+          onReorderThreads={handleReorderThreads}
           isLoading={threadsLoading}
         />
       </div>

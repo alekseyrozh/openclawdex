@@ -4,6 +4,7 @@ export const projects = sqliteTable("projects", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
   createdAt: integer("created_at").notNull(),
+  sortOrder: integer("sort_order").notNull().default(0),
 });
 
 export const projectFolders = sqliteTable("project_folders", {
@@ -25,4 +26,5 @@ export const knownThreads = sqliteTable("known_threads", {
   // rows that existed before multi-provider support get backfilled correctly
   // by the ALTER TABLE … DEFAULT migration.
   provider: text("provider").notNull().default("claude"),
+  sortOrder: integer("sort_order").notNull().default(0),
 });

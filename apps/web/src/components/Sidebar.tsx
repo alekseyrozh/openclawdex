@@ -17,6 +17,39 @@ import type { Thread } from "../App";
 import type { ProjectInfo } from "@openclawdex/shared";
 import { ScrollArea } from "./ScrollArea";
 import { DropdownSurface, DropdownItem } from "./Dropdown";
+import {
+  DndContext,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  closestCenter,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  arrayMove,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
+
+/**
+ * Stable sort by `sortOrder` (asc) with `lastModified` (desc) as the
+ * tiebreaker. Items with no `sortOrder` (e.g. pre-migration rows or
+ * in-memory pending threads) sort after those that do — otherwise a
+ * newly created thread would jump to the top of every bucket.
+ */
+function bySortOrder<T extends { sortOrder?: number; lastModified?: Date }>(
+  a: T,
+  b: T,
+): number {
+  const ao = a.sortOrder ?? Number.POSITIVE_INFINITY;
+  const bo = b.sortOrder ?? Number.POSITIVE_INFINITY;
+  if (ao !== bo) return ao - bo;
+  const al = a.lastModified?.getTime() ?? 0;
+  const bl = b.lastModified?.getTime() ?? 0;
+  return bl - al;
+}
 
 function timeAgo(date: Date): string {
   const s = Math.floor((Date.now() - date.getTime()) / 1000);
@@ -44,6 +77,18 @@ interface SidebarProps {
   onDeleteThread: (threadId: string) => void;
   onArchiveThread: (threadId: string) => void;
   onPinThread: (threadId: string) => void;
+  /**
+   * Commit a new sidebar order for projects. Receives the full ordered
+   * id list (not a delta) so the parent can write it straight to the
+   * backing store.
+   */
+  onReorderProjects: (orderedIds: string[]) => void;
+  /**
+   * Commit a new order for one thread bucket — pinned, a single
+   * project's threads, or orphans. The sidebar only ever fires this
+   * for intra-bucket drops; cross-bucket moves aren't supported yet.
+   */
+  onReorderThreads: (orderedIds: string[]) => void;
   isLoading?: boolean;
 }
 
@@ -61,21 +106,31 @@ export function Sidebar({
   onDeleteThread,
   onArchiveThread,
   onPinThread,
+  onReorderProjects,
+  onReorderThreads,
   isLoading,
 }: SidebarProps) {
   const [archivedOpen, setArchivedOpen] = useState(false);
+
+  // 5px activation distance means a plain click still selects the
+  // thread — drag only kicks in once the user actually moves the
+  // pointer. Keeps the sidebar feeling like a list, not a drag target.
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+  );
 
   // Split active vs archived
   const activeThreads = threads.filter((t) => !t.archived);
   const archivedThreads = threads.filter((t) => t.archived);
 
   // Pinned threads (non-archived only)
-  const pinnedThreads = activeThreads.filter((t) => t.pinned);
+  const pinnedThreads = activeThreads.filter((t) => t.pinned).slice().sort(bySortOrder);
   const unpinnedThreads = activeThreads.filter((t) => !t.pinned);
 
   // Threads per project (active, unpinned only — pinned ones show in their own section)
   const threadsByProject = new Map<string, Thread[]>();
-  for (const p of projects) {
+  const sortedProjects = projects.slice().sort(bySortOrder);
+  for (const p of sortedProjects) {
     threadsByProject.set(p.id, []);
   }
   for (const t of unpinnedThreads) {
@@ -83,9 +138,52 @@ export function Sidebar({
       threadsByProject.get(t.projectId)!.push(t);
     }
   }
+  for (const [projectId, list] of threadsByProject) {
+    threadsByProject.set(projectId, list.slice().sort(bySortOrder));
+  }
 
   // Ungrouped threads (orphaned — project was deleted)
-  const ungrouped = unpinnedThreads.filter((t) => !t.projectId);
+  const ungrouped = unpinnedThreads.filter((t) => !t.projectId).slice().sort(bySortOrder);
+
+  /**
+   * Route a dnd-kit drop to the right reorder handler. Each sortable
+   * item carries `data.bucket` — one of `"projects"`, `"pinned"`,
+   * `"orphan"`, or `"project:<id>"`. We only commit intra-bucket
+   * moves; cross-bucket drops are ignored (the user gets no visible
+   * change, which is the least surprising outcome for v1).
+   */
+  function handleDragEnd(e: DragEndEvent) {
+    const { active, over } = e;
+    if (!over || active.id === over.id) return;
+    const activeBucket = active.data.current?.bucket as string | undefined;
+    const overBucket = over.data.current?.bucket as string | undefined;
+    if (!activeBucket || activeBucket !== overBucket) return;
+
+    if (activeBucket === "projects") {
+      const ids = sortedProjects.map((p) => p.id);
+      const from = ids.indexOf(String(active.id));
+      const to = ids.indexOf(String(over.id));
+      if (from < 0 || to < 0) return;
+      onReorderProjects(arrayMove(ids, from, to));
+      return;
+    }
+
+    // Thread bucket — figure out which list of ids is being reordered.
+    let ids: string[] | null = null;
+    if (activeBucket === "pinned") {
+      ids = pinnedThreads.map((t) => t.id);
+    } else if (activeBucket === "orphan") {
+      ids = ungrouped.map((t) => t.id);
+    } else if (activeBucket.startsWith("project:")) {
+      const projectId = activeBucket.slice("project:".length);
+      ids = (threadsByProject.get(projectId) ?? []).map((t) => t.id);
+    }
+    if (!ids) return;
+    const from = ids.indexOf(String(active.id));
+    const to = ids.indexOf(String(over.id));
+    if (from < 0 || to < 0) return;
+    onReorderThreads(arrayMove(ids, from, to));
+  }
 
   return (
     <div
@@ -167,7 +265,7 @@ export function Sidebar({
               <ThreadSkeleton />
             </div>
           ) : (
-            <>
+            <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
               {/* Pinned section — top-level, sibling to Projects */}
               {pinnedThreads.length > 0 && (
                 <>
@@ -180,18 +278,25 @@ export function Sidebar({
                     </span>
                   </div>
                   <div className="px-3 mb-2">
-                    {pinnedThreads.map((thread) => (
-                      <ThreadRow
-                        key={thread.id}
-                        thread={thread}
-                        active={thread.id === activeThreadId}
-                        onSelect={onSelectThread}
-                        onRename={(name) => onRenameThread(thread.id, name)}
-                        onDelete={() => onDeleteThread(thread.id)}
-                        onArchive={() => onArchiveThread(thread.id)}
-                        onPin={() => onPinThread(thread.id)}
-                      />
-                    ))}
+                    <SortableContext
+                      items={pinnedThreads.map((t) => t.id)}
+                      strategy={verticalListSortingStrategy}
+                    >
+                      {pinnedThreads.map((thread) => (
+                        <SortableThreadRow
+                          key={thread.id}
+                          id={thread.id}
+                          bucket="pinned"
+                          thread={thread}
+                          active={thread.id === activeThreadId}
+                          onSelect={onSelectThread}
+                          onRename={(name) => onRenameThread(thread.id, name)}
+                          onDelete={() => onDeleteThread(thread.id)}
+                          onArchive={() => onArchiveThread(thread.id)}
+                          onPin={() => onPinThread(thread.id)}
+                        />
+                      ))}
+                    </SortableContext>
                   </div>
                 </>
               )}
@@ -241,43 +346,55 @@ export function Sidebar({
 
               <div className="px-3">
               {/* Project groups */}
-              {projects.map((project) => {
-                const projectThreads = threadsByProject.get(project.id) ?? [];
-                return (
-                  <ProjectGroup
-                    key={project.id}
-                    project={project}
-                    threads={projectThreads}
-                    activeThreadId={activeThreadId}
-                    onSelectThread={onSelectThread}
-                    onNewThread={() => onNewThread(project.id)}
-                    onRename={(name) => onRenameProject(project.id, name)}
-                    onDelete={() => onDeleteProject(project.id)}
-                    onRenameThread={onRenameThread}
-                    onDeleteThread={onDeleteThread}
-                    onArchiveThread={onArchiveThread}
-                    onPinThread={onPinThread}
-                  />
-                );
-              })}
+              <SortableContext
+                items={sortedProjects.map((p) => p.id)}
+                strategy={verticalListSortingStrategy}
+              >
+                {sortedProjects.map((project) => {
+                  const projectThreads = threadsByProject.get(project.id) ?? [];
+                  return (
+                    <SortableProjectGroup
+                      key={project.id}
+                      project={project}
+                      threads={projectThreads}
+                      activeThreadId={activeThreadId}
+                      onSelectThread={onSelectThread}
+                      onNewThread={() => onNewThread(project.id)}
+                      onRename={(name) => onRenameProject(project.id, name)}
+                      onDelete={() => onDeleteProject(project.id)}
+                      onRenameThread={onRenameThread}
+                      onDeleteThread={onDeleteThread}
+                      onArchiveThread={onArchiveThread}
+                      onPinThread={onPinThread}
+                    />
+                  );
+                })}
+              </SortableContext>
 
               {/* Ungrouped threads (orphans) */}
-              {ungrouped.map((thread) => (
-                <ThreadRow
-                  key={thread.id}
-                  thread={thread}
-                  active={thread.id === activeThreadId}
-                  onSelect={onSelectThread}
-                  onRename={(name) => onRenameThread(thread.id, name)}
-                  onDelete={() => onDeleteThread(thread.id)}
-                  onArchive={() => onArchiveThread(thread.id)}
-                  onPin={() => onPinThread(thread.id)}
-                />
-              ))}
+              <SortableContext
+                items={ungrouped.map((t) => t.id)}
+                strategy={verticalListSortingStrategy}
+              >
+                {ungrouped.map((thread) => (
+                  <SortableThreadRow
+                    key={thread.id}
+                    id={thread.id}
+                    bucket="orphan"
+                    thread={thread}
+                    active={thread.id === activeThreadId}
+                    onSelect={onSelectThread}
+                    onRename={(name) => onRenameThread(thread.id, name)}
+                    onDelete={() => onDeleteThread(thread.id)}
+                    onArchive={() => onArchiveThread(thread.id)}
+                    onPin={() => onPinThread(thread.id)}
+                  />
+                ))}
+              </SortableContext>
 
               </div>
 
-            </>
+            </DndContext>
           )}
         </div>
       </ScrollArea>
@@ -847,18 +964,25 @@ function ProjectGroup({
 
       {!collapsed && (
         threads.length > 0 ? (
-          threads.map((thread) => (
-            <ThreadRow
-              key={thread.id}
-              thread={thread}
-              active={thread.id === activeThreadId}
-              onSelect={onSelectThread}
-              onRename={(name) => onRenameThread(thread.id, name)}
-              onDelete={() => onDeleteThread(thread.id)}
-              onArchive={() => onArchiveThread(thread.id)}
-              onPin={() => onPinThread(thread.id)}
-            />
-          ))
+          <SortableContext
+            items={threads.map((t) => t.id)}
+            strategy={verticalListSortingStrategy}
+          >
+            {threads.map((thread) => (
+              <SortableThreadRow
+                key={thread.id}
+                id={thread.id}
+                bucket={`project:${project.id}`}
+                thread={thread}
+                active={thread.id === activeThreadId}
+                onSelect={onSelectThread}
+                onRename={(name) => onRenameThread(thread.id, name)}
+                onDelete={() => onDeleteThread(thread.id)}
+                onArchive={() => onArchiveThread(thread.id)}
+                onPin={() => onPinThread(thread.id)}
+              />
+            ))}
+          </SortableContext>
         ) : (
           <button
             onClick={onNewThread}
@@ -872,6 +996,64 @@ function ProjectGroup({
           </button>
         )
       )}
+    </div>
+  );
+}
+
+/**
+ * Drag-aware wrapper around {@link ThreadRow}. `bucket` identifies the
+ * SortableContext this row belongs to so the top-level drag-end handler
+ * can tell a pinned-list drop from a per-project-list drop without
+ * having to consult all three lists.
+ *
+ * GOTCHA: `PointerSensor.activationConstraint.distance` prevents a
+ * simple click on the row (or its menu button) from firing a drag, so
+ * we can safely spread the drag listeners on the wrapper rather than
+ * carving out a dedicated drag handle.
+ */
+function SortableThreadRow({
+  id,
+  bucket,
+  ...rowProps
+}: {
+  id: string;
+  bucket: string;
+} & React.ComponentProps<typeof ThreadRow>) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
+    useSortable({ id, data: { bucket } });
+  const style: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.4 : 1,
+    zIndex: isDragging ? 1 : undefined,
+    position: "relative",
+  };
+  return (
+    <div ref={setNodeRef} style={style} {...attributes} {...listeners}>
+      <ThreadRow {...rowProps} />
+    </div>
+  );
+}
+
+/**
+ * Drag-aware wrapper around {@link ProjectGroup}. The listeners go on
+ * the header container inside ProjectGroup via a shared inner div —
+ * we keep the collapse toggle and new-thread button clickable thanks
+ * to the 5px pointer-sensor threshold.
+ */
+function SortableProjectGroup(props: React.ComponentProps<typeof ProjectGroup>) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
+    useSortable({ id: props.project.id, data: { bucket: "projects" } });
+  const style: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.4 : 1,
+    zIndex: isDragging ? 1 : undefined,
+    position: "relative",
+  };
+  return (
+    <div ref={setNodeRef} style={style} {...attributes} {...listeners}>
+      <ProjectGroup {...props} />
     </div>
   );
 }

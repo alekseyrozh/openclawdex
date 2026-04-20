@@ -132,6 +132,13 @@ contextBridge.exposeInMainWorld("openclawdex", {
   removeFolder: (folderId: string): Promise<void> =>
     ipcRenderer.invoke("projects:remove-folder", folderId),
 
+  /**
+   * Persist a new sidebar order for projects. `orderedIds` is the full
+   * project list in its new order — not a delta.
+   */
+  reorderProjects: (orderedIds: string[]): Promise<void> =>
+    ipcRenderer.invoke("projects:reorder", orderedIds),
+
   // ── Git ─────────────────────────────────────────────────────
 
   /** Get the current git branch for a directory. */
@@ -174,6 +181,14 @@ contextBridge.exposeInMainWorld("openclawdex", {
   /** Reassign a thread to a different project (or null to ungroup). */
   changeThreadProject: (sessionId: string, projectId: string | null): Promise<void> =>
     ipcRenderer.invoke("threads:change-project", sessionId, projectId),
+
+  /**
+   * Persist a new sidebar order for threads. `orderedIds` is the full
+   * ordered list for one bucket (pinned / per-project / orphans); the
+   * renderer decides which bucket it corresponds to.
+   */
+  reorderThreads: (orderedIds: string[]): Promise<void> =>
+    ipcRenderer.invoke("threads:reorder", orderedIds),
 
   /**
    * Change the thread's effective {@link UserMode}. Returns the

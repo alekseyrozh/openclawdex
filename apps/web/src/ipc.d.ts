@@ -40,6 +40,7 @@ declare global {
     deleteProject: (projectId: string) => Promise<void>;
     addFolder: (projectId: string, folderPath: string) => Promise<string>;
     removeFolder: (folderId: string) => Promise<void>;
+    reorderProjects: (orderedIds: string[]) => Promise<void>;
     getGitBranch: (cwd: string) => Promise<string | null>;
     openExternal: (url: string) => Promise<void>;
     openInEditor: (targetPath: string, cwd?: string, line?: number, editor?: EditorTarget) => Promise<{ ok: boolean; message?: string }>;
@@ -48,6 +49,7 @@ declare global {
     archiveThread: (sessionId: string, archived: boolean) => Promise<void>;
     deleteThread: (sessionId: string) => Promise<void>;
     changeThreadProject: (sessionId: string, projectId: string | null) => Promise<void>;
+    reorderThreads: (orderedIds: string[]) => Promise<void>;
     setThreadMode: (threadId: string, mode: UserMode) => Promise<UserMode>;
     onEvent: (callback: (event: unknown) => void) => () => void;
   }
