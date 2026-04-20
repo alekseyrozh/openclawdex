@@ -2428,13 +2428,35 @@ export function ChatView({
         f.type.startsWith("image/"),
       );
       if (images.length === 0) return;
+      // Materialize bytes into a fresh Blob before createObjectURL.
+      // Drag sources that use NSFilePromise (CleanShot, Finder
+      // screenshot overlay) hand us a File whose backing path isn't
+      // populated at drop time — createObjectURL on the raw File yields
+      // a URL that 404s when the <img> loads, and <img> doesn't retry.
+      // Reading the bytes now forces the OS to resolve the promise.
       const newAttachments: ImageAttachment[] = images.map((file) => ({
         id: crypto.randomUUID(),
         file,
         name: file.name,
-        previewUrl: URL.createObjectURL(file),
+        previewUrl: "",
       }));
       setAttachments((prev) => [...prev, ...newAttachments]);
+      newAttachments.forEach((att) => {
+        att.file
+          .arrayBuffer()
+          .then((buf) => {
+            const blob = new Blob([buf], {
+              type: att.file.type || "image/png",
+            });
+            const url = URL.createObjectURL(blob);
+            setAttachments((prev) =>
+              prev.map((a) => (a.id === att.id ? { ...a, previewUrl: url } : a)),
+            );
+          })
+          .catch(() => {
+            /* leave previewUrl empty; the chip still shows the filename */
+          });
+      });
     },
     [thread?.provider],
   );
@@ -3910,11 +3932,18 @@ function ChatComposer({
                   border: "1px solid var(--border-default)",
                 }}
               >
-                <img
-                  src={a.previewUrl}
-                  alt={a.name}
-                  className="w-5 h-5 rounded object-cover"
-                />
+                {a.previewUrl ? (
+                  <img
+                    src={a.previewUrl}
+                    alt={a.name}
+                    className="w-5 h-5 rounded object-cover"
+                  />
+                ) : (
+                  <div
+                    className="w-5 h-5 rounded"
+                    style={{ background: "var(--surface-4)" }}
+                  />
+                )}
                 <span
                   className="text-[12px] font-medium max-w-[140px] truncate"
                   style={{ color: "var(--text-secondary)" }}
