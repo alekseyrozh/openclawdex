@@ -1130,32 +1130,37 @@ function SortableThreadRow({
     activeIndex,
     index,
   } = useSortable({ id, data: { bucket } });
-  const style: React.CSSProperties = {
+  const wrapperStyle: React.CSSProperties = {
     // GOTCHA: use `Translate.toString` (not `Transform.toString`) so we
     // emit `translate3d(…)` only. The `Transform` variant can append
     // `scaleX/scaleY` which dnd-kit occasionally sets to animate the
     // gap-fill — and those scales visibly squashed the row icons.
     transform: CSS.Translate.toString(transform),
-    // Hide the source row entirely while dragging; the DragOverlay
-    // renders the visible phantom that tracks the cursor. Anything in
-    // between (e.g. opacity 0.4) reads as a glitchy "magnet" ghost.
-    opacity: isDragging ? 0 : 1,
     position: "relative",
     cursor: "grab",
     touchAction: "none",
     width: "100%",
   };
-  // Drop-target indicator: a thin line at the boundary the dropped
-  // item will land on. Above this row when dragging up into it, below
-  // when dragging down. `activeIndex === -1` means no active drag.
+  // Hide the source row's pixels while dragging — the DragOverlay
+  // renders the visible phantom. Keep opacity on an inner div (not the
+  // wrapper) so the drop-line sibling stays visible when the cursor
+  // hovers back over the source slot.
+  const contentStyle: React.CSSProperties = { opacity: isDragging ? 0 : 1 };
+  // Drop-target indicator. When hovering a different row, line goes on
+  // the side the active is approaching from. When hovering back over
+  // the source itself, show a line at its top as a "drop = stay here"
+  // signal.
+  const hasActive = activeIndex !== -1;
   const showLineAbove =
-    isOver && !isDragging && activeIndex !== -1 && activeIndex > index;
+    isOver && hasActive && (isDragging || activeIndex > index);
   const showLineBelow =
-    isOver && !isDragging && activeIndex !== -1 && activeIndex < index;
+    isOver && hasActive && !isDragging && activeIndex < index;
   return (
-    <div ref={setNodeRef} style={style} {...attributes} {...listeners}>
+    <div ref={setNodeRef} style={wrapperStyle} {...attributes} {...listeners}>
       {showLineAbove && <DropLine side="top" />}
-      <ThreadRow {...rowProps} />
+      <div style={contentStyle}>
+        <ThreadRow {...rowProps} />
+      </div>
       {showLineBelow && <DropLine side="bottom" />}
     </div>
   );
@@ -1178,37 +1183,40 @@ function SortableProjectGroup(props: React.ComponentProps<typeof ProjectGroup>) 
     activeIndex,
     index,
   } = useSortable({ id: props.project.id, data: { bucket: "projects" } });
-  const style: React.CSSProperties = {
+  const wrapperStyle: React.CSSProperties = {
     transform: CSS.Translate.toString(transform),
-    opacity: isDragging ? 0 : 1,
     position: "relative",
     cursor: "grab",
     touchAction: "none",
     width: "100%",
   };
+  const contentStyle: React.CSSProperties = { opacity: isDragging ? 0 : 1 };
+  const hasActive = activeIndex !== -1;
   const showLineAbove =
-    isOver && !isDragging && activeIndex !== -1 && activeIndex > index;
+    isOver && hasActive && (isDragging || activeIndex > index);
   const showLineBelow =
-    isOver && !isDragging && activeIndex !== -1 && activeIndex < index;
+    isOver && hasActive && !isDragging && activeIndex < index;
   return (
-    <div ref={setNodeRef} style={style} {...attributes} {...listeners}>
+    <div ref={setNodeRef} style={wrapperStyle} {...attributes} {...listeners}>
       {showLineAbove && <DropLine side="top" />}
-      {/* While this project is the active drag, collapse its footprint
-          to just the header by telling ProjectGroup to skip the thread
-          children. Combined with MeasuringStrategy.Always on DndContext,
-          the source slot shrinks to one row so siblings only shift by
-          a header's worth of height instead of the whole expanded tree. */}
-      <ProjectGroup {...props} isDragging={isDragging} />
+      <div style={contentStyle}>
+        {/* While this project is the active drag, collapse its footprint
+            to just the header by telling ProjectGroup to skip the thread
+            children. Combined with MeasuringStrategy.Always on DndContext,
+            the source slot shrinks to one row so siblings only shift by
+            a header's worth of height instead of the whole expanded tree. */}
+        <ProjectGroup {...props} isDragging={isDragging} />
+      </div>
       {showLineBelow && <DropLine side="bottom" />}
     </div>
   );
 }
 
 /**
- * 2px accent bar shown at the edge of the current drop target.
- * Positioned absolutely so it sits in the row-to-row gap (negative
- * offset) without disturbing the sibling layout that dnd-kit is
- * already translating.
+ * 2px bar shown at the edge of the current drop target. White at 0.5
+ * opacity — matches the theme's secondary-ink tier and stays consistent
+ * with other sidebar chrome (we don't use the accent blue for structural
+ * UI, only for inline code refs).
  */
 function DropLine({ side }: { side: "top" | "bottom" }) {
   return (
@@ -1219,9 +1227,10 @@ function DropLine({ side }: { side: "top" | "bottom" }) {
         left: 8,
         right: 8,
         height: 2,
-        background: "var(--accent, #339CFF)",
+        background: "rgba(255, 255, 255, 0.5)",
         borderRadius: 2,
         pointerEvents: "none",
+        zIndex: 2,
         [side]: -1,
       }}
     />
