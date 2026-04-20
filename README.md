@@ -61,7 +61,7 @@ pnpm install
 pnpm dev:desktop
 ```
 
-The Electron window loads from `http://localhost:3000`. Hot reload works for the web app.
+The Electron window loads from `http://localhost:4123`. Hot reload works for the web app.
 
 ### Production build
 
