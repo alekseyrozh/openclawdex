@@ -1027,6 +1027,8 @@ function SortableThreadRow({
     opacity: isDragging ? 0.4 : 1,
     zIndex: isDragging ? 1 : undefined,
     position: "relative",
+    cursor: isDragging ? "grabbing" : "grab",
+    touchAction: "none",
   };
   return (
     <div ref={setNodeRef} style={style} {...attributes} {...listeners}>
@@ -1050,6 +1052,8 @@ function SortableProjectGroup(props: React.ComponentProps<typeof ProjectGroup>) 
     opacity: isDragging ? 0.4 : 1,
     zIndex: isDragging ? 1 : undefined,
     position: "relative",
+    cursor: isDragging ? "grabbing" : "grab",
+    touchAction: "none",
   };
   return (
     <div ref={setNodeRef} style={style} {...attributes} {...listeners}>
