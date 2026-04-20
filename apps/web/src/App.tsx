@@ -172,6 +172,11 @@ function newThread(projectId: string | null, provider: Provider = lastSavedProvi
     historyLoaded: true,
     lastModified: new Date(),
     userMode: lastSavedUserMode(),
+    // Negative epoch puts new threads above everything: older rows
+    // backfilled to positive `createdAt`, and reordered buckets using
+    // dense `0..N-1`. Preserved by the DB insert in main.ts so the
+    // order doesn't flip when the pending thread becomes persisted.
+    sortOrder: -Date.now(),
   };
 }
 

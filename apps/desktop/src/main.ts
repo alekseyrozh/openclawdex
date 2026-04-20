@@ -360,6 +360,10 @@ function setupIpcHandlers(): void {
                   createdAt: Date.now(),
                   projectId: opts?.projectId ?? null,
                   provider,
+                  // Negative epoch — sorts above `createdAt`-backfilled
+                  // rows and above dense `0..N-1` reorder indices, so
+                  // new threads land at the top of their bucket.
+                  sortOrder: -Date.now(),
                 })
                 .onConflictDoNothing();
             } catch (err) {
@@ -770,7 +774,9 @@ function setupIpcHandlers(): void {
     const now = Date.now();
 
     const db = getDb();
-    await db.insert(projects).values({ id: projectId, name, createdAt: now });
+    await db
+      .insert(projects)
+      .values({ id: projectId, name, createdAt: now, sortOrder: -now });
     await db
       .insert(projectFolders)
       .values({ id: folderId, projectId, folderPath, createdAt: now });
