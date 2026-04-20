@@ -23,7 +23,7 @@ The **preload script** (`preload.ts`) bridges the two: it exposes a `window.open
 
 pnpm monorepo with two apps and a shared package:
 
-- **`apps/web`** — React + Vite + Tailwind v4 frontend. This is the UI that gets loaded inside Electron (via `http://localhost:3000` in dev).
+- **`apps/web`** — React + Vite + Tailwind v4 frontend. This is the UI that gets loaded inside Electron (via `http://localhost:4123` in dev).
 - **`apps/desktop`** — Electron shell. Provides native macOS window chrome (hiddenInset title bar, vibrancy sidebar, traffic lights), SQLite database (Drizzle ORM), and IPC handlers for CLI integration. Compiles with `tsc` to `dist/`.
 - **`packages/shared`** — Zod schemas shared between web and desktop (IPC events, session types, project types).
 
@@ -81,7 +81,7 @@ pnpm dev
 cd apps/desktop && npx tsc && npx electron .
 ```
 
-The Electron window loads from `http://localhost:3000`. Hot reload works — edit the web app and it updates in the Electron window.
+The Electron window loads from `http://localhost:4123`. Hot reload works — edit the web app and it updates in the Electron window.
 
 ## Theme
 

@@ -53,7 +53,7 @@ import {
 import { initDb, getDb } from "./db";
 import { knownThreads, projects, projectFolders } from "./db/schema";
 
-const DEV_URL = "http://localhost:3000";
+const DEV_URL = "http://localhost:4123";
 const IS_DEV = !app.isPackaged;
 
 // macOS GUI apps don't inherit the shell PATH. Load it so child processes
