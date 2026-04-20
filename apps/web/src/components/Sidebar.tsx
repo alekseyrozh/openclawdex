@@ -1028,7 +1028,7 @@ function SortableThreadRow({
   id: string;
   bucket: string;
 } & React.ComponentProps<typeof ThreadRow>) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
+  const { attributes, listeners, setNodeRef, transform, isDragging } =
     useSortable({ id, data: { bucket } });
   const style: React.CSSProperties = {
     // GOTCHA: use `Translate.toString` (not `Transform.toString`) so we
@@ -1036,7 +1036,10 @@ function SortableThreadRow({
     // `scaleX/scaleY` which dnd-kit occasionally sets to animate the
     // gap-fill — and those scales visibly squashed the row icons.
     transform: CSS.Translate.toString(transform),
-    transition,
+    // Deliberately no `transition`: the default dnd-kit sort animation
+    // (siblings smoothly slide to make room, drop animates into slot)
+    // hiccups on mid-drag re-renders in this app. Snapping instantly
+    // is crisper and sidesteps the jank entirely.
     opacity: isDragging ? 0.4 : 1,
     zIndex: isDragging ? 1 : undefined,
     position: "relative",
@@ -1058,15 +1061,10 @@ function SortableThreadRow({
  * to the 5px pointer-sensor threshold.
  */
 function SortableProjectGroup(props: React.ComponentProps<typeof ProjectGroup>) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
+  const { attributes, listeners, setNodeRef, transform, isDragging } =
     useSortable({ id: props.project.id, data: { bucket: "projects" } });
   const style: React.CSSProperties = {
-    // GOTCHA: use `Translate.toString` (not `Transform.toString`) so we
-    // emit `translate3d(…)` only. The `Transform` variant can append
-    // `scaleX/scaleY` which dnd-kit occasionally sets to animate the
-    // gap-fill — and those scales visibly squashed the row icons.
     transform: CSS.Translate.toString(transform),
-    transition,
     opacity: isDragging ? 0.4 : 1,
     zIndex: isDragging ? 1 : undefined,
     position: "relative",
