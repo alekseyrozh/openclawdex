@@ -22,6 +22,7 @@ import {
   DragOverlay,
   MeasuringStrategy,
   PointerSensor,
+  useDndContext,
   useSensor,
   useSensors,
   closestCenter,
@@ -1213,12 +1214,16 @@ function SortableProjectGroup(props: React.ComponentProps<typeof ProjectGroup>) 
 }
 
 /**
- * 2px bar shown at the edge of the current drop target. White at 0.5
- * opacity — matches the theme's secondary-ink tier and stays consistent
- * with other sidebar chrome (we don't use the accent blue for structural
- * UI, only for inline code refs).
+ * 2px bar shown in the middle of the gap the dropped item will fill.
+ * `side` picks which edge of the target row we anchor to; we then push
+ * the line further away by half the active row's height so it sits
+ * centered in the empty space instead of touching the target. Falls
+ * back to 1px if the active's height isn't measured yet.
  */
 function DropLine({ side }: { side: "top" | "bottom" }) {
+  const { active } = useDndContext();
+  const activeHeight = active?.rect.current.initial?.height ?? 0;
+  const offset = activeHeight > 0 ? activeHeight / 2 : 1;
   return (
     <div
       aria-hidden
@@ -1231,7 +1236,7 @@ function DropLine({ side }: { side: "top" | "bottom" }) {
         borderRadius: 2,
         pointerEvents: "none",
         zIndex: 2,
-        [side]: -1,
+        [side]: -offset,
       }}
     />
   );
