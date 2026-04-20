@@ -19,11 +19,13 @@ import { ScrollArea } from "./ScrollArea";
 import { DropdownSurface, DropdownItem } from "./Dropdown";
 import {
   DndContext,
+  DragOverlay,
   PointerSensor,
   useSensor,
   useSensors,
   closestCenter,
   type DragEndEvent,
+  type DragStartEvent,
 } from "@dnd-kit/core";
 import {
   SortableContext,
@@ -32,10 +34,7 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import {
-  restrictToVerticalAxis,
-  restrictToParentElement,
-} from "@dnd-kit/modifiers";
+import { restrictToVerticalAxis } from "@dnd-kit/modifiers";
 
 /**
  * Stable sort by `sortOrder` (asc) with `lastModified` (desc) as the
@@ -115,6 +114,10 @@ export function Sidebar({
   isLoading,
 }: SidebarProps) {
   const [archivedOpen, setArchivedOpen] = useState(false);
+  // Id of the currently-dragged row (thread or project). Drives the
+  // DragOverlay portal so the floating preview follows the cursor 1:1
+  // while the original sits hidden in its source slot.
+  const [activeId, setActiveId] = useState<string | null>(null);
 
   // 5px activation distance means a plain click still selects the
   // thread — drag only kicks in once the user actually moves the
@@ -149,6 +152,14 @@ export function Sidebar({
   // Ungrouped threads (orphaned — project was deleted)
   const ungrouped = unpinnedThreads.filter((t) => !t.projectId).slice().sort(bySortOrder);
 
+  // Look up the currently-dragged item so DragOverlay can render a
+  // static preview that tracks the cursor. Threads and projects share
+  // the same id namespace from the user's POV but not in our data —
+  // so probe threads first, then projects.
+  const activeThread = activeId ? threads.find((t) => t.id === activeId) ?? null : null;
+  const activeProject =
+    activeId && !activeThread ? projects.find((p) => p.id === activeId) ?? null : null;
+
   /**
    * Route a dnd-kit drop to the right reorder handler. Each sortable
    * item carries `data.bucket` — one of `"projects"`, `"pinned"`,
@@ -156,7 +167,12 @@ export function Sidebar({
    * moves; cross-bucket drops are ignored (the user gets no visible
    * change, which is the least surprising outcome for v1).
    */
+  function handleDragStart(e: DragStartEvent) {
+    setActiveId(String(e.active.id));
+  }
+
   function handleDragEnd(e: DragEndEvent) {
+    setActiveId(null);
     const { active, over } = e;
     if (!over || active.id === over.id) return;
     const activeBucket = active.data.current?.bucket as string | undefined;
@@ -272,8 +288,10 @@ export function Sidebar({
             <DndContext
               sensors={sensors}
               collisionDetection={closestCenter}
+              onDragStart={handleDragStart}
               onDragEnd={handleDragEnd}
-              modifiers={[restrictToVerticalAxis, restrictToParentElement]}
+              onDragCancel={() => setActiveId(null)}
+              modifiers={[restrictToVerticalAxis]}
             >
               {/* Pinned section — top-level, sibling to Projects */}
               {pinnedThreads.length > 0 && (
@@ -402,6 +420,49 @@ export function Sidebar({
               </SortableContext>
 
               </div>
+
+              {/* Portal-rendered phantom that follows the cursor 1:1. The
+                  source row is hidden (opacity 0) while dragging, so the
+                  user only ever sees this preview — no magnet-to-slot. */}
+              <DragOverlay dropAnimation={null}>
+                {activeThread ? (
+                  <div style={{ cursor: "grabbing" }}>
+                    <ThreadRow
+                      thread={activeThread}
+                      active={false}
+                      onSelect={() => {}}
+                      onRename={() => {}}
+                      onDelete={() => {}}
+                      onArchive={() => {}}
+                    />
+                  </div>
+                ) : activeProject ? (
+                  <div
+                    className="flex items-center w-full px-2 py-[5px] rounded-xl"
+                    style={{
+                      background: "rgba(255,255,255,0.06)",
+                      cursor: "grabbing",
+                    }}
+                  >
+                    <span
+                      className="shrink-0 flex items-center justify-center"
+                      style={{ width: 16, height: 16, marginRight: 6 }}
+                    >
+                      <Folder
+                        size={16}
+                        weight="regular"
+                        style={{ color: "rgba(255, 255, 255, 0.6)" }}
+                      />
+                    </span>
+                    <span
+                      className="text-[13px] font-semibold truncate"
+                      style={{ color: "rgba(255, 255, 255, 0.6)" }}
+                    >
+                      {activeProject.name}
+                    </span>
+                  </div>
+                ) : null}
+              </DragOverlay>
 
             </DndContext>
           )}
@@ -1036,14 +1097,12 @@ function SortableThreadRow({
     // `scaleX/scaleY` which dnd-kit occasionally sets to animate the
     // gap-fill — and those scales visibly squashed the row icons.
     transform: CSS.Translate.toString(transform),
-    // Deliberately no `transition`: the default dnd-kit sort animation
-    // (siblings smoothly slide to make room, drop animates into slot)
-    // hiccups on mid-drag re-renders in this app. Snapping instantly
-    // is crisper and sidesteps the jank entirely.
-    opacity: isDragging ? 0.4 : 1,
-    zIndex: isDragging ? 1 : undefined,
+    // Hide the source row entirely while dragging; the DragOverlay
+    // renders the visible phantom that tracks the cursor. Anything in
+    // between (e.g. opacity 0.4) reads as a glitchy "magnet" ghost.
+    opacity: isDragging ? 0 : 1,
     position: "relative",
-    cursor: isDragging ? "grabbing" : "grab",
+    cursor: "grab",
     touchAction: "none",
     width: "100%",
   };
@@ -1065,10 +1124,9 @@ function SortableProjectGroup(props: React.ComponentProps<typeof ProjectGroup>) 
     useSortable({ id: props.project.id, data: { bucket: "projects" } });
   const style: React.CSSProperties = {
     transform: CSS.Translate.toString(transform),
-    opacity: isDragging ? 0.4 : 1,
-    zIndex: isDragging ? 1 : undefined,
+    opacity: isDragging ? 0 : 1,
     position: "relative",
-    cursor: isDragging ? "grabbing" : "grab",
+    cursor: "grab",
     touchAction: "none",
     width: "100%",
   };
