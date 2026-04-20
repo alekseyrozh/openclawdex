@@ -1252,7 +1252,7 @@ function DropOutline({ variant }: { variant: "above" | "below" | "self" }) {
         position: "absolute",
         left: 6,
         right: 6,
-        border: "1.5px dashed rgba(255, 255, 255, 0.35)",
+        border: "1px dashed rgba(255, 255, 255, 0.22)",
         borderRadius: 10,
         pointerEvents: "none",
         zIndex: 2,
