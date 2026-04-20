@@ -1147,22 +1147,24 @@ function SortableThreadRow({
   // wrapper) so the drop-line sibling stays visible when the cursor
   // hovers back over the source slot.
   const contentStyle: React.CSSProperties = { opacity: isDragging ? 0 : 1 };
-  // Drop-target indicator. When hovering a different row, line goes on
-  // the side the active is approaching from. When hovering back over
-  // the source itself, show a line at its top as a "drop = stay here"
-  // signal.
+  // Drop-target indicator. When hovering a different row, outline goes
+  // in the gap on the side the active is approaching from. When
+  // hovering back over the source itself, outline fills the source
+  // slot as a "drop = stay here" signal.
   const hasActive = activeIndex !== -1;
-  const showLineAbove =
-    isOver && hasActive && (isDragging || activeIndex > index);
-  const showLineBelow =
+  const showAbove =
+    isOver && hasActive && !isDragging && activeIndex > index;
+  const showBelow =
     isOver && hasActive && !isDragging && activeIndex < index;
+  const showSelf = isOver && isDragging;
   return (
     <div ref={setNodeRef} style={wrapperStyle} {...attributes} {...listeners}>
-      {showLineAbove && <DropLine side="top" />}
+      {showAbove && <DropOutline variant="above" />}
+      {showSelf && <DropOutline variant="self" />}
       <div style={contentStyle}>
         <ThreadRow {...rowProps} />
       </div>
-      {showLineBelow && <DropLine side="bottom" />}
+      {showBelow && <DropOutline variant="below" />}
     </div>
   );
 }
@@ -1193,13 +1195,15 @@ function SortableProjectGroup(props: React.ComponentProps<typeof ProjectGroup>) 
   };
   const contentStyle: React.CSSProperties = { opacity: isDragging ? 0 : 1 };
   const hasActive = activeIndex !== -1;
-  const showLineAbove =
-    isOver && hasActive && (isDragging || activeIndex > index);
-  const showLineBelow =
+  const showAbove =
+    isOver && hasActive && !isDragging && activeIndex > index;
+  const showBelow =
     isOver && hasActive && !isDragging && activeIndex < index;
+  const showSelf = isOver && isDragging;
   return (
     <div ref={setNodeRef} style={wrapperStyle} {...attributes} {...listeners}>
-      {showLineAbove && <DropLine side="top" />}
+      {showAbove && <DropOutline variant="above" />}
+      {showSelf && <DropOutline variant="self" />}
       <div style={contentStyle}>
         {/* While this project is the active drag, collapse its footprint
             to just the header by telling ProjectGroup to skip the thread
@@ -1208,35 +1212,51 @@ function SortableProjectGroup(props: React.ComponentProps<typeof ProjectGroup>) 
             a header's worth of height instead of the whole expanded tree. */}
         <ProjectGroup {...props} isDragging={isDragging} />
       </div>
-      {showLineBelow && <DropLine side="bottom" />}
+      {showBelow && <DropOutline variant="below" />}
     </div>
   );
 }
 
 /**
- * 2px bar shown in the middle of the gap the dropped item will fill.
- * `side` picks which edge of the target row we anchor to; we then push
- * the line further away by half the active row's height so it sits
- * centered in the empty space instead of touching the target. Falls
- * back to 1px if the active's height isn't measured yet.
+ * Dashed outline marking the drop target area.
+ *
+ * - `"above"`: gap sits above this row (active was below, dragging up).
+ *              Outline is anchored to the row's top, extending upward
+ *              by one active-row height so it fills the opened gap.
+ * - `"below"`: gap sits below this row. Outline extends downward.
+ * - `"self"`:  cursor is back over the source's own slot. Outline
+ *              fills the wrapper (whose inner content is opacity 0 and
+ *              whose height already matches the reserved slot).
  */
-function DropLine({ side }: { side: "top" | "bottom" }) {
+function DropOutline({ variant }: { variant: "above" | "below" | "self" }) {
   const { active } = useDndContext();
-  const activeHeight = active?.rect.current.initial?.height ?? 0;
-  const offset = activeHeight > 0 ? activeHeight / 2 : 1;
+  const h = active?.rect.current.initial?.height ?? 0;
+
+  let pos: React.CSSProperties;
+  if (variant === "self") {
+    pos = { top: 0, bottom: 0 };
+  } else if (h <= 0) {
+    // Active's rect hasn't been measured yet — bail rather than render
+    // a zero-height ghost box.
+    return null;
+  } else if (variant === "above") {
+    pos = { top: -h, height: h };
+  } else {
+    pos = { bottom: -h, height: h };
+  }
+
   return (
     <div
       aria-hidden
       style={{
         position: "absolute",
-        left: 8,
-        right: 8,
-        height: 2,
-        background: "rgba(255, 255, 255, 0.5)",
-        borderRadius: 2,
+        left: 6,
+        right: 6,
+        border: "1.5px dashed rgba(255, 255, 255, 0.35)",
+        borderRadius: 10,
         pointerEvents: "none",
         zIndex: 2,
-        [side]: -offset,
+        ...pos,
       }}
     />
   );
