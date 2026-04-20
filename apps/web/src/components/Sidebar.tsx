@@ -1120,8 +1120,16 @@ function SortableThreadRow({
   id: string;
   bucket: string;
 } & React.ComponentProps<typeof ThreadRow>) {
-  const { attributes, listeners, setNodeRef, transform, isDragging } =
-    useSortable({ id, data: { bucket } });
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    isDragging,
+    isOver,
+    activeIndex,
+    index,
+  } = useSortable({ id, data: { bucket } });
   const style: React.CSSProperties = {
     // GOTCHA: use `Translate.toString` (not `Transform.toString`) so we
     // emit `translate3d(…)` only. The `Transform` variant can append
@@ -1137,9 +1145,18 @@ function SortableThreadRow({
     touchAction: "none",
     width: "100%",
   };
+  // Drop-target indicator: a thin line at the boundary the dropped
+  // item will land on. Above this row when dragging up into it, below
+  // when dragging down. `activeIndex === -1` means no active drag.
+  const showLineAbove =
+    isOver && !isDragging && activeIndex !== -1 && activeIndex > index;
+  const showLineBelow =
+    isOver && !isDragging && activeIndex !== -1 && activeIndex < index;
   return (
     <div ref={setNodeRef} style={style} {...attributes} {...listeners}>
+      {showLineAbove && <DropLine side="top" />}
       <ThreadRow {...rowProps} />
+      {showLineBelow && <DropLine side="bottom" />}
     </div>
   );
 }
@@ -1151,8 +1168,16 @@ function SortableThreadRow({
  * to the 5px pointer-sensor threshold.
  */
 function SortableProjectGroup(props: React.ComponentProps<typeof ProjectGroup>) {
-  const { attributes, listeners, setNodeRef, transform, isDragging } =
-    useSortable({ id: props.project.id, data: { bucket: "projects" } });
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    isDragging,
+    isOver,
+    activeIndex,
+    index,
+  } = useSortable({ id: props.project.id, data: { bucket: "projects" } });
   const style: React.CSSProperties = {
     transform: CSS.Translate.toString(transform),
     opacity: isDragging ? 0 : 1,
@@ -1161,15 +1186,45 @@ function SortableProjectGroup(props: React.ComponentProps<typeof ProjectGroup>) 
     touchAction: "none",
     width: "100%",
   };
+  const showLineAbove =
+    isOver && !isDragging && activeIndex !== -1 && activeIndex > index;
+  const showLineBelow =
+    isOver && !isDragging && activeIndex !== -1 && activeIndex < index;
   return (
     <div ref={setNodeRef} style={style} {...attributes} {...listeners}>
+      {showLineAbove && <DropLine side="top" />}
       {/* While this project is the active drag, collapse its footprint
           to just the header by telling ProjectGroup to skip the thread
           children. Combined with MeasuringStrategy.Always on DndContext,
           the source slot shrinks to one row so siblings only shift by
           a header's worth of height instead of the whole expanded tree. */}
       <ProjectGroup {...props} isDragging={isDragging} />
+      {showLineBelow && <DropLine side="bottom" />}
     </div>
+  );
+}
+
+/**
+ * 2px accent bar shown at the edge of the current drop target.
+ * Positioned absolutely so it sits in the row-to-row gap (negative
+ * offset) without disturbing the sibling layout that dnd-kit is
+ * already translating.
+ */
+function DropLine({ side }: { side: "top" | "bottom" }) {
+  return (
+    <div
+      aria-hidden
+      style={{
+        position: "absolute",
+        left: 8,
+        right: 8,
+        height: 2,
+        background: "var(--accent, #339CFF)",
+        borderRadius: 2,
+        pointerEvents: "none",
+        [side]: -1,
+      }}
+    />
   );
 }
 
