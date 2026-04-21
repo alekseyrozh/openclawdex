@@ -3,9 +3,6 @@ import { Sidebar } from "./components/Sidebar";
 import { ChatView } from "./components/ChatView";
 import type { ImagePayload } from "./components/ChatView";
 import { IpcEvent, SessionInfo, HistoryMessage, ProjectInfo, ContextStats, type Provider, type PendingRequest, type UserMode } from "@openclawdex/shared";
-import { createDebug } from "./debug";
-
-const debugBranch = createDebug("git-branch");
 export type { ContextStats, Provider, UserMode };
 
 export interface Thread {
@@ -499,7 +496,7 @@ export function App() {
       // Error states count too: a crash after a `git checkout` still
       // leaves the working copy on the new branch.
       if (event.type === "status" && (event.status === "idle" || event.status === "error")) {
-        refreshGitBranchRef.current?.(event.threadId, `turn-end:${event.status}`);
+        refreshGitBranchRef.current?.(event.threadId);
       }
     });
 
@@ -550,37 +547,18 @@ export function App() {
   // in any dependency array (which would re-fire the effect and
   // re-attach the focus listener on unrelated renders).
 
-  // The `trigger` tag threads through to the debug logger so you can
-  // tell which code path fired the refresh. Enable with
-  // `localStorage.debug = "git-branch"` in devtools.
-  const refreshGitBranch = useCallback((threadId: string, trigger: string) => {
-    const shortId = threadId.slice(0, 8);
+  const refreshGitBranch = useCallback((threadId: string) => {
     const getBranch = window.openclawdex?.getGitBranch;
-    if (!getBranch) {
-      debugBranch("skip", trigger, shortId, "reason=no-ipc");
-      return;
-    }
+    if (!getBranch) return;
     const thread =
       (pendingThreadRef.current?.id === threadId ? pendingThreadRef.current : undefined) ??
       threadsRef.current.find((t) => t.id === threadId);
-    if (!thread) {
-      debugBranch("skip", trigger, shortId, "reason=no-thread");
-      return;
-    }
+    if (!thread) return;
     const cwd = projectsRef.current.find((p) => p.id === thread.projectId)?.folders[0]?.path;
-    if (!cwd) {
-      debugBranch("skip", trigger, shortId, "reason=no-cwd");
-      return;
-    }
-    const prevBranch = thread.branch;
-    debugBranch("fetch", trigger, shortId, "cwd=" + cwd, "prev=" + (prevBranch ?? "—"));
+    if (!cwd) return;
 
     getBranch(cwd).then((branch) => {
-      if (!branch) {
-        debugBranch("result", trigger, shortId, "branch=null");
-        return;
-      }
-      debugBranch("result", trigger, shortId, "branch=" + branch, branch === prevBranch ? "unchanged" : "CHANGED");
+      if (!branch) return;
       // No "is this still active?" guard — we update by threadId, and
       // each thread's cwd is stable, so the result is always correct
       // for the thread we queried. Updating background threads is
@@ -605,10 +583,10 @@ export function App() {
   // re-attach the focus listener.
   useEffect(() => {
     if (!activeThreadId) return;
-    refreshGitBranch(activeThreadId, "thread-switch");
+    refreshGitBranch(activeThreadId);
     const onFocus = () => {
       const id = activeThreadIdRef.current;
-      if (id) refreshGitBranch(id, "window-focus");
+      if (id) refreshGitBranch(id);
     };
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
@@ -684,7 +662,7 @@ export function App() {
     // Re-check git branch — if this was already the active thread the
     // effect below wouldn't refire, but the user clicking in is a
     // natural "I'm paying attention to this now" signal.
-    refreshGitBranch(id, "sidebar-click");
+    refreshGitBranch(id);
   }, [refreshGitBranch]);
 
   // ── New thread within a project ──────────────────────────────
