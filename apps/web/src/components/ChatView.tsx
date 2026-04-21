@@ -32,7 +32,6 @@ import {
   X,
   ImageSquare,
   Folder,
-  FolderPlus,
   Plus,
   ArrowSquareOut,
 } from "@phosphor-icons/react";
