@@ -5,6 +5,7 @@ import { z } from "zod";
 import type { UserMode } from "@openclawdex/shared";
 import { codexTurnContextToUserMode } from "./user-mode";
 import { extractProposedPlans } from "./codex-plan";
+import { codexDisplayCommand } from "./command-display";
 
 /**
  * Read Codex thread state from the CLI's on-disk rollout files.
@@ -89,13 +90,25 @@ function normalizeToolCall(
         toolInput: {
           ...(args ?? {}),
           ...(typeof args?.cmd === "string" ? { command: args.cmd } : {}),
+          ...(typeof args?.cmd === "string"
+            ? (() => {
+                const displayCommand = codexDisplayCommand(args.cmd);
+                return displayCommand ? { display_command: displayCommand } : {};
+              })()
+            : {}),
         },
       };
-    case "shell_command":
+    case "shell_command": {
+      const command = typeof args?.command === "string" ? args.command : undefined;
+      const displayCommand = command ? codexDisplayCommand(command) : undefined;
       return {
         toolName: "shell",
-        toolInput: args,
+        toolInput: {
+          ...(args ?? {}),
+          ...(displayCommand ? { display_command: displayCommand } : {}),
+        },
       };
+    }
     case "request_user_input":
       return {
         toolName: "AskUserQuestion",

@@ -15,6 +15,7 @@ import type {
   SessionEvent,
 } from "./agent-session";
 import { codexModeOptions, codexTurnContextToUserMode } from "./user-mode";
+import { codexDisplayCommand } from "./command-display";
 
 /** Best-effort cleanup of a single tempfile. Never throws. */
 function safeUnlink(p: string): void {
@@ -98,6 +99,7 @@ const CodexCommandApprovalParams = z.object({
   reason: z.string().nullish(),
   command: z.string().nullish(),
   cwd: z.string().nullish(),
+  commandActions: z.unknown().nullish(),
 });
 
 const CodexFileChangeApprovalParams = z.object({
@@ -425,10 +427,15 @@ export class CodexSession implements AgentSession {
     }
     // Surface as a Bash-shaped tool call so the existing
     // ToolApprovalCard renders the command preview correctly.
+    const displayCommand = typeof parsed.data.command === "string"
+      ? codexDisplayCommand(parsed.data.command)
+      : undefined;
     const toolInput: Record<string, unknown> = {
       command: parsed.data.command ?? "",
+      ...(displayCommand ? { display_command: displayCommand } : {}),
       ...(parsed.data.reason && { description: parsed.data.reason }),
       ...(parsed.data.cwd && { cwd: parsed.data.cwd }),
+      ...(parsed.data.commandActions !== undefined ? { command_actions: parsed.data.commandActions } : {}),
     };
     this.emitToolApproval(req, "command", "Bash", toolInput);
   }
@@ -704,12 +711,16 @@ export class CodexSession implements AgentSession {
       }
 
       if (isType("commandExecution", "command_execution")) {
+        const command = typeof item.command === "string" ? item.command : "";
+        const displayCommand = command ? codexDisplayCommand(command) : undefined;
         this.currentTurn.onEvent({
           kind: "tool_use",
           toolUseId: typeof item.id === "string" ? item.id : undefined,
           toolName: "shell",
           toolInput: {
-            command: item.command,
+            command,
+            ...(displayCommand ? { display_command: displayCommand } : {}),
+            ...(item.commandActions !== undefined ? { command_actions: item.commandActions } : {}),
             // Codex serializes these as camelCase on the wire.
             output: item.aggregatedOutput ?? item.aggregated_output,
             exit_code: item.exitCode ?? item.exit_code,
@@ -1227,4 +1238,3 @@ export class CodexSession implements AgentSession {
     }
   }
 }
-
