@@ -59,10 +59,9 @@ export const SessionInfo = z.object({
   projectId: z.string().optional(),
   contextStats: ContextStats.optional(),
   pinned: z.boolean().optional(),
-  archived: z.boolean().optional(),
-  // Epoch ms the thread was last archived. Drives the archive list
-  // sort order (most-recent-first). Absent on rows that have never
-  // been archived or that predate the column.
+  // Epoch ms the thread was archived. Single source of truth for
+  // archive state: present = archived, absent = active. Drives the
+  // archive list's sort order (most-recent-first).
   archivedAt: z.number().optional(),
   userMode: UserMode.optional(),
   // Sidebar position within its bucket (pinned / per-project / orphan).

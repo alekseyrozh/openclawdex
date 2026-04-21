@@ -57,6 +57,13 @@
       "when": 1776783624595,
       "tag": "0007_lean_spencer_smythe",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1776795266630,
+      "tag": "0008_brief_marvel_zombies",
+      "breakpoints": true
     }
   ]
 }

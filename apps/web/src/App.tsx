@@ -37,11 +37,10 @@ export interface Thread {
   historyLoaded?: boolean;
   lastModified: Date;
   contextStats?: ContextStats;
-  archived?: boolean;
   /**
-   * Epoch ms the thread was most recently archived. Populated from the
-   * DB row; drives the archive list's sort order (most-recent-first).
-   * Undefined when the row has never been archived.
+   * Epoch ms the thread was archived. Single source of truth for
+   * archive state: present = archived, undefined = active. Drives the
+   * archive list's sort order (most-recent-first).
    */
   archivedAt?: number;
   pinned?: boolean;
@@ -202,7 +201,6 @@ function sessionToThread(s: SessionInfo): Thread {
     historyLoaded: false,
     lastModified: new Date(s.lastModified),
     contextStats: s.contextStats,
-    archived: s.archived ?? false,
     archivedAt: s.archivedAt,
     pinned: s.pinned ?? false,
     sortOrder: s.sortOrder,
@@ -1131,15 +1129,14 @@ export function App() {
   const handleArchiveThread = useCallback((threadId: string) => {
     const thread = threadsRef.current.find((t) => t.id === threadId);
     if (!thread) return;
-    const prevArchived = thread.archived ?? false;
     const prevArchivedAt = thread.archivedAt;
-    const archived = !prevArchived;
-    // Mirror the backend's stamping rule (main.ts only writes archivedAt
-    // on archive, leaves it intact on unarchive) so the archive list's
-    // sort updates immediately without waiting for a list reload.
-    const archivedAt = archived ? Date.now() : prevArchivedAt;
+    const archived = prevArchivedAt == null;
+    // `archivedAt` is the single source of truth — non-null means
+    // archived, undefined means active. Optimistic update mirrors the
+    // backend write in main.ts so the sidebar reorders immediately.
+    const archivedAt = archived ? Date.now() : undefined;
     setThreads((prev) =>
-      prev.map((t) => (t.id === threadId ? { ...t, archived, archivedAt } : t)),
+      prev.map((t) => (t.id === threadId ? { ...t, archivedAt } : t)),
     );
     // Deselect if we just archived the active thread
     if (activeThreadId === threadId && archived) {
@@ -1150,9 +1147,7 @@ export function App() {
         reportIpcError(archived ? "Archive thread" : "Unarchive thread", err);
         setThreads((prev) =>
           prev.map((t) =>
-            t.id === threadId
-              ? { ...t, archived: prevArchived, archivedAt: prevArchivedAt }
-              : t,
+            t.id === threadId ? { ...t, archivedAt: prevArchivedAt } : t,
           ),
         );
       });

@@ -533,7 +533,6 @@ function setupIpcHandlers(): void {
           customName: knownThreads.customName,
           contextStats: knownThreads.contextStats,
           pinned: knownThreads.pinned,
-          archived: knownThreads.archived,
           archivedAt: knownThreads.archivedAt,
           provider: knownThreads.provider,
           createdAt: knownThreads.createdAt,
@@ -581,7 +580,6 @@ function setupIpcHandlers(): void {
           projectId: row.projectId ?? undefined,
           contextStats,
           pinned: row.pinned ?? false,
-          archived: row.archived ?? false,
           ...(row.archivedAt != null ? { archivedAt: row.archivedAt } : {}),
           sortOrder: row.sortOrder,
           ...(override ? { userMode: override } : diskMode ? { userMode: diskMode } : {}),
@@ -606,7 +604,6 @@ function setupIpcHandlers(): void {
           projectId: row.projectId ?? undefined,
           contextStats,
           pinned: row.pinned ?? false,
-          archived: row.archived ?? false,
           ...(row.archivedAt != null ? { archivedAt: row.archivedAt } : {}),
           sortOrder: row.sortOrder,
           ...(override ? { userMode: override } : diskMode ? { userMode: diskMode } : {}),
@@ -1112,14 +1109,11 @@ function setupIpcHandlers(): void {
       ThreadsArchiveInput,
       args,
     );
-    // Only stamp `archivedAt` on the archive side. Leaving the stamp
-    // intact on unarchive is intentional: if the user archives→unarchives
-    // →archives without a re-stamp it still behaves correctly (the
-    // archive branch below refreshes it), and it avoids writing NULL
-    // over the history for no upside.
+    // `archived_at` is the sole column driving archive state: a
+    // timestamp means archived, null means active.
     await getDb()
       .update(knownThreads)
-      .set(archived ? { archived, archivedAt: Date.now() } : { archived })
+      .set({ archivedAt: archived ? Date.now() : null })
       .where(eq(knownThreads.sessionId, sessionId));
   });
 

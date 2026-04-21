@@ -21,12 +21,12 @@ export const knownThreads = sqliteTable("known_threads", {
   customName: text("custom_name"),
   contextStats: text("context_stats"),
   pinned: integer("pinned", { mode: "boolean" }).default(false),
-  archived: integer("archived", { mode: "boolean" }).default(false),
-  // Epoch ms when `archived` last flipped to true. Sorts the archive
-  // list most-recent-first so a freshly-archived thread is findable.
-  // Null when the row has never been archived; the unarchive path
-  // leaves the stamp intact so reshuffles don't lose history (only
-  // the boolean is flipped back).
+  // Epoch ms when the thread was archived. This is the single source
+  // of truth for archive state: non-null = archived, null = active.
+  // Unarchiving sets it back to null (we don't preserve history — the
+  // `archived` boolean column used to, but collapsing into one column
+  // wins on simplicity and a re-archive restamps anyway). Sorts the
+  // archive list most-recent-first.
   archivedAt: integer("archived_at"),
   // Which agent backend this thread runs on. Defaults to 'claude' so
   // rows that existed before multi-provider support get backfilled correctly

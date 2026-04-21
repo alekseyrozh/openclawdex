@@ -8,7 +8,7 @@ import {
   PencilSimple,
   Trash,
   Plus,
-  FolderPlus,
+  FolderSimplePlus,
   Archive,
   PushPin,
   X,
@@ -146,18 +146,19 @@ export function Sidebar({
     return closestCenter({ ...args, droppableContainers: sameBucket });
   };
 
-  // Split active vs archived. Archived threads sort by `archivedAt`
-  // descending (most-recently-archived first) so a thread the user
-  // just archived sits at the top of the list — which is where they'll
-  // look for it. Rows with no stamp (pre-migration) fall to the bottom
-  // with `lastModified` as a stable tiebreaker.
-  const activeThreads = threads.filter((t) => !t.archived);
+  // Split active vs archived. `archivedAt` is the single source of
+  // truth: present = archived, absent = active. Archived threads sort
+  // by `archivedAt` desc (most-recently-archived first) so a thread
+  // the user just archived sits at the top of the list. `lastModified`
+  // is a stable tiebreaker for the (vanishingly rare) case of two
+  // archives landing in the same ms.
+  const activeThreads = threads.filter((t) => t.archivedAt == null);
   const archivedThreads = threads
-    .filter((t) => t.archived)
+    .filter((t) => t.archivedAt != null)
     .slice()
     .sort((a, b) => {
-      const aa = a.archivedAt ?? -Infinity;
-      const ba = b.archivedAt ?? -Infinity;
+      const aa = a.archivedAt ?? 0;
+      const ba = b.archivedAt ?? 0;
       if (aa !== ba) return ba - aa;
       const al = a.lastModified?.getTime() ?? 0;
       const bl = b.lastModified?.getTime() ?? 0;
@@ -304,7 +305,14 @@ export function Sidebar({
                 className="shrink-0 flex items-center justify-center"
                 style={{ width: 17, height: 17, color: "var(--text-primary)" }}
               >
-                <FolderPlus size={15} weight="bold" />
+                {/* Nudge right 2px: FolderSimplePlus is left-heavy (folder
+                    body + plus glyph sit lower-left of the box), so at the
+                    same wrapper size it reads ~2px left of a bare Plus. */}
+                <FolderSimplePlus
+                  size={17}
+                  weight="bold"
+                  style={{ transform: "translateX(2px)" }}
+                />
               </span>
               New project
             </button>
@@ -388,7 +396,19 @@ export function Sidebar({
                     className="p-[3px] rounded-md opacity-0 group-hover:opacity-60 hover:!opacity-100 transition-opacity"
                     style={{ color: "rgba(255,255,255,1)" }}
                   >
-                    <FolderPlus size={14} weight="bold" />
+                    {/* FolderSimplePlus packs a folder outline + `+` into the
+                        glyph box, so the `+` itself renders much smaller than
+                        a bare Plus at the same size — bump to 17 so the
+                        action reads at a glance. The 2px translateX lines up
+                        this 17px icon's optical center with the 14px bare
+                        `+` icons in the per-project rows below (their right
+                        edges already match; center alignment needs half the
+                        size delta ≈ 1.5px, rounded up). */}
+                    <FolderSimplePlus
+                      size={17}
+                      weight="bold"
+                      style={{ transform: "translateX(2px)" }}
+                    />
                   </button>
                 </div>
               )}
@@ -715,7 +735,7 @@ function ThreadRow({
         if (!active && !menuOpen) e.currentTarget.style.background = "transparent";
       }}
     >
-      {thread.archived ? <span className="w-2 shrink-0" /> : <ThreadStatusIndicator thread={thread} onPin={onPin} />}
+      {thread.archivedAt != null ? <span className="w-2 shrink-0" /> : <ThreadStatusIndicator thread={thread} onPin={onPin} />}
       {renaming ? (
         <input
           value={renameValue}
@@ -787,7 +807,7 @@ function ThreadRow({
                     }}
                   >
                     <Archive size={15} weight="regular" />
-                    {thread.archived ? "Unarchive" : "Archive"}
+                    {thread.archivedAt != null ? "Unarchive" : "Archive"}
                   </DropdownItem>
                   <DropdownItem
                     variant="floating"
