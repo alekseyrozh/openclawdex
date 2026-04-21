@@ -88,6 +88,7 @@ export class ClaudeSession implements AgentSession {
   private effort: ClaudeEffortLevel | undefined;
   private queryInstance: ReturnType<typeof query> | null = null;
   private streamLoopRunning = false;
+  private streamedAssistantText = "";
 
   // Async queue for feeding user messages into the SDK's prompt iterable
   private messageQueue: SDKUserMessage[] = [];
@@ -625,6 +626,7 @@ export class ClaudeSession implements AgentSession {
     try {
       for await (const msg of this.queryInstance!) {
         if (msg.type === "result") {
+          this.streamedAssistantText = "";
           // Call getContextUsage here — queryInstance is provably alive inside the loop.
           let contextUsage: ContextUsage | null = null;
           try {
@@ -675,6 +677,12 @@ export class ClaudeSession implements AgentSession {
             sessionId: msg.session_id,
             model: msg.model,
           });
+        } else {
+          const notice = this.formatSystemNotice(msg);
+          if (notice) {
+            this.streamedAssistantText += notice;
+            onEvent({ kind: "text_delta", text: notice });
+          }
         }
         break;
       }
@@ -687,7 +695,26 @@ export class ClaudeSession implements AgentSession {
           "delta" in event &&
           event.delta.type === "text_delta"
         ) {
+          this.streamedAssistantText += event.delta.text;
           onEvent({ kind: "text_delta", text: event.delta.text });
+        }
+        break;
+      }
+
+      case "rate_limit_event": {
+        const notice = this.formatRateLimitNotice(msg.rate_limit_info);
+        if (notice) {
+          this.streamedAssistantText += notice;
+          onEvent({ kind: "text_delta", text: notice });
+        }
+        break;
+      }
+
+      case "auth_status": {
+        const notice = this.formatAuthStatusNotice(msg);
+        if (notice) {
+          this.streamedAssistantText += notice;
+          onEvent({ kind: "text_delta", text: notice });
         }
         break;
       }
@@ -709,6 +736,21 @@ export class ClaudeSession implements AgentSession {
         // don't need to sniff tool names and guess.
         const content = (msg as { message?: { content?: unknown } }).message?.content;
         if (Array.isArray(content)) {
+          const finalText = content
+            .filter(
+              (block): block is { type: "text"; text: string } =>
+                !!block &&
+                typeof block === "object" &&
+                (block as { type?: string }).type === "text" &&
+                typeof (block as { text?: unknown }).text === "string",
+            )
+            .map((block) => block.text)
+            .join("");
+          const missingText = this.getMissingAssistantText(finalText);
+          if (missingText) {
+            onEvent({ kind: "text_delta", text: missingText });
+          }
+
           for (const block of content) {
             if (block && typeof block === "object" && (block as { type?: string }).type === "tool_use") {
               const name = (block as { name?: string }).name;
@@ -723,10 +765,140 @@ export class ClaudeSession implements AgentSession {
             }
           }
         }
+        this.streamedAssistantText = "";
         break;
       }
 
-      // All other message types (rate_limit_event, tool_progress, etc.) — ignore
+      // Intentionally ignored for now:
+      // - system:notification
+      // - system:compact_boundary
+      // - system:status
+      // - system:session_state_changed
+      // - system:files_persisted
+      // - system:plugin_install
+      // - system:elicitation_complete
+      // - system:hook_started
+      // - system:hook_progress
+      // - system:hook_response
+      // - system:task_started
+      // - system:task_updated
+      // - system:task_progress
+      // - system:task_notification
+      // - prompt_suggestion
+      // - tool_progress
+      // - tool_use_summary
+      // - memory_recall
+      // - user
+      // - user_message_replay
+      //
+      // TODO: design proper UI treatment for the dropped message kinds
+      // instead of surfacing them as raw transcript text everywhere.
+      // Some likely want richer rendering later (for example errors in
+      // red, progress as compact status rows, task/hook activity in
+      // collapsible cards), but not in this pass.
+    }
+  }
+
+  private getMissingAssistantText(finalText: string): string {
+    if (!finalText) return "";
+    if (!this.streamedAssistantText) return finalText;
+    if (finalText === this.streamedAssistantText) return "";
+    if (finalText.startsWith(this.streamedAssistantText)) {
+      return finalText.slice(this.streamedAssistantText.length);
+    }
+
+    let prefix = 0;
+    while (
+      prefix < finalText.length &&
+      prefix < this.streamedAssistantText.length &&
+      finalText[prefix] === this.streamedAssistantText[prefix]
+    ) {
+      prefix += 1;
+    }
+    return prefix > 0 ? finalText.slice(prefix) : "";
+  }
+
+  private formatRateLimitNotice(info: {
+    status: "allowed" | "allowed_warning" | "rejected";
+    resetsAt?: number;
+    overageStatus?: "allowed" | "allowed_warning" | "rejected";
+    overageResetsAt?: number;
+  }): string | null {
+    const rejected = info.overageStatus === "rejected" || info.status === "rejected";
+    if (!rejected) return null;
+
+    const resetAt = info.overageStatus === "rejected" ? info.overageResetsAt ?? info.resetsAt : info.resetsAt;
+    if (typeof resetAt !== "number" || !Number.isFinite(resetAt)) {
+      return "You've hit your limit";
+    }
+
+    const epochMs = resetAt < 1_000_000_000_000 ? resetAt * 1000 : resetAt;
+    const timeZone =
+      Intl.DateTimeFormat().resolvedOptions().timeZone ||
+      process.env.TZ ||
+      "UTC";
+    const formattedTime = new Intl.DateTimeFormat("en-GB", {
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+      timeZone,
+    })
+      .format(epochMs)
+      .replace(":00", "")
+      .replace(" ", "")
+      .toLowerCase();
+
+    return `You've hit your limit · resets ${formattedTime} (${timeZone})`;
+  }
+
+  private formatAuthStatusNotice(msg: {
+    isAuthenticating: boolean;
+    output: string[];
+    error?: string;
+  }): string | null {
+    const lines = msg.output.filter((line) => line.trim().length > 0);
+    if (typeof msg.error === "string" && msg.error.trim().length > 0) {
+      lines.push(msg.error.trim());
+    }
+    if (lines.length > 0) return lines.join("\n");
+    if (msg.isAuthenticating) return "Authenticating with Claude…";
+    return null;
+  }
+
+  private formatSystemNotice(msg: {
+    subtype: string;
+    text?: string;
+    content?: string;
+    error?: string;
+    attempt?: number;
+    max_retries?: number;
+    retry_delay_ms?: number;
+    error_status?: number | null;
+  }): string | null {
+    switch (msg.subtype) {
+      case "local_command_output":
+        return typeof msg.content === "string" && msg.content.trim().length > 0
+          ? msg.content
+          : null;
+      case "mirror_error":
+        return typeof msg.error === "string" && msg.error.trim().length > 0
+          ? msg.error
+          : "Claude failed to persist part of the transcript.";
+      case "api_retry": {
+        const retryDelay =
+          typeof msg.retry_delay_ms === "number" && Number.isFinite(msg.retry_delay_ms)
+            ? `${Math.ceil(msg.retry_delay_ms / 1000)}s`
+            : "a short delay";
+        const status =
+          typeof msg.error_status === "number" ? ` (HTTP ${msg.error_status})` : "";
+        const attempt =
+          typeof msg.attempt === "number" && typeof msg.max_retries === "number"
+            ? `Attempt ${msg.attempt}/${msg.max_retries}`
+            : "Retrying request";
+        return `${attempt}${status}. Retrying in ${retryDelay}.`;
+      }
+      default:
+        return null;
     }
   }
 
