@@ -3800,18 +3800,9 @@ function QueuedMessagesList({
                     e.stopPropagation();
                     onDelete(m.id);
                   }}
-                  className="w-6 h-6 shrink-0 flex items-center justify-center rounded-md transition-all opacity-0 group-hover/queued:opacity-100 focus-visible:opacity-100"
-                  style={{ color: "var(--text-faint)" }}
+                  className="queue-delete-btn w-6 h-6 shrink-0 flex items-center justify-center rounded-md opacity-0 group-hover/queued:opacity-100 focus-visible:opacity-100"
                   title="Remove from queue"
                   aria-label="Remove from queue"
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.color = "var(--text-primary)";
-                    e.currentTarget.style.background = "var(--surface-3)";
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.color = "var(--text-faint)";
-                    e.currentTarget.style.background = "transparent";
-                  }}
                 >
                   <Trash size={14} weight="regular" />
                 </button>

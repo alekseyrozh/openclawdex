@@ -409,6 +409,27 @@ export function App() {
   const dragging = useRef(false);
   const sidebarRef = useRef<HTMLDivElement>(null);
 
+  const updateThreadState = useCallback(
+    (threadId: string, updater: (thread: Thread) => Thread) => {
+      const pending = pendingThreadRef.current;
+      if (pending && pending.id === threadId) {
+        setPendingThread((prev) => (prev ? updater(prev) : prev));
+        return;
+      }
+      setThreads((prev) =>
+        prev.map((t) => (t.id === threadId ? updater(t) : t)),
+      );
+    },
+    [],
+  );
+
+  const getThreadSnapshot = useCallback((threadId: string): Thread | undefined => {
+    const pending = pendingThreadRef.current;
+    return (pending && pending.id === threadId)
+      ? pending
+      : threadsRef.current.find((t) => t.id === threadId);
+  }, []);
+
   // Real thread if selected, pending thread if viewing the new-thread composer, or null
   const activeThread: Thread | null = activeThreadId
     ? (activeThreadId === pendingThread?.id ? pendingThread : threads.find((t) => t.id === activeThreadId) ?? null)
@@ -543,16 +564,12 @@ export function App() {
       // leaves the working copy on the new branch.
       if (event.type === "status" && (event.status === "idle" || event.status === "error")) {
         refreshGitBranchRef.current?.(event.threadId);
-        const pending = pendingThreadRef.current;
-        if (pending && pending.id === event.threadId && pending.suppressNextQueueDrain) {
-          setPendingThread((prev) => prev ? { ...prev, suppressNextQueueDrain: false } : prev);
-        } else {
-          const target = threadsRef.current.find((t) => t.id === event.threadId);
-          if (target?.suppressNextQueueDrain) {
-            setThreads((prev) => prev.map((t) =>
-              t.id === event.threadId ? { ...t, suppressNextQueueDrain: false } : t,
-            ));
-          }
+        const target = getThreadSnapshot(event.threadId);
+        if (target?.suppressNextQueueDrain) {
+          updateThreadState(event.threadId, (thread) => ({
+            ...thread,
+            suppressNextQueueDrain: false,
+          }));
         }
       }
 
@@ -567,21 +584,12 @@ export function App() {
       // on the same thread, so React batches them safely: final state
       // is `status: running, queue: rest`.
       if (event.type === "status" && event.status === "idle") {
-        const pending = pendingThreadRef.current;
-        const target = (pending && pending.id === event.threadId)
-          ? pending
-          : threadsRef.current.find((t) => t.id === event.threadId);
+        const target = getThreadSnapshot(event.threadId);
         if (target?.suppressNextQueueDrain) return;
         const queue = target?.queue;
         if (queue && queue.length > 0) {
           const [next, ...rest] = queue;
-          if (pending && pending.id === event.threadId) {
-            setPendingThread((prev) => prev ? { ...prev, queue: rest } : prev);
-          } else {
-            setThreads((prev) => prev.map((t) =>
-              t.id === event.threadId ? { ...t, queue: rest } : t,
-            ));
-          }
+          updateThreadState(event.threadId, (thread) => ({ ...thread, queue: rest }));
           // Defer the actual dispatch to a microtask so the queue-remove
           // and the status-idle reducers settle before dispatchSend
           // flips status back to "running". Same-tick ordering isn't
@@ -777,10 +785,7 @@ export function App() {
    */
   const handleSend = useCallback(
     (threadId: string, text: string, images?: ImagePayload[], opts?: { model?: string; effort?: string }) => {
-      const pending = pendingThreadRef.current;
-      const target = (pending && pending.id === threadId)
-        ? pending
-        : threadsRef.current.find((t) => t.id === threadId);
+      const target = getThreadSnapshot(threadId);
       const isRunning = target?.status === "running";
 
       if (!isRunning) {
@@ -797,15 +802,12 @@ export function App() {
         createdAt: Date.now(),
       };
 
-      if (pending && pending.id === threadId) {
-        setPendingThread((prev) => prev ? { ...prev, queue: [...(prev.queue ?? []), queued] } : prev);
-      } else {
-        setThreads((prev) => prev.map((t) =>
-          t.id === threadId ? { ...t, queue: [...(t.queue ?? []), queued] } : t,
-        ));
-      }
+      updateThreadState(threadId, (thread) => ({
+        ...thread,
+        queue: [...(thread.queue ?? []), queued],
+      }));
     },
-    [dispatchSend],
+    [dispatchSend, getThreadSnapshot, updateThreadState],
   );
 
   /**
@@ -814,16 +816,12 @@ export function App() {
    */
   const handleDeleteQueuedMessage = useCallback(
     (threadId: string, queuedId: string) => {
-      const pending = pendingThreadRef.current;
-      if (pending && pending.id === threadId) {
-        setPendingThread((prev) => prev ? { ...prev, queue: (prev.queue ?? []).filter((q) => q.id !== queuedId) } : prev);
-        return;
-      }
-      setThreads((prev) => prev.map((t) =>
-        t.id === threadId ? { ...t, queue: (t.queue ?? []).filter((q) => q.id !== queuedId) } : t,
-      ));
+      updateThreadState(threadId, (thread) => ({
+        ...thread,
+        queue: (thread.queue ?? []).filter((q) => q.id !== queuedId),
+      }));
     },
-    [],
+    [updateThreadState],
   );
 
   // ── Change provider on pending thread (before first turn commits) ──
@@ -1184,26 +1182,14 @@ export function App() {
   // ── Interrupt handler ─────────────────────────────────────────
 
   const handleInterrupt = useCallback((threadId: string) => {
-    const pending = pendingThreadRef.current;
-    if (pending && pending.id === threadId) {
-      setPendingThread((prev) =>
-        prev
-          ? { ...prev, suppressNextQueueDrain: true }
-          : prev,
-      );
-    } else {
-      setThreads((prev) =>
-        prev.map((t) =>
-          t.id === threadId
-            ? { ...t, suppressNextQueueDrain: true }
-            : t,
-        ),
-      );
-    }
+    updateThreadState(threadId, (thread) => ({
+      ...thread,
+      suppressNextQueueDrain: true,
+    }));
     window.openclawdex?.interrupt(threadId)?.catch((err) =>
       reportIpcError("Interrupt", err),
     );
-  }, []);
+  }, [updateThreadState]);
 
   // ── Project rename/delete handlers ────────────────────────────
 
