@@ -1109,8 +1109,6 @@ function setupIpcHandlers(): void {
       ThreadsArchiveInput,
       args,
     );
-    // `archived_at` is the sole column driving archive state: a
-    // timestamp means archived, null means active.
     await getDb()
       .update(knownThreads)
       .set({ archivedAt: archived ? Date.now() : null })

@@ -21,12 +21,7 @@ export const knownThreads = sqliteTable("known_threads", {
   customName: text("custom_name"),
   contextStats: text("context_stats"),
   pinned: integer("pinned", { mode: "boolean" }).default(false),
-  // Epoch ms when the thread was archived. This is the single source
-  // of truth for archive state: non-null = archived, null = active.
-  // Unarchiving sets it back to null (we don't preserve history — the
-  // `archived` boolean column used to, but collapsing into one column
-  // wins on simplicity and a re-archive restamps anyway). Sorts the
-  // archive list most-recent-first.
+  // Epoch ms archived; null = active. Sorts archive list newest-first.
   archivedAt: integer("archived_at"),
   // Which agent backend this thread runs on. Defaults to 'claude' so
   // rows that existed before multi-provider support get backfilled correctly
