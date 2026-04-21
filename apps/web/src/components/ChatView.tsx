@@ -34,6 +34,7 @@ import {
   Folder,
   Plus,
   ArrowSquareOut,
+  Trash,
 } from "@phosphor-icons/react";
 import { QuestionnaireForm } from "./QuestionCard";
 import { PlanApprovalCard } from "./PlanApprovalCard";
@@ -44,7 +45,7 @@ import {
   DropdownDivider,
   DropdownSectionHeader,
 } from "./Dropdown";
-import type { Thread, Message, FileChange, ContextStats } from "../App";
+import type { Thread, Message, FileChange, ContextStats, QueuedMessage } from "../App";
 import { EditorTarget, type PendingRequest, type ProjectInfo, type UserMode } from "@openclawdex/shared";
 
 /* ── Editor logos ────────────────────────────────────────────── */
@@ -2180,6 +2181,12 @@ interface ChatViewProps {
    * `EnterPlanMode` / `ExitPlanMode`).
    */
   onSetMode?: (threadId: string, mode: UserMode) => void;
+  /**
+   * Remove a message from this thread's send queue. Queued messages
+   * never reached the backend, so deletion is pure renderer state.
+   * The queue itself is read from `thread.queueState.items`.
+   */
+  onDeleteQueuedMessage?: (threadId: string, queuedId: string) => void;
 }
 
 /* ── SendButton ──────────────────────────────────────────────
@@ -2261,6 +2268,7 @@ export function ChatView({
   onCreateProject,
   onNewChat,
   onSetMode,
+  onDeleteQueuedMessage,
 }: ChatViewProps) {
   // PERF: the textarea is uncontrolled — its text lives in the DOM, read at
   // submit time via `textareaRef.current.value`. The "is there text?" signal
@@ -2737,7 +2745,11 @@ export function ChatView({
       return;
     }
 
-    if (!hasContent || thread.status === "running") return;
+    // No `running` guard here: submitting while a turn is in flight
+    // is the trigger for message scheduling. App.tsx's handleSend looks
+    // at thread.status and either dispatches immediately or appends
+    // to `thread.queueState.items` for later delivery.
+    if (!hasContent) return;
 
     // Convert attachments to base64. If the File was sourced from the
     // OS (drag-drop), Electron can resolve its real path — we pass that
@@ -3552,6 +3564,14 @@ export function ChatView({
                   />
                 </div>
               )}
+              {thread.queueState.items.length > 0 && (
+                <QueuedMessagesList
+                  messages={thread.queueState.items}
+                  onDelete={(queuedId) =>
+                    onDeleteQueuedMessage?.(thread.id, queuedId)
+                  }
+                />
+              )}
               <ChatComposer
               composerRef={composerRef}
               textareaRef={textareaRef}
@@ -3662,7 +3682,9 @@ export function ChatView({
                   ? "Reply to deny with feedback…"
                   : thread.pendingRequest?.kind === "exit_plan_approval"
                     ? "Reply to dismiss with feedback…"
-                    : undefined
+                    : thread.status === "running"
+                      ? "Ask for follow-up changes…"
+                      : undefined
               }
               footer={
                 <div className="flex items-center gap-1 mt-2 px-0.5">
@@ -3709,6 +3731,87 @@ export function ChatView({
         )}
       </div>
     </OpenFileContext.Provider>
+  );
+}
+
+/**
+ * Stack of messages the user submitted while a turn was running.
+ * Sits above the composer with a matching rounded surface so the two
+ * read as one unit. Each row is a pending user message with a delete
+ * affordance; they drain FIFO as the agent transitions back to idle.
+ */
+function QueuedMessagesList({
+  messages,
+  onDelete,
+}: {
+  messages: QueuedMessage[];
+  onDelete: (queuedId: string) => void;
+}) {
+  const [collapsed, setCollapsed] = useState(false);
+  const label = `${messages.length} Queued`;
+
+  return (
+    <div className="max-w-[720px] mx-auto mb-2">
+      <div
+        className="rounded-2xl overflow-hidden"
+        style={{
+          background: "var(--surface-2)",
+          border: "1px solid var(--border-default)",
+        }}
+      >
+        <button
+          type="button"
+          onClick={() => setCollapsed((v) => !v)}
+          className="group/queue-toggle w-full flex items-center justify-between gap-3 px-3 py-2.5 text-left"
+          aria-expanded={!collapsed}
+        >
+          <span
+            className="text-[13px] font-medium tracking-[-0.01em]"
+            style={{ color: "var(--text-secondary)" }}
+          >
+            {label}
+          </span>
+          <span
+            className="queue-toggle-pill w-7 h-7 shrink-0 inline-flex items-center justify-center rounded-full"
+            style={{
+              transform: collapsed ? "rotate(180deg)" : undefined,
+            }}
+          >
+            <CaretDown size={12} weight="bold" />
+          </span>
+        </button>
+        {!collapsed && (
+          <div className="max-h-[min(240px,32vh)] overflow-y-auto thin-scrollbar px-2 pb-2">
+            {messages.map((m) => (
+              <div
+                key={m.id}
+                className="group/queued flex items-center gap-2 px-2 py-2 rounded-xl"
+              >
+                <span
+                  className="min-w-0 flex-1 truncate text-[13px]"
+                  style={{ color: "var(--text-secondary)" }}
+                  title={m.text || "(empty)"}
+                >
+                  {m.text || "(empty)"}
+                </span>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onDelete(m.id);
+                  }}
+                  className="queue-delete-btn w-6 h-6 shrink-0 flex items-center justify-center rounded-md opacity-0 group-hover/queued:opacity-100 focus-visible:opacity-100"
+                  title="Remove from queue"
+                  aria-label="Remove from queue"
+                >
+                  <Trash size={14} weight="regular" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 

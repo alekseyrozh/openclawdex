@@ -57,6 +57,43 @@ export interface Thread {
    * (e.g. QuestionCard for `ask_user_question`) handles the input.
    */
   pendingRequest?: PendingRequest;
+  /**
+   * Renderer-side scheduling state for follow-up prompts submitted
+   * while the agent is already running.
+   */
+  queueState: QueueState;
+}
+
+export interface QueuedMessage {
+  /** Stable id so the UI can target delete/reorder without index math. */
+  id: string;
+  text: string;
+  images?: ImagePayload[];
+  /** Captured at enqueue time — a queued message preserves the
+   *  model / effort the user had selected when they typed it, even if
+   *  they flip the dropdowns before the queue drains. */
+  model?: string;
+  effort?: string;
+  createdAt: number;
+}
+
+export interface QueueState {
+  /**
+   * Follow-up prompts captured while a thread was busy. They preserve
+   * the model/effort chosen at submit time and are delivered FIFO.
+   */
+  items: QueuedMessage[];
+  /**
+   * Delivery policy for the next terminal turn boundary.
+   *
+   * `normal`:
+   *   a clean `idle` may auto-drain the next queued item.
+   * `skip_next_idle`:
+   *   skip exactly one clean `idle` drain, then reset to `normal`.
+   *   Used after interrupt so the aborted turn doesn't immediately
+   *   relaunch the backlog.
+   */
+  drainMode: "normal" | "skip_next_idle";
 }
 
 export interface MessageImage {
@@ -104,6 +141,87 @@ export interface FileChange {
 let nextMsgId = 1;
 function msgId() {
   return `msg-${nextMsgId++}`;
+}
+
+function newQueueState(): QueueState {
+  return {
+    items: [],
+    drainMode: "normal",
+  };
+}
+
+function enqueueQueuedMessage(thread: Thread, message: QueuedMessage): Thread {
+  return {
+    ...thread,
+    queueState: {
+      ...thread.queueState,
+      items: [...thread.queueState.items, message],
+    },
+  };
+}
+
+function removeQueuedMessage(thread: Thread, queuedId: string): Thread {
+  return {
+    ...thread,
+    queueState: {
+      ...thread.queueState,
+      items: thread.queueState.items.filter((q) => q.id !== queuedId),
+    },
+  };
+}
+
+function skipNextQueueDrain(thread: Thread): Thread {
+  return {
+    ...thread,
+    queueState: {
+      ...thread.queueState,
+      drainMode: "skip_next_idle",
+    },
+  };
+}
+
+function consumeNextQueuedMessage(thread: Thread): {
+  thread: Thread;
+  next?: QueuedMessage;
+} {
+  const [next, ...rest] = thread.queueState.items;
+  return {
+    thread: {
+      ...thread,
+      queueState: {
+        ...thread.queueState,
+        items: rest,
+      },
+    },
+    next,
+  };
+}
+
+function settleQueueAfterTerminalStatus(
+  thread: Thread,
+  status: Thread["status"],
+): {
+  thread: Thread;
+  next?: QueuedMessage;
+} {
+  if (status !== "idle") {
+    return { thread };
+  }
+  if (thread.queueState.drainMode === "skip_next_idle") {
+    return {
+      thread: {
+        ...thread,
+        queueState: {
+          ...thread.queueState,
+          drainMode: "normal",
+        },
+      },
+    };
+  }
+  if (thread.queueState.items.length === 0) {
+    return { thread };
+  }
+  return consumeNextQueuedMessage(thread);
 }
 
 /**
@@ -177,6 +295,7 @@ function newThread(projectId: string | null, provider: Provider = lastSavedProvi
     historyLoaded: true,
     lastModified: new Date(),
     userMode: lastSavedUserMode(),
+    queueState: newQueueState(),
     // Negative epoch puts new threads above everything: older rows
     // backfilled to positive `createdAt`, and reordered buckets using
     // dense `0..N-1`. Preserved by the DB insert in main.ts so the
@@ -202,6 +321,7 @@ function sessionToThread(s: SessionInfo): Thread {
     pinned: s.pinned ?? false,
     sortOrder: s.sortOrder,
     userMode: s.userMode ?? "acceptEdits",
+    queueState: newQueueState(),
   };
 }
 
@@ -348,6 +468,21 @@ export function App() {
   const [threadsLoading, setThreadsLoading] = useState(true);
   const threadsRef = useRef(threads);
   threadsRef.current = threads;
+
+  /**
+   * Queue-drain hook into the IPC listener: the listener's useEffect
+   * runs once with `[]` deps, but needs to call the *current*
+   * `dispatchSend` callback. We point a ref at it and sync below.
+   */
+  const dispatchSendRef = useRef<
+    | ((
+        threadId: string,
+        text: string,
+        images?: ImagePayload[],
+        opts?: { model?: string; effort?: string },
+      ) => void)
+    | null
+  >(null);
   const projectsRef = useRef(projects);
   projectsRef.current = projects;
   const pendingThreadRef = useRef(pendingThread);
@@ -362,6 +497,27 @@ export function App() {
   });
   const dragging = useRef(false);
   const sidebarRef = useRef<HTMLDivElement>(null);
+
+  const updateThreadState = useCallback(
+    (threadId: string, updater: (thread: Thread) => Thread) => {
+      const pending = pendingThreadRef.current;
+      if (pending && pending.id === threadId) {
+        setPendingThread((prev) => (prev ? updater(prev) : prev));
+        return;
+      }
+      setThreads((prev) =>
+        prev.map((t) => (t.id === threadId ? updater(t) : t)),
+      );
+    },
+    [],
+  );
+
+  const getThreadSnapshot = useCallback((threadId: string): Thread | undefined => {
+    const pending = pendingThreadRef.current;
+    return (pending && pending.id === threadId)
+      ? pending
+      : threadsRef.current.find((t) => t.id === threadId);
+  }, []);
 
   // Real thread if selected, pending thread if viewing the new-thread composer, or null
   const activeThread: Thread | null = activeThreadId
@@ -497,6 +653,20 @@ export function App() {
       // leaves the working copy on the new branch.
       if (event.type === "status" && (event.status === "idle" || event.status === "error")) {
         refreshGitBranchRef.current?.(event.threadId);
+        const target = getThreadSnapshot(event.threadId);
+        if (!target) return;
+        const { thread: nextThread, next } = settleQueueAfterTerminalStatus(target, event.status);
+        updateThreadState(event.threadId, () => nextThread);
+        if (!next) return;
+        // Defer the actual dispatch to a microtask so the queue-state
+        // update and the status reducers settle before dispatchSend
+        // flips status back to "running".
+        Promise.resolve().then(() => {
+          dispatchSendRef.current?.(event.threadId, next.text, next.images, {
+            ...(next.model && { model: next.model }),
+            ...(next.effort && { effort: next.effort }),
+          });
+        });
       }
     });
 
@@ -594,7 +764,16 @@ export function App() {
 
   // ── Send message handler ──────────────────────────────────────
 
-  const handleSend = useCallback(
+  /**
+   * Dispatches a user message straight through to the backend. This is
+   * the "actually talk to the CLI now" path — both the direct send
+   * (thread is idle) and the queue-drain (thread just went idle)
+   * funnel through here.
+   *
+   * Callers are responsible for checking whether the thread is busy;
+   * this function assumes it's safe to send right now.
+   */
+  const dispatchSend = useCallback(
     (threadId: string, text: string, images?: ImagePayload[], opts?: { model?: string; effort?: string }) => {
       const msgImages: MessageImage[] | undefined = images?.map((img) => ({
         url: `data:${img.mediaType};base64,${img.base64}`,
@@ -644,6 +823,58 @@ export function App() {
       }
     },
     [],
+  );
+
+  // Keep the IPC-listener-facing ref pointed at the current callback.
+  // `dispatchSend` has `[]` deps so its identity is stable in practice,
+  // but assigning on every render is cheap and bulletproof.
+  dispatchSendRef.current = dispatchSend;
+
+  /**
+   * Top-level send from the composer. Branches:
+   *   - thread is idle        → dispatch immediately
+   *   - thread is running     → enqueue for later delivery
+   *   - thread is awaiting_input or error → dispatch (the pending-request
+   *     UI has already intercepted composer text via its own approval
+   *     path; anything reaching here is a plain follow-up. Error state
+   *     lets the user retry by sending.)
+   *
+   * Queued messages live in `thread.queueState.items`; the main
+   * process sees nothing until the scheduler decides to dispatch.
+   */
+  const handleSend = useCallback(
+    (threadId: string, text: string, images?: ImagePayload[], opts?: { model?: string; effort?: string }) => {
+      const target = getThreadSnapshot(threadId);
+      const isRunning = target?.status === "running";
+
+      if (!isRunning) {
+        dispatchSend(threadId, text, images, opts);
+        return;
+      }
+
+      const queued: QueuedMessage = {
+        id: msgId(),
+        text,
+        ...(images && images.length > 0 && { images }),
+        ...(opts?.model && { model: opts.model }),
+        ...(opts?.effort && { effort: opts.effort }),
+        createdAt: Date.now(),
+      };
+
+      updateThreadState(threadId, (thread) => enqueueQueuedMessage(thread, queued));
+    },
+    [dispatchSend, getThreadSnapshot, updateThreadState],
+  );
+
+  /**
+   * Remove a message from a thread's queue. No IPC — queued messages
+   * never reached the backend, so deleting is pure renderer state.
+   */
+  const handleDeleteQueuedMessage = useCallback(
+    (threadId: string, queuedId: string) => {
+      updateThreadState(threadId, (thread) => removeQueuedMessage(thread, queuedId));
+    },
+    [updateThreadState],
   );
 
   // ── Change provider on pending thread (before first turn commits) ──
@@ -1004,10 +1235,11 @@ export function App() {
   // ── Interrupt handler ─────────────────────────────────────────
 
   const handleInterrupt = useCallback((threadId: string) => {
+    updateThreadState(threadId, skipNextQueueDrain);
     window.openclawdex?.interrupt(threadId)?.catch((err) =>
       reportIpcError("Interrupt", err),
     );
-  }, []);
+  }, [updateThreadState]);
 
   // ── Project rename/delete handlers ────────────────────────────
 
@@ -1347,6 +1579,7 @@ export function App() {
           onCreateProject={handleCreateProjectBare}
           onNewChat={handleNewChat}
           onSetMode={handleSetMode}
+          onDeleteQueuedMessage={handleDeleteQueuedMessage}
         />
       </div>
     </div>
