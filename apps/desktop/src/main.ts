@@ -1243,8 +1243,10 @@ function createWindow() {
   //
   // - `default-src 'self'`  — scripts/fonts/etc. only from the bundle.
   // - `style-src  'unsafe-inline'` — Tailwind/React inject inline <style>.
-  // - `img-src data: https:` — assistant markdown can include remote
-  //   images and we also render data: URLs for pasted screenshots.
+  // - `img-src 'self' data: blob:` — the composer renders `blob:`
+  //   object URLs for dragged/pasted image previews and `data:` URLs
+  //   for inline screenshots; remote renderer image loads stay
+  //   blocked.
   // - `connect-src 'self'` — no outbound renderer fetches; all
   //   network goes through the main process.
   if (!IS_DEV) {
@@ -1257,7 +1259,7 @@ function createWindow() {
               "default-src 'self'; " +
                 "script-src 'self'; " +
                 "style-src 'self' 'unsafe-inline'; " +
-                "img-src 'self' data: https:; " +
+                "img-src 'self' data: blob:; " +
                 "font-src 'self' data:; " +
                 "connect-src 'self'; " +
                 "object-src 'none'; " +
