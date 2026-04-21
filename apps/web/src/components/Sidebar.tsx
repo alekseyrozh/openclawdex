@@ -8,7 +8,7 @@ import {
   PencilSimple,
   Trash,
   Plus,
-  FolderPlus,
+  FolderSimplePlus,
   Archive,
   PushPin,
   X,
@@ -146,9 +146,24 @@ export function Sidebar({
     return closestCenter({ ...args, droppableContainers: sameBucket });
   };
 
-  // Split active vs archived
-  const activeThreads = threads.filter((t) => !t.archived);
-  const archivedThreads = threads.filter((t) => t.archived);
+  // Split active vs archived. `archivedAt` is the single source of
+  // truth: present = archived, absent = active. Archived threads sort
+  // by `archivedAt` desc (most-recently-archived first) so a thread
+  // the user just archived sits at the top of the list. `lastModified`
+  // is a stable tiebreaker for the (vanishingly rare) case of two
+  // archives landing in the same ms.
+  const activeThreads = threads.filter((t) => t.archivedAt == null);
+  const archivedThreads = threads
+    .filter((t) => t.archivedAt != null)
+    .slice()
+    .sort((a, b) => {
+      const aa = a.archivedAt ?? 0;
+      const ba = b.archivedAt ?? 0;
+      if (aa !== ba) return ba - aa;
+      const al = a.lastModified?.getTime() ?? 0;
+      const bl = b.lastModified?.getTime() ?? 0;
+      return bl - al;
+    });
 
   // Pinned threads (non-archived only)
   const pinnedThreads = activeThreads.filter((t) => t.pinned).slice().sort(bySortOrder);
@@ -290,7 +305,14 @@ export function Sidebar({
                 className="shrink-0 flex items-center justify-center"
                 style={{ width: 17, height: 17, color: "var(--text-primary)" }}
               >
-                <FolderPlus size={15} weight="bold" />
+                {/* Nudge right 2px: FolderSimplePlus is left-heavy (folder
+                    body + plus glyph sit lower-left of the box), so at the
+                    same wrapper size it reads ~2px left of a bare Plus. */}
+                <FolderSimplePlus
+                  size={17}
+                  weight="bold"
+                  style={{ transform: "translateX(2px)" }}
+                />
               </span>
               New project
             </button>
@@ -356,43 +378,38 @@ export function Sidebar({
               {/* Projects header — hidden in zero-project state so we don't
                   render a lone label above an empty list. */}
               {projects.length > 0 && (
-                <div className="flex items-center justify-between pl-5 pr-3 pb-2 pt-2">
+                <div className="group flex items-center justify-between pl-5 pr-5 pb-2 pt-2">
                   <span
                     className="text-[13px] font-medium"
                     style={{ color: "rgba(255, 255, 255, 0.35)" }}
                   >
                     Projects
                   </span>
-                {/* "Add a project" button — hidden for now because the in-chat
-                    project picker (ChatView) already has a "New project…"
-                    entry, and the sidebar "New thread" button falls back to
-                    the folder picker when no projects exist. Kept here so we
-                    can restore it easily if discoverability becomes an issue. */}
-                {/*
-                <div className="relative group/addproj">
+                  {/* Add-project affordance — mirrors the per-project "new
+                      thread" button: hidden at rest, reveals on header hover.
+                      `pr-5` on the wrapper lines this button's right edge up
+                      with the per-project `+` buttons below (which sit at
+                      container `px-3` + row `px-2` = 20px from the edge). */}
                   <button
                     onClick={onCreateProject}
-                    className="p-[4px] rounded-lg transition-colors"
-                    style={{ color: "rgba(255,255,255,0.5)" }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.background = "rgba(255,255,255,0.06)";
-                      e.currentTarget.style.color = "var(--text-primary)";
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.background = "transparent";
-                      e.currentTarget.style.color = "rgba(255,255,255,0.5)";
-                    }}
+                    title="New project"
+                    className="p-[3px] rounded-md opacity-0 group-hover:opacity-60 hover:!opacity-100 transition-opacity"
+                    style={{ color: "rgba(255,255,255,1)" }}
                   >
-                    <FolderPlus size={17} weight="regular" />
+                    {/* FolderSimplePlus packs a folder outline + `+` into the
+                        glyph box, so the `+` itself renders much smaller than
+                        a bare Plus at the same size — bump to 17 so the
+                        action reads at a glance. The 2px translateX lines up
+                        this 17px icon's optical center with the 14px bare
+                        `+` icons in the per-project rows below (their right
+                        edges already match; center alignment needs half the
+                        size delta ≈ 1.5px, rounded up). */}
+                    <FolderSimplePlus
+                      size={17}
+                      weight="bold"
+                      style={{ transform: "translateX(2px)" }}
+                    />
                   </button>
-                  <div
-                    className="absolute right-full top-1/2 -translate-y-1/2 mr-1.5 px-2.5 py-1.5 rounded-lg text-[12px] whitespace-nowrap opacity-0 group-hover/addproj:opacity-100 transition-opacity duration-150 pointer-events-none z-50"
-                    style={{ background: "var(--surface-2)", color: "var(--text-secondary)", border: "1px solid var(--border-emphasis)" }}
-                  >
-                    Add a project
-                  </div>
-                </div>
-                */}
                 </div>
               )}
 
@@ -718,7 +735,7 @@ function ThreadRow({
         if (!active && !menuOpen) e.currentTarget.style.background = "transparent";
       }}
     >
-      {thread.archived ? <span className="w-2 shrink-0" /> : <ThreadStatusIndicator thread={thread} onPin={onPin} />}
+      {thread.archivedAt != null ? <span className="w-2 shrink-0" /> : <ThreadStatusIndicator thread={thread} onPin={onPin} />}
       {renaming ? (
         <input
           value={renameValue}
@@ -786,6 +803,16 @@ function ThreadRow({
                     variant="floating"
                     onClick={() => {
                       setMenuOpen(false);
+                      onArchive();
+                    }}
+                  >
+                    <Archive size={15} weight="regular" />
+                    {thread.archivedAt != null ? "Unarchive" : "Archive"}
+                  </DropdownItem>
+                  <DropdownItem
+                    variant="floating"
+                    onClick={() => {
+                      setMenuOpen(false);
                       setRenaming(true);
                       setRenameValue(thread.name);
                     }}
@@ -808,16 +835,6 @@ function ThreadRow({
                       {thread.pinned ? "Unpin" : "Pin to top"}
                     </DropdownItem>
                   )}
-                  <DropdownItem
-                    variant="floating"
-                    onClick={() => {
-                      setMenuOpen(false);
-                      onArchive();
-                    }}
-                  >
-                    <Archive size={15} weight="regular" />
-                    {thread.archived ? "Unarchive" : "Archive"}
-                  </DropdownItem>
                   <DropdownItem
                     variant="floating"
                     onClick={() => {
