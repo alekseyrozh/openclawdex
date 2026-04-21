@@ -2184,7 +2184,7 @@ interface ChatViewProps {
   /**
    * Remove a message from this thread's send queue. Queued messages
    * never reached the backend, so deletion is pure renderer state.
-   * The queue itself is read from `thread.queue`.
+   * The queue itself is read from `thread.queueState.items`.
    */
   onDeleteQueuedMessage?: (threadId: string, queuedId: string) => void;
 }
@@ -2746,9 +2746,9 @@ export function ChatView({
     }
 
     // No `running` guard here: submitting while a turn is in flight
-    // is the trigger for message queuing. App.tsx's handleSend looks
+    // is the trigger for message scheduling. App.tsx's handleSend looks
     // at thread.status and either dispatches immediately or appends
-    // to thread.queue for a later drain at the next `idle` event.
+    // to `thread.queueState.items` for later delivery.
     if (!hasContent) return;
 
     // Convert attachments to base64. If the File was sourced from the
@@ -3564,9 +3564,9 @@ export function ChatView({
                   />
                 </div>
               )}
-              {thread.queue && thread.queue.length > 0 && (
+              {thread.queueState.items.length > 0 && (
                 <QueuedMessagesList
-                  messages={thread.queue}
+                  messages={thread.queueState.items}
                   onDelete={(queuedId) =>
                     onDeleteQueuedMessage?.(thread.id, queuedId)
                   }

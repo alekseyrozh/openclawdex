@@ -58,21 +58,10 @@ export interface Thread {
    */
   pendingRequest?: PendingRequest;
   /**
-   * Messages the user typed + submitted while this thread's agent was
-   * still running. We hold them here (renderer-side) and dispatch the
-   * head of the list each time the thread transitions back to `idle`.
-   * One queued item = one future turn, sent in order. This is the
-   * simplest queuing mode that works uniformly across Claude/Codex
-   * SDKs since both pick up new prompts at turn boundaries.
+   * Renderer-side scheduling state for follow-up prompts submitted
+   * while the agent is already running.
    */
-  queue?: QueuedMessage[];
-  /**
-   * Set when the user hits interrupt. The backend still emits a final
-   * `status: idle` for the interrupted turn, but that idle should NOT
-   * auto-drain queued follow-ups the way a clean turn completion does.
-   * Cleared the first time we observe that terminal idle/error state.
-   */
-  suppressNextQueueDrain?: boolean;
+  queueState: QueueState;
 }
 
 export interface QueuedMessage {
@@ -86,6 +75,25 @@ export interface QueuedMessage {
   model?: string;
   effort?: string;
   createdAt: number;
+}
+
+export interface QueueState {
+  /**
+   * Follow-up prompts captured while a thread was busy. They preserve
+   * the model/effort chosen at submit time and are delivered FIFO.
+   */
+  items: QueuedMessage[];
+  /**
+   * Delivery policy for the next terminal turn boundary.
+   *
+   * `normal`:
+   *   a clean `idle` may auto-drain the next queued item.
+   * `skip_next_idle`:
+   *   skip exactly one clean `idle` drain, then reset to `normal`.
+   *   Used after interrupt so the aborted turn doesn't immediately
+   *   relaunch the backlog.
+   */
+  drainMode: "normal" | "skip_next_idle";
 }
 
 export interface MessageImage {
@@ -133,6 +141,87 @@ export interface FileChange {
 let nextMsgId = 1;
 function msgId() {
   return `msg-${nextMsgId++}`;
+}
+
+function newQueueState(): QueueState {
+  return {
+    items: [],
+    drainMode: "normal",
+  };
+}
+
+function enqueueQueuedMessage(thread: Thread, message: QueuedMessage): Thread {
+  return {
+    ...thread,
+    queueState: {
+      ...thread.queueState,
+      items: [...thread.queueState.items, message],
+    },
+  };
+}
+
+function removeQueuedMessage(thread: Thread, queuedId: string): Thread {
+  return {
+    ...thread,
+    queueState: {
+      ...thread.queueState,
+      items: thread.queueState.items.filter((q) => q.id !== queuedId),
+    },
+  };
+}
+
+function skipNextQueueDrain(thread: Thread): Thread {
+  return {
+    ...thread,
+    queueState: {
+      ...thread.queueState,
+      drainMode: "skip_next_idle",
+    },
+  };
+}
+
+function consumeNextQueuedMessage(thread: Thread): {
+  thread: Thread;
+  next?: QueuedMessage;
+} {
+  const [next, ...rest] = thread.queueState.items;
+  return {
+    thread: {
+      ...thread,
+      queueState: {
+        ...thread.queueState,
+        items: rest,
+      },
+    },
+    next,
+  };
+}
+
+function settleQueueAfterTerminalStatus(
+  thread: Thread,
+  status: Thread["status"],
+): {
+  thread: Thread;
+  next?: QueuedMessage;
+} {
+  if (status !== "idle") {
+    return { thread };
+  }
+  if (thread.queueState.drainMode === "skip_next_idle") {
+    return {
+      thread: {
+        ...thread,
+        queueState: {
+          ...thread.queueState,
+          drainMode: "normal",
+        },
+      },
+    };
+  }
+  if (thread.queueState.items.length === 0) {
+    return { thread };
+  }
+  return consumeNextQueuedMessage(thread);
 }
 
 /**
@@ -206,7 +295,7 @@ function newThread(projectId: string | null, provider: Provider = lastSavedProvi
     historyLoaded: true,
     lastModified: new Date(),
     userMode: lastSavedUserMode(),
-    queue: [],
+    queueState: newQueueState(),
     // Negative epoch puts new threads above everything: older rows
     // backfilled to positive `createdAt`, and reordered buckets using
     // dense `0..N-1`. Preserved by the DB insert in main.ts so the
@@ -232,7 +321,7 @@ function sessionToThread(s: SessionInfo): Thread {
     pinned: s.pinned ?? false,
     sortOrder: s.sortOrder,
     userMode: s.userMode ?? "acceptEdits",
-    queue: [],
+    queueState: newQueueState(),
   };
 }
 
@@ -565,49 +654,19 @@ export function App() {
       if (event.type === "status" && (event.status === "idle" || event.status === "error")) {
         refreshGitBranchRef.current?.(event.threadId);
         const target = getThreadSnapshot(event.threadId);
-        if (target?.suppressNextQueueDrain) {
-          updateThreadState(event.threadId, (thread) => ({
-            ...thread,
-            suppressNextQueueDrain: false,
-          }));
-        }
-      }
-
-      // Drain the head of the queue when a turn finishes cleanly.
-      // We only drain on `idle` (not `error`) — if the last turn failed,
-      // blindly sending the next queued message could spin through a
-      // backlog of failures faster than the user can intervene. The
-      // queued items stay put; the user can retry or clear manually.
-      //
-      // The setThreads/setPendingThread updates above (status: idle) and
-      // the queue-remove + dispatchSend below are independent reducers
-      // on the same thread, so React batches them safely: final state
-      // is `status: running, queue: rest`.
-      if (event.type === "status" && event.status === "idle") {
-        const target = getThreadSnapshot(event.threadId);
-        if (target?.suppressNextQueueDrain) return;
-        const queue = target?.queue;
-        if (queue && queue.length > 0) {
-          const [next, ...rest] = queue;
-          updateThreadState(event.threadId, (thread) => ({ ...thread, queue: rest }));
-          // Defer the actual dispatch to a microtask so the queue-remove
-          // and the status-idle reducers settle before dispatchSend
-          // flips status back to "running". Same-tick ordering isn't
-          // strictly required (independent reducers), but deferring
-          // keeps the "idle → running" transition observable to any
-          // future effect that watches status transitions.
-          //
-          // Accessed via ref because `dispatchSend` is declared later
-          // in this component and this effect runs once (on mount) with
-          // `[]` deps — the ref is synced on every render so we always
-          // see the current callback identity.
-          Promise.resolve().then(() => {
-            dispatchSendRef.current?.(event.threadId, next.text, next.images, {
-              ...(next.model && { model: next.model }),
-              ...(next.effort && { effort: next.effort }),
-            });
+        if (!target) return;
+        const { thread: nextThread, next } = settleQueueAfterTerminalStatus(target, event.status);
+        updateThreadState(event.threadId, () => nextThread);
+        if (!next) return;
+        // Defer the actual dispatch to a microtask so the queue-state
+        // update and the status reducers settle before dispatchSend
+        // flips status back to "running".
+        Promise.resolve().then(() => {
+          dispatchSendRef.current?.(event.threadId, next.text, next.images, {
+            ...(next.model && { model: next.model }),
+            ...(next.effort && { effort: next.effort }),
           });
-        }
+        });
       }
     });
 
@@ -774,14 +833,14 @@ export function App() {
   /**
    * Top-level send from the composer. Branches:
    *   - thread is idle        → dispatch immediately
-   *   - thread is running     → enqueue for later (drains at next `idle`)
+   *   - thread is running     → enqueue for later delivery
    *   - thread is awaiting_input or error → dispatch (the pending-request
    *     UI has already intercepted composer text via its own approval
    *     path; anything reaching here is a plain follow-up. Error state
    *     lets the user retry by sending.)
    *
-   * Queued messages live on `Thread.queue` in renderer state; the main
-   * process sees nothing until the drain triggers a real dispatch.
+   * Queued messages live in `thread.queueState.items`; the main
+   * process sees nothing until the scheduler decides to dispatch.
    */
   const handleSend = useCallback(
     (threadId: string, text: string, images?: ImagePayload[], opts?: { model?: string; effort?: string }) => {
@@ -802,10 +861,7 @@ export function App() {
         createdAt: Date.now(),
       };
 
-      updateThreadState(threadId, (thread) => ({
-        ...thread,
-        queue: [...(thread.queue ?? []), queued],
-      }));
+      updateThreadState(threadId, (thread) => enqueueQueuedMessage(thread, queued));
     },
     [dispatchSend, getThreadSnapshot, updateThreadState],
   );
@@ -816,10 +872,7 @@ export function App() {
    */
   const handleDeleteQueuedMessage = useCallback(
     (threadId: string, queuedId: string) => {
-      updateThreadState(threadId, (thread) => ({
-        ...thread,
-        queue: (thread.queue ?? []).filter((q) => q.id !== queuedId),
-      }));
+      updateThreadState(threadId, (thread) => removeQueuedMessage(thread, queuedId));
     },
     [updateThreadState],
   );
@@ -1182,10 +1235,7 @@ export function App() {
   // ── Interrupt handler ─────────────────────────────────────────
 
   const handleInterrupt = useCallback((threadId: string) => {
-    updateThreadState(threadId, (thread) => ({
-      ...thread,
-      suppressNextQueueDrain: true,
-    }));
+    updateThreadState(threadId, skipNextQueueDrain);
     window.openclawdex?.interrupt(threadId)?.catch((err) =>
       reportIpcError("Interrupt", err),
     );
