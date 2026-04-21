@@ -152,7 +152,9 @@ function Preview({
 }) {
   switch (toolName) {
     case "Bash": {
-      const command = typeof toolInput.command === "string" ? toolInput.command : "";
+      const command = typeof toolInput.command === "string"
+        ? String(toolInput.display_command ?? toolInput.command)
+        : "";
       return <CodeBlock text={command} />;
     }
     case "Edit":

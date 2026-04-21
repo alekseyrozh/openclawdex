@@ -1071,7 +1071,7 @@ function toolSummary(name: string, input?: Record<string, unknown>): string {
   if (!input) return name;
   switch (name) {
     case "Bash": {
-      const cmd = String(input.command ?? "");
+      const cmd = String(input.display_command ?? input.command ?? "");
       return cmd ? `$ ${cmd}` : "Bash";
     }
     case "Read": {
@@ -1109,7 +1109,7 @@ function toolSummary(name: string, input?: Record<string, unknown>): string {
     case "shell": {
       // Codex command_execution: run a shell command. Renders alongside
       // Claude's Bash tool.
-      const cmd = String(input.command ?? "");
+      const cmd = String(input.display_command ?? input.command ?? "");
       return cmd ? `$ ${cmd}` : "shell";
     }
     case "apply_patch": {
