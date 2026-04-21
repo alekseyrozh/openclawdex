@@ -126,7 +126,19 @@ svg {
   cursor: default;
 }
 
+.queue-toggle-pill {
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.04);
+  transition:
+    background-color 150ms ease,
+    color 150ms ease,
+    transform 180ms ease;
+}
 
+.group\/queue-toggle:hover .queue-toggle-pill {
+  color: var(--text-secondary);
+  background: rgba(255, 255, 255, 0.08);
+}
 
 /* Token fade-in for streaming text */
 @keyframes token-fade {

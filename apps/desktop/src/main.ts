@@ -156,8 +156,28 @@ function readCodexUserModeFromRolloutId(sessionId: string): UserMode | null {
   return file ? readCodexUserModeFromFile(file) : null;
 }
 
+/**
+ * Last status emitted per thread. Used to suppress redundant `status`
+ * events — the Codex wrapper in particular emits both `result` and
+ * `done` at the end of each turn, which naively translate to *two*
+ * `status: idle` events in quick succession. That's harmless for most
+ * consumers, but the renderer's message queue treats each `idle` as a
+ * drain trigger, so back-to-back idles pop two queued messages for a
+ * single turn boundary. Dedup here keeps the emission semantics clean
+ * (one `idle` per turn end, regardless of provider event shape).
+ */
+const lastEmittedStatus = new Map<string, "running" | "idle" | "awaiting_input" | "error">();
+
 /** Send a validated IPC event to the renderer. */
 function emitToRenderer(event: IpcEvent): void {
+  // Drop no-op status transitions. Any non-status event is forwarded
+  // as-is; only `status` is deduped because it's the one field that
+  // multiple session-event sources converge on.
+  if (event.type === "status") {
+    const prev = lastEmittedStatus.get(event.threadId);
+    if (prev === event.status) return;
+    lastEmittedStatus.set(event.threadId, event.status);
+  }
   mainWindow?.webContents.send("session:event", event);
 }
 
@@ -830,6 +850,7 @@ function setupIpcHandlers(): void {
         session.close();
         sessions.delete(row.sessionId);
       }
+      lastEmittedStatus.delete(row.sessionId);
     }
     await db.delete(knownThreads).where(eq(knownThreads.projectId, projectId));
     await db
@@ -1128,6 +1149,7 @@ function setupIpcHandlers(): void {
       session.close();
       sessions.delete(sessionId);
     }
+    lastEmittedStatus.delete(sessionId);
     await getDb()
       .delete(knownThreads)
       .where(eq(knownThreads.sessionId, sessionId));

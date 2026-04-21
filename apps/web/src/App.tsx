@@ -57,6 +57,35 @@ export interface Thread {
    * (e.g. QuestionCard for `ask_user_question`) handles the input.
    */
   pendingRequest?: PendingRequest;
+  /**
+   * Messages the user typed + submitted while this thread's agent was
+   * still running. We hold them here (renderer-side) and dispatch the
+   * head of the list each time the thread transitions back to `idle`.
+   * One queued item = one future turn, sent in order. This is the
+   * simplest queuing mode that works uniformly across Claude/Codex
+   * SDKs since both pick up new prompts at turn boundaries.
+   */
+  queue?: QueuedMessage[];
+  /**
+   * Set when the user hits interrupt. The backend still emits a final
+   * `status: idle` for the interrupted turn, but that idle should NOT
+   * auto-drain queued follow-ups the way a clean turn completion does.
+   * Cleared the first time we observe that terminal idle/error state.
+   */
+  suppressNextQueueDrain?: boolean;
+}
+
+export interface QueuedMessage {
+  /** Stable id so the UI can target delete/reorder without index math. */
+  id: string;
+  text: string;
+  images?: ImagePayload[];
+  /** Captured at enqueue time — a queued message preserves the
+   *  model / effort the user had selected when they typed it, even if
+   *  they flip the dropdowns before the queue drains. */
+  model?: string;
+  effort?: string;
+  createdAt: number;
 }
 
 export interface MessageImage {
@@ -177,6 +206,7 @@ function newThread(projectId: string | null, provider: Provider = lastSavedProvi
     historyLoaded: true,
     lastModified: new Date(),
     userMode: lastSavedUserMode(),
+    queue: [],
     // Negative epoch puts new threads above everything: older rows
     // backfilled to positive `createdAt`, and reordered buckets using
     // dense `0..N-1`. Preserved by the DB insert in main.ts so the
@@ -202,6 +232,7 @@ function sessionToThread(s: SessionInfo): Thread {
     pinned: s.pinned ?? false,
     sortOrder: s.sortOrder,
     userMode: s.userMode ?? "acceptEdits",
+    queue: [],
   };
 }
 
@@ -348,6 +379,21 @@ export function App() {
   const [threadsLoading, setThreadsLoading] = useState(true);
   const threadsRef = useRef(threads);
   threadsRef.current = threads;
+
+  /**
+   * Queue-drain hook into the IPC listener: the listener's useEffect
+   * runs once with `[]` deps, but needs to call the *current*
+   * `dispatchSend` callback. We point a ref at it and sync below.
+   */
+  const dispatchSendRef = useRef<
+    | ((
+        threadId: string,
+        text: string,
+        images?: ImagePayload[],
+        opts?: { model?: string; effort?: string },
+      ) => void)
+    | null
+  >(null);
   const projectsRef = useRef(projects);
   projectsRef.current = projects;
   const pendingThreadRef = useRef(pendingThread);
@@ -497,6 +543,63 @@ export function App() {
       // leaves the working copy on the new branch.
       if (event.type === "status" && (event.status === "idle" || event.status === "error")) {
         refreshGitBranchRef.current?.(event.threadId);
+        const pending = pendingThreadRef.current;
+        if (pending && pending.id === event.threadId && pending.suppressNextQueueDrain) {
+          setPendingThread((prev) => prev ? { ...prev, suppressNextQueueDrain: false } : prev);
+        } else {
+          const target = threadsRef.current.find((t) => t.id === event.threadId);
+          if (target?.suppressNextQueueDrain) {
+            setThreads((prev) => prev.map((t) =>
+              t.id === event.threadId ? { ...t, suppressNextQueueDrain: false } : t,
+            ));
+          }
+        }
+      }
+
+      // Drain the head of the queue when a turn finishes cleanly.
+      // We only drain on `idle` (not `error`) — if the last turn failed,
+      // blindly sending the next queued message could spin through a
+      // backlog of failures faster than the user can intervene. The
+      // queued items stay put; the user can retry or clear manually.
+      //
+      // The setThreads/setPendingThread updates above (status: idle) and
+      // the queue-remove + dispatchSend below are independent reducers
+      // on the same thread, so React batches them safely: final state
+      // is `status: running, queue: rest`.
+      if (event.type === "status" && event.status === "idle") {
+        const pending = pendingThreadRef.current;
+        const target = (pending && pending.id === event.threadId)
+          ? pending
+          : threadsRef.current.find((t) => t.id === event.threadId);
+        if (target?.suppressNextQueueDrain) return;
+        const queue = target?.queue;
+        if (queue && queue.length > 0) {
+          const [next, ...rest] = queue;
+          if (pending && pending.id === event.threadId) {
+            setPendingThread((prev) => prev ? { ...prev, queue: rest } : prev);
+          } else {
+            setThreads((prev) => prev.map((t) =>
+              t.id === event.threadId ? { ...t, queue: rest } : t,
+            ));
+          }
+          // Defer the actual dispatch to a microtask so the queue-remove
+          // and the status-idle reducers settle before dispatchSend
+          // flips status back to "running". Same-tick ordering isn't
+          // strictly required (independent reducers), but deferring
+          // keeps the "idle → running" transition observable to any
+          // future effect that watches status transitions.
+          //
+          // Accessed via ref because `dispatchSend` is declared later
+          // in this component and this effect runs once (on mount) with
+          // `[]` deps — the ref is synced on every render so we always
+          // see the current callback identity.
+          Promise.resolve().then(() => {
+            dispatchSendRef.current?.(event.threadId, next.text, next.images, {
+              ...(next.model && { model: next.model }),
+              ...(next.effort && { effort: next.effort }),
+            });
+          });
+        }
       }
     });
 
@@ -594,7 +697,16 @@ export function App() {
 
   // ── Send message handler ──────────────────────────────────────
 
-  const handleSend = useCallback(
+  /**
+   * Dispatches a user message straight through to the backend. This is
+   * the "actually talk to the CLI now" path — both the direct send
+   * (thread is idle) and the queue-drain (thread just went idle)
+   * funnel through here.
+   *
+   * Callers are responsible for checking whether the thread is busy;
+   * this function assumes it's safe to send right now.
+   */
+  const dispatchSend = useCallback(
     (threadId: string, text: string, images?: ImagePayload[], opts?: { model?: string; effort?: string }) => {
       const msgImages: MessageImage[] | undefined = images?.map((img) => ({
         url: `data:${img.mediaType};base64,${img.base64}`,
@@ -642,6 +754,74 @@ export function App() {
           userMode: thread?.userMode,
         })?.catch((err) => reportIpcError("Send message", err));
       }
+    },
+    [],
+  );
+
+  // Keep the IPC-listener-facing ref pointed at the current callback.
+  // `dispatchSend` has `[]` deps so its identity is stable in practice,
+  // but assigning on every render is cheap and bulletproof.
+  dispatchSendRef.current = dispatchSend;
+
+  /**
+   * Top-level send from the composer. Branches:
+   *   - thread is idle        → dispatch immediately
+   *   - thread is running     → enqueue for later (drains at next `idle`)
+   *   - thread is awaiting_input or error → dispatch (the pending-request
+   *     UI has already intercepted composer text via its own approval
+   *     path; anything reaching here is a plain follow-up. Error state
+   *     lets the user retry by sending.)
+   *
+   * Queued messages live on `Thread.queue` in renderer state; the main
+   * process sees nothing until the drain triggers a real dispatch.
+   */
+  const handleSend = useCallback(
+    (threadId: string, text: string, images?: ImagePayload[], opts?: { model?: string; effort?: string }) => {
+      const pending = pendingThreadRef.current;
+      const target = (pending && pending.id === threadId)
+        ? pending
+        : threadsRef.current.find((t) => t.id === threadId);
+      const isRunning = target?.status === "running";
+
+      if (!isRunning) {
+        dispatchSend(threadId, text, images, opts);
+        return;
+      }
+
+      const queued: QueuedMessage = {
+        id: msgId(),
+        text,
+        ...(images && images.length > 0 && { images }),
+        ...(opts?.model && { model: opts.model }),
+        ...(opts?.effort && { effort: opts.effort }),
+        createdAt: Date.now(),
+      };
+
+      if (pending && pending.id === threadId) {
+        setPendingThread((prev) => prev ? { ...prev, queue: [...(prev.queue ?? []), queued] } : prev);
+      } else {
+        setThreads((prev) => prev.map((t) =>
+          t.id === threadId ? { ...t, queue: [...(t.queue ?? []), queued] } : t,
+        ));
+      }
+    },
+    [dispatchSend],
+  );
+
+  /**
+   * Remove a message from a thread's queue. No IPC — queued messages
+   * never reached the backend, so deleting is pure renderer state.
+   */
+  const handleDeleteQueuedMessage = useCallback(
+    (threadId: string, queuedId: string) => {
+      const pending = pendingThreadRef.current;
+      if (pending && pending.id === threadId) {
+        setPendingThread((prev) => prev ? { ...prev, queue: (prev.queue ?? []).filter((q) => q.id !== queuedId) } : prev);
+        return;
+      }
+      setThreads((prev) => prev.map((t) =>
+        t.id === threadId ? { ...t, queue: (t.queue ?? []).filter((q) => q.id !== queuedId) } : t,
+      ));
     },
     [],
   );
@@ -1004,6 +1184,22 @@ export function App() {
   // ── Interrupt handler ─────────────────────────────────────────
 
   const handleInterrupt = useCallback((threadId: string) => {
+    const pending = pendingThreadRef.current;
+    if (pending && pending.id === threadId) {
+      setPendingThread((prev) =>
+        prev
+          ? { ...prev, suppressNextQueueDrain: true }
+          : prev,
+      );
+    } else {
+      setThreads((prev) =>
+        prev.map((t) =>
+          t.id === threadId
+            ? { ...t, suppressNextQueueDrain: true }
+            : t,
+        ),
+      );
+    }
     window.openclawdex?.interrupt(threadId)?.catch((err) =>
       reportIpcError("Interrupt", err),
     );
@@ -1347,6 +1543,7 @@ export function App() {
           onCreateProject={handleCreateProjectBare}
           onNewChat={handleNewChat}
           onSetMode={handleSetMode}
+          onDeleteQueuedMessage={handleDeleteQueuedMessage}
         />
       </div>
     </div>
