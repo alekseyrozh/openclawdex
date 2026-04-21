@@ -146,9 +146,23 @@ export function Sidebar({
     return closestCenter({ ...args, droppableContainers: sameBucket });
   };
 
-  // Split active vs archived
+  // Split active vs archived. Archived threads sort by `archivedAt`
+  // descending (most-recently-archived first) so a thread the user
+  // just archived sits at the top of the list — which is where they'll
+  // look for it. Rows with no stamp (pre-migration) fall to the bottom
+  // with `lastModified` as a stable tiebreaker.
   const activeThreads = threads.filter((t) => !t.archived);
-  const archivedThreads = threads.filter((t) => t.archived);
+  const archivedThreads = threads
+    .filter((t) => t.archived)
+    .slice()
+    .sort((a, b) => {
+      const aa = a.archivedAt ?? -Infinity;
+      const ba = b.archivedAt ?? -Infinity;
+      if (aa !== ba) return ba - aa;
+      const al = a.lastModified?.getTime() ?? 0;
+      const bl = b.lastModified?.getTime() ?? 0;
+      return bl - al;
+    });
 
   // Pinned threads (non-archived only)
   const pinnedThreads = activeThreads.filter((t) => t.pinned).slice().sort(bySortOrder);
@@ -356,43 +370,26 @@ export function Sidebar({
               {/* Projects header — hidden in zero-project state so we don't
                   render a lone label above an empty list. */}
               {projects.length > 0 && (
-                <div className="flex items-center justify-between pl-5 pr-3 pb-2 pt-2">
+                <div className="group flex items-center justify-between pl-5 pr-5 pb-2 pt-2">
                   <span
                     className="text-[13px] font-medium"
                     style={{ color: "rgba(255, 255, 255, 0.35)" }}
                   >
                     Projects
                   </span>
-                {/* "Add a project" button — hidden for now because the in-chat
-                    project picker (ChatView) already has a "New project…"
-                    entry, and the sidebar "New thread" button falls back to
-                    the folder picker when no projects exist. Kept here so we
-                    can restore it easily if discoverability becomes an issue. */}
-                {/*
-                <div className="relative group/addproj">
+                  {/* Add-project affordance — mirrors the per-project "new
+                      thread" button: hidden at rest, reveals on header hover.
+                      `pr-5` on the wrapper lines this button's right edge up
+                      with the per-project `+` buttons below (which sit at
+                      container `px-3` + row `px-2` = 20px from the edge). */}
                   <button
                     onClick={onCreateProject}
-                    className="p-[4px] rounded-lg transition-colors"
-                    style={{ color: "rgba(255,255,255,0.5)" }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.background = "rgba(255,255,255,0.06)";
-                      e.currentTarget.style.color = "var(--text-primary)";
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.background = "transparent";
-                      e.currentTarget.style.color = "rgba(255,255,255,0.5)";
-                    }}
+                    title="New project"
+                    className="p-[3px] rounded-md opacity-0 group-hover:opacity-60 hover:!opacity-100 transition-opacity"
+                    style={{ color: "rgba(255,255,255,1)" }}
                   >
-                    <FolderPlus size={17} weight="regular" />
+                    <FolderPlus size={14} weight="bold" />
                   </button>
-                  <div
-                    className="absolute right-full top-1/2 -translate-y-1/2 mr-1.5 px-2.5 py-1.5 rounded-lg text-[12px] whitespace-nowrap opacity-0 group-hover/addproj:opacity-100 transition-opacity duration-150 pointer-events-none z-50"
-                    style={{ background: "var(--surface-2)", color: "var(--text-secondary)", border: "1px solid var(--border-emphasis)" }}
-                  >
-                    Add a project
-                  </div>
-                </div>
-                */}
                 </div>
               )}
 
@@ -786,6 +783,16 @@ function ThreadRow({
                     variant="floating"
                     onClick={() => {
                       setMenuOpen(false);
+                      onArchive();
+                    }}
+                  >
+                    <Archive size={15} weight="regular" />
+                    {thread.archived ? "Unarchive" : "Archive"}
+                  </DropdownItem>
+                  <DropdownItem
+                    variant="floating"
+                    onClick={() => {
+                      setMenuOpen(false);
                       setRenaming(true);
                       setRenameValue(thread.name);
                     }}
@@ -808,16 +815,6 @@ function ThreadRow({
                       {thread.pinned ? "Unpin" : "Pin to top"}
                     </DropdownItem>
                   )}
-                  <DropdownItem
-                    variant="floating"
-                    onClick={() => {
-                      setMenuOpen(false);
-                      onArchive();
-                    }}
-                  >
-                    <Archive size={15} weight="regular" />
-                    {thread.archived ? "Unarchive" : "Archive"}
-                  </DropdownItem>
                   <DropdownItem
                     variant="floating"
                     onClick={() => {

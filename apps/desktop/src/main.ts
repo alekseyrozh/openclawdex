@@ -534,6 +534,7 @@ function setupIpcHandlers(): void {
           contextStats: knownThreads.contextStats,
           pinned: knownThreads.pinned,
           archived: knownThreads.archived,
+          archivedAt: knownThreads.archivedAt,
           provider: knownThreads.provider,
           createdAt: knownThreads.createdAt,
           sortOrder: knownThreads.sortOrder,
@@ -581,6 +582,7 @@ function setupIpcHandlers(): void {
           contextStats,
           pinned: row.pinned ?? false,
           archived: row.archived ?? false,
+          ...(row.archivedAt != null ? { archivedAt: row.archivedAt } : {}),
           sortOrder: row.sortOrder,
           ...(override ? { userMode: override } : diskMode ? { userMode: diskMode } : {}),
         });
@@ -605,6 +607,7 @@ function setupIpcHandlers(): void {
           contextStats,
           pinned: row.pinned ?? false,
           archived: row.archived ?? false,
+          ...(row.archivedAt != null ? { archivedAt: row.archivedAt } : {}),
           sortOrder: row.sortOrder,
           ...(override ? { userMode: override } : diskMode ? { userMode: diskMode } : {}),
         });
@@ -1011,7 +1014,20 @@ function setupIpcHandlers(): void {
           : { bin: "code", label: "VSCode" };
       const installHint = `Install the \`${bin}\` command from ${label}'s command palette: "Shell Command: Install '${bin}' command in PATH".`;
 
-      const args = line != null ? ["-g", `${resolved}:${line}`] : [resolved];
+      // Open the project workspace first, then navigate to the file. Without
+      // the folder arg, `code -g file:line` opens the file as a loose tab in
+      // whatever window happens to be frontmost — which is why clicks used
+      // to land in an unrelated workspace. Passing the folder makes the
+      // editor focus (or open) the window rooted at the project, then jump
+      // to the file. Skip the folder arg when the target *is* the folder
+      // (the "open project in editor" button) to avoid `code <cwd> <cwd>`.
+      const args: string[] = [];
+      if (cwd && resolved !== cwd) args.push(cwd);
+      if (line != null) {
+        args.push("-g", `${resolved}:${line}`);
+      } else {
+        args.push(resolved);
+      }
       return new Promise((resolve) => {
         const child = spawn(bin, args, { detached: true, stdio: "ignore" });
         child.once("error", (err) => {
@@ -1096,9 +1112,14 @@ function setupIpcHandlers(): void {
       ThreadsArchiveInput,
       args,
     );
+    // Only stamp `archivedAt` on the archive side. Leaving the stamp
+    // intact on unarchive is intentional: if the user archives→unarchives
+    // →archives without a re-stamp it still behaves correctly (the
+    // archive branch below refreshes it), and it avoids writing NULL
+    // over the history for no upside.
     await getDb()
       .update(knownThreads)
-      .set({ archived })
+      .set(archived ? { archived, archivedAt: Date.now() } : { archived })
       .where(eq(knownThreads.sessionId, sessionId));
   });
 

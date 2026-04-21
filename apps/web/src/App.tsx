@@ -3,6 +3,9 @@ import { Sidebar } from "./components/Sidebar";
 import { ChatView } from "./components/ChatView";
 import type { ImagePayload } from "./components/ChatView";
 import { IpcEvent, SessionInfo, HistoryMessage, ProjectInfo, ContextStats, type Provider, type PendingRequest, type UserMode } from "@openclawdex/shared";
+import { createDebug } from "./debug";
+
+const debugBranch = createDebug("git-branch");
 export type { ContextStats, Provider, UserMode };
 
 export interface Thread {
@@ -35,6 +38,12 @@ export interface Thread {
   lastModified: Date;
   contextStats?: ContextStats;
   archived?: boolean;
+  /**
+   * Epoch ms the thread was most recently archived. Populated from the
+   * DB row; drives the archive list's sort order (most-recent-first).
+   * Undefined when the row has never been archived.
+   */
+  archivedAt?: number;
   pinned?: boolean;
   needsAttention?: boolean;
   /**
@@ -194,6 +203,7 @@ function sessionToThread(s: SessionInfo): Thread {
     lastModified: new Date(s.lastModified),
     contextStats: s.contextStats,
     archived: s.archived ?? false,
+    archivedAt: s.archivedAt,
     pinned: s.pinned ?? false,
     sortOrder: s.sortOrder,
     userMode: s.userMode ?? "acceptEdits",
@@ -485,6 +495,14 @@ export function App() {
         }
         return updated;
       }));
+
+      // Agent turn ended — it may have run `git checkout` / `git switch`
+      // / `git worktree` as part of its work, so re-check the branch.
+      // Error states count too: a crash after a `git checkout` still
+      // leaves the working copy on the new branch.
+      if (event.type === "status" && (event.status === "idle" || event.status === "error")) {
+        refreshGitBranchRef.current?.(event.threadId, `turn-end:${event.status}`);
+      }
     });
 
     return unsubscribe;
@@ -518,24 +536,85 @@ export function App() {
     });
   }, [activeThread?.id, activeThread?.historyLoaded]);
 
-  // ── Resolve git branch for the active thread if missing ──────
+  // ── Resolve git branch for a thread ──────────────────────────
+  //
+  // Re-fetches on:
+  //   - thread switch (activeThreadId changes)
+  //   - clicking the active thread in the sidebar (via handleSelectThread)
+  //   - window regains focus (user may have run `git checkout` externally)
+  //
+  // The underlying `git symbolic-ref` is effectively free, so we don't
+  // cache or conditionalize on "already have a branch" — the whole
+  // point is to catch branch changes the UI can't otherwise observe.
+  //
+  // Implemented as a ref-reading useCallback so both the effect and
+  // handleSelectThread can invoke it without the refresher participating
+  // in any dependency array (which would re-fire the effect and
+  // re-attach the focus listener on unrelated renders).
 
-  useEffect(() => {
-    if (!activeThread || activeThread.branch) return;
-    const project = projects.find((p) => p.id === activeThread.projectId);
-    const cwd = project?.folders[0]?.path;
-    if (!cwd || !window.openclawdex?.getGitBranch) return;
+  // The `trigger` tag threads through to the debug logger so you can
+  // tell which code path fired the refresh. Enable with
+  // `localStorage.debug = "git-branch"` in devtools.
+  const refreshGitBranch = useCallback((threadId: string, trigger: string) => {
+    const shortId = threadId.slice(0, 8);
+    const getBranch = window.openclawdex?.getGitBranch;
+    if (!getBranch) {
+      debugBranch("skip", trigger, shortId, "reason=no-ipc");
+      return;
+    }
+    const thread =
+      (pendingThreadRef.current?.id === threadId ? pendingThreadRef.current : undefined) ??
+      threadsRef.current.find((t) => t.id === threadId);
+    if (!thread) {
+      debugBranch("skip", trigger, shortId, "reason=no-thread");
+      return;
+    }
+    const cwd = projectsRef.current.find((p) => p.id === thread.projectId)?.folders[0]?.path;
+    if (!cwd) {
+      debugBranch("skip", trigger, shortId, "reason=no-cwd");
+      return;
+    }
+    const prevBranch = thread.branch;
+    debugBranch("fetch", trigger, shortId, "cwd=" + cwd, "prev=" + (prevBranch ?? "—"));
 
-    const threadId = activeThread.id;
-    window.openclawdex.getGitBranch(cwd).then((branch) => {
-      if (!branch) return;
+    getBranch(cwd).then((branch) => {
+      if (!branch) {
+        debugBranch("result", trigger, shortId, "branch=null");
+        return;
+      }
+      debugBranch("result", trigger, shortId, "branch=" + branch, branch === prevBranch ? "unchanged" : "CHANGED");
+      // No "is this still active?" guard — we update by threadId, and
+      // each thread's cwd is stable, so the result is always correct
+      // for the thread we queried. Updating background threads is
+      // desirable: if an agent runs `git checkout` in a thread we're
+      // not currently viewing, we still want its label to be correct
+      // when we switch back.
       setPendingThread((prev) => prev && prev.id === threadId ? { ...prev, branch } : prev);
-      setThreads((prev) => prev.map((t) => t.id === threadId ? { ...t, branch } : t));
+      setThreads((prev) => prev.map((t) => t.id === threadId && t.branch !== branch ? { ...t, branch } : t));
     }).catch((err) => {
       // Branch label is purely cosmetic — don't alert.
       logIpcError("Resolve git branch", err);
     });
-  }, [activeThread?.id, activeThread?.branch, projects]);
+  }, []);
+
+  // Ref so the IPC subscription effect (deps: []) can always reach
+  // the current refresher without participating in its deps.
+  const refreshGitBranchRef = useRef(refreshGitBranch);
+  refreshGitBranchRef.current = refreshGitBranch;
+
+  // Fetch on thread switch + whenever the window regains focus.
+  // Scalar dep (activeThreadId only) so unrelated state updates don't
+  // re-attach the focus listener.
+  useEffect(() => {
+    if (!activeThreadId) return;
+    refreshGitBranch(activeThreadId, "thread-switch");
+    const onFocus = () => {
+      const id = activeThreadIdRef.current;
+      if (id) refreshGitBranch(id, "window-focus");
+    };
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [activeThreadId, refreshGitBranch]);
 
   // ── Send message handler ──────────────────────────────────────
 
@@ -604,7 +683,11 @@ export function App() {
   const handleSelectThread = useCallback((id: string) => {
     setActiveThreadId(id);
     setThreads((prev) => prev.map((t) => t.id === id ? { ...t, needsAttention: false } : t));
-  }, []);
+    // Re-check git branch — if this was already the active thread the
+    // effect below wouldn't refire, but the user clicking in is a
+    // natural "I'm paying attention to this now" signal.
+    refreshGitBranch(id, "sidebar-click");
+  }, [refreshGitBranch]);
 
   // ── New thread within a project ──────────────────────────────
 
@@ -1049,9 +1132,14 @@ export function App() {
     const thread = threadsRef.current.find((t) => t.id === threadId);
     if (!thread) return;
     const prevArchived = thread.archived ?? false;
+    const prevArchivedAt = thread.archivedAt;
     const archived = !prevArchived;
+    // Mirror the backend's stamping rule (main.ts only writes archivedAt
+    // on archive, leaves it intact on unarchive) so the archive list's
+    // sort updates immediately without waiting for a list reload.
+    const archivedAt = archived ? Date.now() : prevArchivedAt;
     setThreads((prev) =>
-      prev.map((t) => (t.id === threadId ? { ...t, archived } : t)),
+      prev.map((t) => (t.id === threadId ? { ...t, archived, archivedAt } : t)),
     );
     // Deselect if we just archived the active thread
     if (activeThreadId === threadId && archived) {
@@ -1061,7 +1149,11 @@ export function App() {
       window.openclawdex?.archiveThread(thread.sessionId, archived)?.catch((err) => {
         reportIpcError(archived ? "Archive thread" : "Unarchive thread", err);
         setThreads((prev) =>
-          prev.map((t) => (t.id === threadId ? { ...t, archived: prevArchived } : t)),
+          prev.map((t) =>
+            t.id === threadId
+              ? { ...t, archived: prevArchived, archivedAt: prevArchivedAt }
+              : t,
+          ),
         );
       });
     }
