@@ -177,6 +177,13 @@ export class CodexSession implements AgentSession {
 
   private readonly child: ChildProcessWithoutNullStreams;
   private stdoutBuf = "";
+  // Ring-buffered tail of app-server stderr. Most frames land on stdout
+  // as JSON-RPC, but fatal process-level errors (bad CLI flags, rare
+  // internal panics) print a human-readable line to stderr before exit.
+  // Keeping the last ~4KB lets `failSession` include context instead of
+  // just "exited (code 1)" when the session dies unexpectedly.
+  private stderrTail = "";
+  private static readonly STDERR_TAIL_LIMIT = 4096;
   private rpcId = 1;
   private readonly pendingRpc = new Map<number, RpcPending>();
 
@@ -246,13 +253,26 @@ export class CodexSession implements AgentSession {
 
     this.child = spawn("codex", ["app-server"], { stdio: ["pipe", "pipe", "pipe"] });
     this.child.stdout.on("data", (chunk: Buffer) => this.onStdout(chunk));
-    this.child.stderr.on("data", () => {
-      // app-server occasionally writes progress text to stderr; ignore.
+    this.child.stderr.on("data", (chunk: Buffer) => {
+      // app-server occasionally writes progress text to stderr. Don't
+      // treat any single line as fatal (would spuriously surface
+      // warnings as turn errors), but retain the tail so an unexpected
+      // exit can include the last bit of context.
+      this.stderrTail = (this.stderrTail + chunk.toString("utf-8")).slice(-CodexSession.STDERR_TAIL_LIMIT);
     });
     this.child.on("error", (err) => this.failSession(new Error(`codex app-server spawn failed: ${err.message}`)));
     this.child.on("exit", (code, signal) => {
       const detail = signal ? `signal ${signal}` : `code ${code ?? "unknown"}`;
-      this.failSession(new Error(`codex app-server exited (${detail})`));
+      // Pull the last non-empty line from stderr to tack onto the exit
+      // error — usually the most useful bit (the actual panic / billing
+      // complaint), not the startup chatter earlier in the buffer.
+      const lastLine = this.stderrTail
+        .split(/\r?\n/)
+        .map((l) => l.trim())
+        .filter(Boolean)
+        .pop();
+      const suffix = lastLine ? `: ${lastLine}` : "";
+      this.failSession(new Error(`codex app-server exited (${detail})${suffix}`));
     });
 
     void this.initialize();
@@ -588,6 +608,40 @@ export class CodexSession implements AgentSession {
     return null;
   }
 
+  /**
+   * Walk common error-payload shapes and return the first usable human
+   * message. Separate from {@link pickTextDelta} because error payloads
+   * don't use `text`/`delta` — app-server / the OpenAI SDK wrap errors
+   * as `{ message }`, `{ error: { message } }`, or (rarely) a bare
+   * string. Without this, out-of-credits / quota errors fall through to
+   * the generic "Codex stream error" fallback and the user has no way
+   * to know what actually went wrong.
+   */
+  private pickErrorMessage(payload: unknown): string | null {
+    if (!payload) return null;
+    if (typeof payload === "string" && payload.length > 0) return payload;
+    if (typeof payload !== "object") return null;
+    const p = payload as Record<string, unknown>;
+    const err = p.error as Record<string, unknown> | string | undefined;
+    const data = p.data as Record<string, unknown> | undefined;
+    const dataErr = data?.error as Record<string, unknown> | string | undefined;
+    const params = p.params as Record<string, unknown> | undefined;
+    const paramsErr = params?.error as Record<string, unknown> | string | undefined;
+    const candidates: unknown[] = [
+      p.message,
+      typeof err === "string" ? err : err?.message,
+      typeof dataErr === "string" ? dataErr : dataErr?.message,
+      params?.message,
+      typeof paramsErr === "string" ? paramsErr : paramsErr?.message,
+      p.reason,
+      p.detail,
+    ];
+    for (const c of candidates) {
+      if (typeof c === "string" && c.trim().length > 0) return c;
+    }
+    return null;
+  }
+
   private pickItem(payload: unknown): Record<string, unknown> | null {
     if (!payload || typeof payload !== "object") return null;
     const p = payload as Record<string, unknown>;
@@ -816,7 +870,7 @@ export class CodexSession implements AgentSession {
       }
 
       if (isType("error") && method === "item.completed") {
-        const msg = typeof item.message === "string" ? item.message : "Unknown Codex error";
+        const msg = this.pickErrorMessage(item) ?? "Unknown Codex error";
         this.currentTurn.onEvent({ kind: "error", message: msg });
       }
       return;
@@ -835,10 +889,7 @@ export class CodexSession implements AgentSession {
 
     if (method === "turn.failed") {
       // console.log(`[codex] turn.failed`);
-      const msg =
-        (params && typeof params === "object" && typeof (params as Record<string, unknown>).error === "object"
-          ? String(((params as Record<string, unknown>).error as Record<string, unknown>).message ?? "Turn failed")
-          : "Turn failed");
+      const msg = this.pickErrorMessage(params) ?? "Turn failed";
       if (this.currentTurn) {
         const turn = this.currentTurn;
         this.currentTurn = null;
@@ -848,7 +899,13 @@ export class CodexSession implements AgentSession {
     }
 
     if (method === "error" && this.currentTurn) {
-      const msg = this.pickTextDelta(params) ?? "Codex stream error";
+      // Prefer the error-shape extractor (message / error.message /
+      // nested variants); only fall back to text/delta for the rare
+      // case where app-server frames an error as a streamed delta.
+      const msg =
+        this.pickErrorMessage(params) ??
+        this.pickTextDelta(params) ??
+        "Codex stream error";
       this.currentTurn.onEvent({ kind: "error", message: msg });
     }
   }
