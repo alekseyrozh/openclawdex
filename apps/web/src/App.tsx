@@ -180,48 +180,40 @@ function skipNextQueueDrain(thread: Thread): Thread {
   };
 }
 
-function consumeNextQueuedMessage(thread: Thread): {
-  thread: Thread;
-  next?: QueuedMessage;
-} {
-  const [next, ...rest] = thread.queueState.items;
-  return {
-    thread: {
-      ...thread,
-      queueState: {
-        ...thread.queueState,
-        items: rest,
-      },
-    },
-    next,
-  };
-}
-
+/**
+ * Decide what happens to the queue at a terminal turn boundary.
+ *
+ * Returns only the new `queueState` (not a full Thread). The caller
+ * applies it with `updateThreadState` on top of the *current* thread,
+ * which is critical: this runs synchronously after `applyIpcEvent` has
+ * already scheduled `status: idle` / `error` for the same event, and
+ * `getThreadSnapshot` reads from a ref that hasn't caught up yet.
+ * Returning a whole Thread and replacing it would clobber the freshly
+ * applied status and leave the UI stuck "running" (Thinking…) forever.
+ */
 function settleQueueAfterTerminalStatus(
   thread: Thread,
   status: Thread["status"],
 ): {
-  thread: Thread;
+  queueState: QueueState;
   next?: QueuedMessage;
 } {
   if (status !== "idle") {
-    return { thread };
+    return { queueState: thread.queueState };
   }
   if (thread.queueState.drainMode === "skip_next_idle") {
     return {
-      thread: {
-        ...thread,
-        queueState: {
-          ...thread.queueState,
-          drainMode: "normal",
-        },
-      },
+      queueState: { ...thread.queueState, drainMode: "normal" },
     };
   }
   if (thread.queueState.items.length === 0) {
-    return { thread };
+    return { queueState: thread.queueState };
   }
-  return consumeNextQueuedMessage(thread);
+  const [next, ...rest] = thread.queueState.items;
+  return {
+    queueState: { ...thread.queueState, items: rest },
+    next,
+  };
 }
 
 /**
@@ -655,8 +647,13 @@ export function App() {
         refreshGitBranchRef.current?.(event.threadId);
         const target = getThreadSnapshot(event.threadId);
         if (!target) return;
-        const { thread: nextThread, next } = settleQueueAfterTerminalStatus(target, event.status);
-        updateThreadState(event.threadId, () => nextThread);
+        const { queueState, next } = settleQueueAfterTerminalStatus(target, event.status);
+        // Merge only the queueState back. A whole-thread replacement here
+        // would clobber the status update from the `setThreads` above,
+        // which was scheduled but hasn't committed yet — `target` still
+        // has the pre-event status ("running"), so a snapshot-based copy
+        // would drag it back and the "Thinking…" indicator would stick.
+        updateThreadState(event.threadId, (thread) => ({ ...thread, queueState }));
         if (!next) return;
         // Defer the actual dispatch to a microtask so the queue-state
         // update and the status reducers settle before dispatchSend
