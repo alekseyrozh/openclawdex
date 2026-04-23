@@ -1123,7 +1123,21 @@ function setupIpcHandlers(): void {
       .where(eq(knownThreads.sessionId, sessionId));
   });
 
-  /** Pin or unpin a thread. */
+  /**
+   * Pin or unpin a thread.
+   *
+   * When pinning, we also stamp `sortOrder = -Date.now()` so the row
+   * lands at the top of the pinned bucket. Rationale: `threads:reorder`
+   * writes dense `0..N-1` indexes and the column defaults to `0`, so
+   * any negative epoch ms beats every previously-ordered row. Later
+   * pins get a more-negative value than earlier pins, preserving
+   * "most-recently-pinned on top" without a min-query or transaction.
+   * Same trick `makeDraftThread` uses for new threads (App.tsx).
+   *
+   * Unpinning leaves `sortOrder` alone — the row drops back into its
+   * project or orphan bucket where the stale value will be overwritten
+   * the next time that bucket gets reordered via drag.
+   */
   ipcMain.handle("threads:pin", async (_event, ...args: unknown[]) => {
     const [sessionId, pinned] = parseIpcArgs(
       "threads:pin",
@@ -1132,7 +1146,7 @@ function setupIpcHandlers(): void {
     );
     await getDb()
       .update(knownThreads)
-      .set({ pinned })
+      .set(pinned ? { pinned: true, sortOrder: -Date.now() } : { pinned: false })
       .where(eq(knownThreads.sessionId, sessionId));
   });
 
