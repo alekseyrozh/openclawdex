@@ -127,7 +127,7 @@ svg {
 }
 
 .queue-toggle-pill {
-  color: var(--text-muted);
+  color: var(--text-secondary);
   background: rgba(255, 255, 255, 0.04);
   transition:
     background-color 150ms ease,
@@ -136,12 +136,12 @@ svg {
 }
 
 .group\/queue-toggle:hover .queue-toggle-pill {
-  color: var(--text-secondary);
+  color: var(--text-primary);
   background: rgba(255, 255, 255, 0.08);
 }
 
 .queue-delete-btn {
-  color: var(--text-faint);
+  color: var(--text-secondary);
   transition:
     opacity 150ms ease,
     background-color 150ms ease,
