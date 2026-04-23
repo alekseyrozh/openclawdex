@@ -482,6 +482,19 @@ function setupIpcHandlers(): void {
             emitToRenderer({ type: "plan_card", threadId, plan: e.plan });
             break;
 
+          case "rate_limit_notice":
+            emitToRenderer({
+              type: "rate_limit_notice",
+              threadId,
+              resetAtMs: e.resetAtMs,
+              overage: e.overage,
+            });
+            break;
+
+          case "rate_limit_clear":
+            emitToRenderer({ type: "rate_limit_clear", threadId });
+            break;
+
           case "error":
             emitToRenderer({
               type: "error",

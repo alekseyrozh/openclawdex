@@ -702,11 +702,15 @@ export class ClaudeSession implements AgentSession {
       }
 
       case "rate_limit_event": {
-        const notice = this.formatRateLimitNotice(msg.rate_limit_info);
-        if (notice) {
-          this.streamedAssistantText += notice;
-          onEvent({ kind: "text_delta", text: notice });
-        }
+        // Rate-limit updates arrive on their own SessionEvent channel
+        // rather than being spliced into the assistant text stream.
+        // The old approach concatenated the banner string onto the
+        // current assistant message (or emitted it as a standalone
+        // paragraph mid-transcript), which both looked broken and
+        // triggered on every turn for users without overage billing
+        // (see `translateRateLimit` for why).
+        const translated = this.translateRateLimit(msg.rate_limit_info);
+        if (translated) onEvent(translated);
         break;
       }
 
@@ -818,37 +822,54 @@ export class ClaudeSession implements AgentSession {
     return prefix > 0 ? finalText.slice(prefix) : "";
   }
 
-  private formatRateLimitNotice(info: {
+  /**
+   * Translate a Claude SDK `rate_limit_event` payload into a
+   * SessionEvent, or null if the payload doesn't warrant UI change.
+   *
+   * Primary bucket (`status`) is the single source of truth for
+   * whether the current request was blocked:
+   *   - `rejected` → emit `rate_limit_notice` (show banner)
+   *   - `allowed` / `allowed_warning` → emit `rate_limit_clear` (drop
+   *     any stale banner from an earlier block)
+   *
+   * `overageStatus` is an *independent* signal about the overage
+   * bucket — and for any user who hasn't opted into overage billing
+   * (which is most Max/Pro users) it steady-states to `"rejected"`
+   * with an `overageDisabledReason` like `overage_not_provisioned`.
+   * Treating `overageStatus === "rejected"` alone as "hit your limit"
+   * produced a spurious banner on most turns (the original bug this
+   * refactor fixes); it's only relevant when `status` is also
+   * rejected, in which case it tells us *which* reset time unblocks
+   * the user.
+   */
+  private translateRateLimit(info: {
     status: "allowed" | "allowed_warning" | "rejected";
     resetsAt?: number;
     overageStatus?: "allowed" | "allowed_warning" | "rejected";
     overageResetsAt?: number;
-  }): string | null {
-    const rejected = info.overageStatus === "rejected" || info.status === "rejected";
-    if (!rejected) return null;
-
-    const resetAt = info.overageStatus === "rejected" ? info.overageResetsAt ?? info.resetsAt : info.resetsAt;
-    if (typeof resetAt !== "number" || !Number.isFinite(resetAt)) {
-      return "You've hit your limit";
+  }): SessionEvent | null {
+    if (info.status !== "rejected") {
+      return { kind: "rate_limit_clear" };
     }
 
-    const epochMs = resetAt < 1_000_000_000_000 ? resetAt * 1000 : resetAt;
-    const timeZone =
-      Intl.DateTimeFormat().resolvedOptions().timeZone ||
-      process.env.TZ ||
-      "UTC";
-    const formattedTime = new Intl.DateTimeFormat("en-GB", {
-      hour: "numeric",
-      minute: "2-digit",
-      hour12: true,
-      timeZone,
-    })
-      .format(epochMs)
-      .replace(":00", "")
-      .replace(" ", "")
-      .toLowerCase();
+    // Both primary AND overage rejected: the overage reset is the one
+    // the user actually needs to wait on (typically later, and it's
+    // what gates the next successful request). Primary-only rejection
+    // uses the primary reset time.
+    const overage = info.overageStatus === "rejected";
+    const rawReset = overage
+      ? info.overageResetsAt ?? info.resetsAt
+      : info.resetsAt;
 
-    return `You've hit your limit · resets ${formattedTime} (${timeZone})`;
+    let resetAtMs: number | null = null;
+    if (typeof rawReset === "number" && Number.isFinite(rawReset)) {
+      // Guard against seconds-vs-ms ambiguity the SDK hasn't pinned
+      // down: values under 10^12 are obviously seconds (year 33k+ if
+      // treated as ms), so promote them.
+      resetAtMs = rawReset < 1_000_000_000_000 ? rawReset * 1000 : rawReset;
+    }
+
+    return { kind: "rate_limit_notice", resetAtMs, overage };
   }
 
   private formatAuthStatusNotice(msg: {

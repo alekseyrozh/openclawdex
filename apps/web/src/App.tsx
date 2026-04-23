@@ -62,6 +62,26 @@ export interface Thread {
    * while the agent is already running.
    */
   queueState: QueueState;
+  /**
+   * Present while the upstream CLI reports that the user has hit
+   * their usage cap. Cleared when the SDK reports the state
+   * returning to `allowed` (via a `rate_limit_clear` event) or when
+   * the user dispatches a new turn (optimistic — the next turn will
+   * re-emit a notice if the limit is still in force). The renderer
+   * displays a banner above the composer with the reset time.
+   */
+  rateLimitNotice?: RateLimitNotice;
+}
+
+export interface RateLimitNotice {
+  /** Epoch ms at which usage resets; null when the SDK didn't provide one. */
+  resetAtMs: number | null;
+  /**
+   * `true` when the overage bucket is the blocker (both primary and
+   * overage rejected). `false` when only the primary bucket is
+   * rejected. Surfaced so the banner copy can differentiate.
+   */
+  overage: boolean;
 }
 
 export interface QueuedMessage {
@@ -446,6 +466,20 @@ function applyIpcEvent(thread: Thread, event: IpcEvent): Thread {
       };
       return { ...thread, messages: [...thread.messages, planMsg] };
     }
+    case "rate_limit_notice": {
+      return {
+        ...thread,
+        rateLimitNotice: {
+          resetAtMs: event.resetAtMs,
+          overage: event.overage,
+        },
+      };
+    }
+    case "rate_limit_clear": {
+      if (!thread.rateLimitNotice) return thread;
+      const { rateLimitNotice: _drop, ...rest } = thread;
+      return rest;
+    }
   }
 }
 
@@ -786,9 +820,14 @@ export function App() {
 
       const pending = pendingThreadRef.current;
       if (pending && threadId === pending.id) {
-        // First message on pending thread — update it, send with provider/model/effort
+        // First message on pending thread — update it, send with provider/model/effort.
+        // Clear any stale rate-limit banner optimistically: if the
+        // limit is still in force, the backend will re-emit
+        // `rate_limit_notice` within this turn. Otherwise it
+        // disappears the moment the user retries, which matches
+        // intuition.
         const name = text.length > 40 ? text.slice(0, 40) + "…" : text;
-        setPendingThread((prev) => prev ? { ...prev, name, status: "running", messages: [userMsg], ...(opts?.model && { model: opts.model }), ...(opts?.effort && { effort: opts.effort }) } : prev);
+        setPendingThread((prev) => prev ? { ...prev, name, status: "running", messages: [userMsg], rateLimitNotice: undefined, ...(opts?.model && { model: opts.model }), ...(opts?.effort && { effort: opts.effort }) } : prev);
         // The Promise resolves when main dispatches; stream errors are
         // surfaced separately as IpcError events. A Promise-rejection
         // here means the IPC plumbing itself failed (unexpected).
@@ -804,7 +843,9 @@ export function App() {
         setThreads((prev) =>
           prev.map((t) => {
             if (t.id !== threadId) return t;
-            return { ...t, status: "running" as const, messages: [...t.messages, userMsg], ...(opts?.model && { model: opts.model }), ...(opts?.effort && { effort: opts.effort }) };
+            // Clear stale rate-limit banner — mirror logic in the
+            // pending-thread branch above.
+            return { ...t, status: "running" as const, messages: [...t.messages, userMsg], rateLimitNotice: undefined, ...(opts?.model && { model: opts.model }), ...(opts?.effort && { effort: opts.effort }) };
           }),
         );
         const thread = threadsRef.current.find((t) => t.id === threadId);
@@ -1365,15 +1406,29 @@ export function App() {
     const thread = threadsRef.current.find((t) => t.id === threadId);
     if (!thread) return;
     const prevPinned = thread.pinned ?? false;
+    const prevSortOrder = thread.sortOrder;
     const pinned = !prevPinned;
+    // Mirror the main-side sortOrder stamp so the sidebar moves the
+    // newly pinned row to the top of the pinned bucket immediately —
+    // otherwise it'd keep its old sortOrder (from its project bucket
+    // or the DB default of 0) and sort below existing pinned rows.
+    // Unpinning leaves sortOrder alone; the row re-enters its home
+    // bucket where a stale value is harmless until the next drag.
+    const nextSortOrder = pinned ? -Date.now() : prevSortOrder;
     setThreads((prev) =>
-      prev.map((t) => (t.id === threadId ? { ...t, pinned } : t)),
+      prev.map((t) =>
+        t.id === threadId ? { ...t, pinned, sortOrder: nextSortOrder } : t,
+      ),
     );
     if (thread.sessionId) {
       window.openclawdex?.pinThread(thread.sessionId, pinned)?.catch((err) => {
         reportIpcError(pinned ? "Pin thread" : "Unpin thread", err);
         setThreads((prev) =>
-          prev.map((t) => (t.id === threadId ? { ...t, pinned: prevPinned } : t)),
+          prev.map((t) =>
+            t.id === threadId
+              ? { ...t, pinned: prevPinned, sortOrder: prevSortOrder }
+              : t,
+          ),
         );
       });
     }

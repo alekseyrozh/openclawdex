@@ -404,6 +404,33 @@ export const IpcPlanCard = z.object({
   plan: z.string(),
 });
 
+// Upstream rate-limit notice. Surfaced when the Claude CLI's
+// `rate_limit_event` reports the primary bucket (`status`) as
+// `"rejected"` — the current turn was blocked. The renderer shows a
+// dismissible banner above the composer; `resetAtMs` is the epoch ms
+// at which usage resets (null when the SDK didn't provide one, rare).
+// `overage` is true when the overage bucket is what's actually gating
+// the user (both primary and overage rejected, primary reset time
+// isn't what unblocks them — overage reset is).
+//
+// GOTCHA: `overageStatus === "rejected"` alone is NOT a block signal —
+// it steady-states to "rejected" for users without overage billing.
+// Only surfaced when `status === "rejected"`; see ClaudeSession.
+export const IpcRateLimitNotice = z.object({
+  type: z.literal("rate_limit_notice"),
+  threadId: z.string(),
+  resetAtMs: z.number().nullable(),
+  overage: z.boolean(),
+});
+
+// Pairs with IpcRateLimitNotice: emitted when the SDK reports the
+// rate-limit state transitioning back to an allowed bucket. The
+// renderer drops any banner it was showing.
+export const IpcRateLimitClear = z.object({
+  type: z.literal("rate_limit_clear"),
+  threadId: z.string(),
+});
+
 export const IpcEvent = z.discriminatedUnion("type", [
   IpcAssistantText,
   IpcStatus,
@@ -414,5 +441,7 @@ export const IpcEvent = z.discriminatedUnion("type", [
   IpcPendingRequest,
   IpcModeChanged,
   IpcPlanCard,
+  IpcRateLimitNotice,
+  IpcRateLimitClear,
 ]);
 export type IpcEvent = z.infer<typeof IpcEvent>;
