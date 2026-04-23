@@ -28,4 +28,10 @@ export const knownThreads = sqliteTable("known_threads", {
   // by the ALTER TABLE … DEFAULT migration.
   provider: text("provider").notNull().default("claude"),
   sortOrder: integer("sort_order").notNull().default(0),
+  // Sort position within the pinned bucket. Non-null iff the row is
+  // currently pinned; null when unpinned so a later pin can stamp a
+  // fresh "pin-to-top" timestamp without lingering state from a past
+  // pin. Kept separate from `sortOrder` so unpinning can return the
+  // thread to its original home-bucket position untouched.
+  pinSortOrder: integer("pin_sort_order"),
 });

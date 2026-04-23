@@ -99,6 +99,21 @@ export type SessionEvent =
    * emits a `pending_request` with `exit_plan_approval` instead.
    */
   | { kind: "plan_card"; plan: string }
+  /**
+   * Upstream rate-limit kicked in. Emitted when the primary usage
+   * bucket is `rejected` (the current turn was blocked). The renderer
+   * shows a banner with the reset time. `overage` = true means the
+   * overage bucket is the actual blocker and its reset time is the one
+   * the user needs to wait for.
+   */
+  | { kind: "rate_limit_notice"; resetAtMs: number | null; overage: boolean }
+  /**
+   * Rate-limit state returned to an allowed bucket. Emitted so the
+   * renderer can clear any banner that's still sticking around from a
+   * previous block. The SDK only fires `rate_limit_event` on change,
+   * so we trust it to be authoritative about the transition.
+   */
+  | { kind: "rate_limit_clear" }
   | { kind: "error"; message: string }
   | { kind: "done" };
 

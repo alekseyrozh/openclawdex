@@ -45,7 +45,7 @@ import {
   DropdownDivider,
   DropdownSectionHeader,
 } from "./Dropdown";
-import type { Thread, Message, FileChange, ContextStats, QueuedMessage } from "../App";
+import type { Thread, Message, FileChange, ContextStats, QueuedMessage, RateLimitNotice } from "../App";
 import { EditorTarget, type PendingRequest, type ProjectInfo, type UserMode } from "@openclawdex/shared";
 
 /* ── Editor logos ────────────────────────────────────────────── */
@@ -1478,6 +1478,78 @@ function AskedQuestionsSummary({
       )}
     </div>
   );
+}
+
+/**
+ * Banner shown above the composer when the upstream CLI reports the
+ * primary usage bucket as rejected (the user has genuinely hit their
+ * cap). The reset time is formatted here rather than in the main
+ * process so it picks up the renderer's locale/timezone consistently
+ * with the rest of the UI.
+ *
+ * Dismiss is intentionally passive: the banner clears either when the
+ * backend fires `rate_limit_clear` (state returned to allowed) or
+ * optimistically when the user dispatches a new turn. Adding a manual
+ * X would just let users hide a still-in-force block — the banner
+ * would pop back on the next turn anyway.
+ */
+function RateLimitBanner({ notice }: { notice: RateLimitNotice }) {
+  const resetLabel = formatRateLimitResetLabel(notice.resetAtMs);
+  const body = notice.overage
+    ? "You've hit your usage limit (including overage)"
+    : "You've hit your usage limit";
+  return (
+    <div className="max-w-[720px] mx-auto mb-2">
+      <div
+        className="flex items-center gap-2.5 px-3.5 py-2.5 rounded-2xl text-[13px]"
+        style={{
+          background: "rgba(250, 66, 62, 0.08)",
+          border: "1px solid rgba(250, 66, 62, 0.22)",
+          color: "var(--text-secondary)",
+        }}
+        role="status"
+      >
+        <span
+          aria-hidden
+          className="inline-flex items-center justify-center w-5 h-5 rounded-full shrink-0 text-[12px] font-semibold"
+          style={{
+            background: "rgba(250, 66, 62, 0.22)",
+            color: "#fa423e",
+          }}
+        >
+          !
+        </span>
+        <span className="min-w-0">
+          <span style={{ color: "var(--text-primary)" }}>{body}</span>
+          {resetLabel && (
+            <>
+              <span style={{ color: "var(--text-faint)" }}> · </span>
+              <span>resets {resetLabel}</span>
+            </>
+          )}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function formatRateLimitResetLabel(resetAtMs: number | null): string | null {
+  if (resetAtMs == null || !Number.isFinite(resetAtMs)) return null;
+  const timeZone =
+    Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  const time = new Intl.DateTimeFormat("en-GB", {
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+    timeZone,
+  })
+    .format(resetAtMs)
+    .replace(":00", "")
+    .replace(" ", "")
+    .toLowerCase();
+  // Include the zone so a user on the road can tell the quoted time
+  // is in their local tz, not UTC.
+  return `${time} (${timeZone})`;
 }
 
 function MessageBlock({
@@ -2916,6 +2988,84 @@ export function ChatView({
     });
   };
 
+  // Stop button click handler.
+  //
+  // If the composer is empty (no text, no attachments) and this thread
+  // has at least one queued message, pop the *most recently queued*
+  // message back into the composer so the user can edit it. The rest of
+  // the queue stays intact. Any other case — composer has a draft, or
+  // the queue is empty — is a plain interrupt with no composer mutation.
+  //
+  // We restore text + images. Model/effort aren't restored because the
+  // dropdowns are driven by separate state and reflect the user's
+  // *current* preferences; copying the queued selection back would
+  // silently change what the pickers show.
+  //
+  // `onInterrupt(thread.id)` is always called last so the existing
+  // App-side flow (set drainMode: "skip_next_idle", fire session:interrupt
+  // IPC) runs unchanged.
+  const handleInterruptClick = useCallback(() => {
+    if (!thread) return;
+    const textarea = textareaRef.current;
+    const currentText = textarea?.value ?? "";
+    const composerEmpty =
+      currentText.trim().length === 0 && attachments.length === 0;
+    const queuedItems = thread.queueState.items;
+
+    if (composerEmpty && queuedItems.length > 0) {
+      const restored = queuedItems[queuedItems.length - 1];
+
+      // Restore text (uncontrolled textarea — write the DOM value
+      // directly, then sync the send-button's internal hasText flag).
+      if (textarea) {
+        textarea.value = restored.text;
+        sendButtonRef.current?.setHasText(restored.text.trim().length > 0);
+      }
+
+      // Restore image attachments by rebuilding File objects from the
+      // queued base64 payloads. ImagePayload.path (Electron-resolved
+      // filesystem path) is not carried back — the user re-sending from
+      // the composer will materialize a fresh base64 payload either way,
+      // and we have no File reference to attach a path to.
+      if (restored.images && restored.images.length > 0) {
+        const rebuilt: ImageAttachment[] = restored.images.map((img) => {
+          const byteChars = atob(img.base64);
+          const bytes = new Uint8Array(byteChars.length);
+          for (let i = 0; i < byteChars.length; i++) {
+            bytes[i] = byteChars.charCodeAt(i);
+          }
+          const blob = new Blob([bytes], { type: img.mediaType });
+          const file = new File([blob], img.name, { type: img.mediaType });
+          return {
+            id: crypto.randomUUID(),
+            file,
+            name: img.name,
+            previewUrl: URL.createObjectURL(blob),
+          };
+        });
+        setAttachments((prev) => {
+          prev.forEach((a) => URL.revokeObjectURL(a.previewUrl));
+          return rebuilt;
+        });
+      }
+
+      // Remove the popped message from the queue. App.tsx handles this
+      // as pure renderer state (queued messages never reached the
+      // backend) so there's no IPC involved.
+      onDeleteQueuedMessage?.(thread.id, restored.id);
+
+      // Put the cursor at the end of the restored text for natural
+      // editing.
+      if (textarea) {
+        textarea.focus();
+        const end = textarea.value.length;
+        textarea.setSelectionRange(end, end);
+      }
+    }
+
+    onInterrupt(thread.id);
+  }, [thread, attachments, onInterrupt, onDeleteQueuedMessage]);
+
   const handleOpenInEditor = useCallback(
     (target: string, line?: number, editor?: EditorTarget) => {
       const effective = editor ?? preferredEditor;
@@ -3629,6 +3779,9 @@ export function ChatView({
 
         {/* Composer */}
         <div className="shrink-0 px-5 pb-4 pt-1">
+          {thread.rateLimitNotice && (
+            <RateLimitBanner notice={thread.rateLimitNotice} />
+          )}
           {bothMissing ? (
             // No agent CLI on $PATH — there's literally nothing the
             // composer can do, so we replace the whole input affordance
@@ -3835,7 +3988,7 @@ export function ChatView({
                 setModeDropdownOpen(false);
               }}
               isRunning={thread.status === "running"}
-              onInterrupt={() => onInterrupt(thread.id)}
+              onInterrupt={handleInterruptClick}
               onSubmit={handleSubmit}
               placeholder={
                 thread.pendingRequest?.kind === "tool_approval"

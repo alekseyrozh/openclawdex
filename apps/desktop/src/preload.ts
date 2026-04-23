@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
-import type { SessionInfo, HistoryMessage, ProjectInfo, EditorTarget, Provider, CodexModel, ClaudeModel, ImagePayload, RequestResolution, UserMode } from "@openclawdex/shared";
+import type { SessionInfo, HistoryMessage, ProjectInfo, EditorTarget, Provider, CodexModel, ClaudeModel, ImagePayload, RequestResolution, UserMode, ThreadsReorderBucket } from "@openclawdex/shared";
 
 contextBridge.exposeInMainWorld("openclawdex", {
   platform: process.platform,
@@ -184,11 +184,16 @@ contextBridge.exposeInMainWorld("openclawdex", {
 
   /**
    * Persist a new sidebar order for threads. `orderedIds` is the full
-   * ordered list for one bucket (pinned / per-project / orphans); the
-   * renderer decides which bucket it corresponds to.
+   * ordered list for one bucket; `bucket` tells main which sort column
+   * to write: "pinned" → `pin_sort_order`, "home" → `sort_order` (used
+   * for both per-project lists and orphans, since the home-bucket axis
+   * is one column scoped by `projectId` in the UI).
    */
-  reorderThreads: (orderedIds: string[]): Promise<void> =>
-    ipcRenderer.invoke("threads:reorder", orderedIds),
+  reorderThreads: (
+    bucket: ThreadsReorderBucket,
+    orderedIds: string[],
+  ): Promise<void> =>
+    ipcRenderer.invoke("threads:reorder", bucket, orderedIds),
 
   /**
    * Change the thread's effective {@link UserMode}. Returns the

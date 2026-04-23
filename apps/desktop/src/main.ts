@@ -49,6 +49,7 @@ import {
   ThreadsChangeProjectInput,
   ThreadsSetModeInput,
   ReorderInput,
+  ThreadsReorderInput,
 } from "@openclawdex/shared";
 import { initDb, getDb } from "./db";
 import { knownThreads, projects, projectFolders } from "./db/schema";
@@ -482,6 +483,19 @@ function setupIpcHandlers(): void {
             emitToRenderer({ type: "plan_card", threadId, plan: e.plan });
             break;
 
+          case "rate_limit_notice":
+            emitToRenderer({
+              type: "rate_limit_notice",
+              threadId,
+              resetAtMs: e.resetAtMs,
+              overage: e.overage,
+            });
+            break;
+
+          case "rate_limit_clear":
+            emitToRenderer({ type: "rate_limit_clear", threadId });
+            break;
+
           case "error":
             emitToRenderer({
               type: "error",
@@ -557,6 +571,7 @@ function setupIpcHandlers(): void {
           provider: knownThreads.provider,
           createdAt: knownThreads.createdAt,
           sortOrder: knownThreads.sortOrder,
+          pinSortOrder: knownThreads.pinSortOrder,
         })
         .from(knownThreads),
     ]);
@@ -602,6 +617,7 @@ function setupIpcHandlers(): void {
           pinned: row.pinned ?? false,
           ...(row.archivedAt != null ? { archivedAt: row.archivedAt } : {}),
           sortOrder: row.sortOrder,
+          pinSortOrder: row.pinSortOrder,
           ...(override ? { userMode: override } : diskMode ? { userMode: diskMode } : {}),
         });
       } else {
@@ -626,6 +642,7 @@ function setupIpcHandlers(): void {
           pinned: row.pinned ?? false,
           ...(row.archivedAt != null ? { archivedAt: row.archivedAt } : {}),
           sortOrder: row.sortOrder,
+          pinSortOrder: row.pinSortOrder,
           ...(override ? { userMode: override } : diskMode ? { userMode: diskMode } : {}),
         });
       }
@@ -1110,7 +1127,23 @@ function setupIpcHandlers(): void {
       .where(eq(knownThreads.sessionId, sessionId));
   });
 
-  /** Pin or unpin a thread. */
+  /**
+   * Pin or unpin a thread.
+   *
+   * `sortOrder` (home-bucket position) is intentionally NOT touched —
+   * that column's sole job is "where does this thread live when it's
+   * NOT pinned," so unpinning can return the row to its exact prior
+   * slot with zero bookkeeping.
+   *
+   * On pin, we stamp `pinSortOrder = -Date.now()` so the row floats to
+   * the top of the pinned bucket (the pinned-bucket sort uses asc with
+   * `lastModified` desc as tiebreaker). `Date.now()` isn't strictly
+   * monotonic, so two pins within the same millisecond tie on
+   * `pinSortOrder` and fall through to the `lastModified` tiebreaker —
+   * harmless at human click speed. On unpin, we clear `pinSortOrder`
+   * back to null so a later re-pin stamps a fresh timestamp instead of
+   * inheriting a stale pin position.
+   */
   ipcMain.handle("threads:pin", async (_event, ...args: unknown[]) => {
     const [sessionId, pinned] = parseIpcArgs(
       "threads:pin",
@@ -1119,7 +1152,11 @@ function setupIpcHandlers(): void {
     );
     await getDb()
       .update(knownThreads)
-      .set({ pinned })
+      .set(
+        pinned
+          ? { pinned: true, pinSortOrder: -Date.now() }
+          : { pinned: false, pinSortOrder: null },
+      )
       .where(eq(knownThreads.sessionId, sessionId));
   });
 
@@ -1176,21 +1213,28 @@ function setupIpcHandlers(): void {
   );
 
   /**
-   * Persist a new sidebar order for threads. Same protocol as
-   * `projects:reorder` — the passed list IS the new order, one-based
-   * index → `sort_order`. Each DnD drop rewrites a single bucket
-   * (pinned, per-project, or orphans) so cross-bucket positions don't
-   * interfere.
+   * Persist a new sidebar order for threads. The passed list IS the
+   * new order (0-based index → column). The `bucket` arg routes the
+   * write to the right sort column so the two axes (home-bucket vs
+   * pinned-bucket) stay independent:
+   *   - "pinned" → `pin_sort_order`
+   *   - "home"   → `sort_order`  (per-project list or orphans)
+   * Cross-bucket drops aren't allowed by the sidebar; each drop only
+   * ever rewrites one bucket's column.
    */
   ipcMain.handle("threads:reorder", async (_event, ...args: unknown[]) => {
-    const [ids] = parseIpcArgs("threads:reorder", ReorderInput, args);
+    const [bucket, ids] = parseIpcArgs(
+      "threads:reorder",
+      ThreadsReorderInput,
+      args,
+    );
     if (ids.length === 0) return;
     const db = getDb();
     await db.transaction(async (tx) => {
       for (let i = 0; i < ids.length; i++) {
         await tx
           .update(knownThreads)
-          .set({ sortOrder: i })
+          .set(bucket === "pinned" ? { pinSortOrder: i } : { sortOrder: i })
           .where(eq(knownThreads.sessionId, ids[i]));
       }
     });
@@ -1302,6 +1346,10 @@ function createWindow() {
     mainWindow = null;
   });
 
+  // Re-attach on every window (including recreated ones via `activate`)
+  // so the throttled update check fires when the user returns to the app.
+  mainWindow.on("focus", maybeCheckForUpdate);
+
   // ── Navigation guard ────────────────────────────────────────
   //
   // The renderer is our app — it should never navigate away. If the
@@ -1370,7 +1418,29 @@ function createWindow() {
 
 // ── Auto-update ──────────────────────────────────────────────
 
+let updaterInitialized = false;
+let lastUpdateCheckAt = 0;
+
+// Throttled entry point. Called from the hourly interval and from each
+// window's focus event — the throttle keeps alt-tab spam from turning
+// into a flood while still letting the hourly tick fire (10min < 1h).
+// No-op in dev: there's no app-update.yml in unpackaged builds, so
+// checkForUpdatesAndNotify would throw on every window focus.
+function maybeCheckForUpdate(): void {
+  if (!app.isPackaged) return;
+  if (Date.now() - lastUpdateCheckAt < 10 * 60 * 1000) return;
+  lastUpdateCheckAt = Date.now();
+  autoUpdater.checkForUpdatesAndNotify().catch((err) => {
+    if (IS_DEV) console.error("update check failed", err);
+  });
+}
+
 function checkForUpdates(): void {
+  // Idempotent: registering the update-downloaded listener twice would
+  // pop two dialogs for the same release.
+  if (updaterInitialized) return;
+  updaterInitialized = true;
+
   // Only attach a logger in dev. In release builds this routes every
   // update-check heartbeat to stderr, which macOS then captures into
   // the unified system log — noisy and unhelpful for end users.
@@ -1392,7 +1462,10 @@ function checkForUpdates(): void {
         }
       });
   });
-  autoUpdater.checkForUpdatesAndNotify();
+
+  maybeCheckForUpdate();
+  const interval = setInterval(maybeCheckForUpdate, 60 * 60 * 1000);
+  app.on("before-quit", () => clearInterval(interval));
 }
 
 // ── App lifecycle ─────────────────────────────────────────────
