@@ -2,7 +2,7 @@ import { useState, useCallback, useRef, useEffect } from "react";
 import { Sidebar } from "./components/Sidebar";
 import { ChatView } from "./components/ChatView";
 import type { ImagePayload } from "./components/ChatView";
-import { IpcEvent, SessionInfo, HistoryMessage, ProjectInfo, ContextStats, type Provider, type PendingRequest, type UserMode } from "@openclawdex/shared";
+import { IpcEvent, SessionInfo, HistoryMessage, ProjectInfo, ContextStats, type Provider, type PendingRequest, type UserMode, type ThreadsReorderBucket } from "@openclawdex/shared";
 export type { ContextStats, Provider, UserMode };
 
 export interface Thread {
@@ -43,13 +43,24 @@ export interface Thread {
   pinned?: boolean;
   needsAttention?: boolean;
   /**
-   * Sidebar sort index within this thread's bucket. Persisted on the
-   * backing DB row; optional because pre-migration threads and
-   * freshly-created (not-yet-inserted) pending threads don't carry one.
-   * The renderer sorts by `sortOrder` asc with `lastModified` desc
-   * as the tiebreaker.
+   * Sidebar sort index within this thread's HOME bucket (per-project
+   * or orphan). Persisted on the backing DB row; optional because
+   * pre-migration threads and freshly-created (not-yet-inserted)
+   * pending threads don't carry one. The renderer sorts by `sortOrder`
+   * asc with `lastModified` desc as the tiebreaker.
+   *
+   * NOT used for pinned ordering — the pinned section sorts by
+   * `pinSortOrder` instead, so unpinning restores this value untouched.
    */
   sortOrder?: number;
+  /**
+   * Sidebar sort index within the PINNED bucket. Non-null iff `pinned`
+   * is true. Stamped to `-Date.now()` by the pin handler so new pins
+   * float to the top; cleared on unpin so a later re-pin stamps a
+   * fresh value. Kept separate from `sortOrder` so the two axes don't
+   * interfere.
+   */
+  pinSortOrder?: number | null;
   /**
    * The open pause-for-input request, if any. Set when the backend
    * emits a `pending_request` IPC event and cleared the moment the
@@ -332,6 +343,7 @@ function sessionToThread(s: SessionInfo): Thread {
     archivedAt: s.archivedAt,
     pinned: s.pinned ?? false,
     sortOrder: s.sortOrder,
+    pinSortOrder: s.pinSortOrder ?? null,
     userMode: s.userMode ?? "acceptEdits",
     queueState: newQueueState(),
   };
@@ -1406,18 +1418,18 @@ export function App() {
     const thread = threadsRef.current.find((t) => t.id === threadId);
     if (!thread) return;
     const prevPinned = thread.pinned ?? false;
-    const prevSortOrder = thread.sortOrder;
+    const prevPinSortOrder = thread.pinSortOrder ?? null;
     const pinned = !prevPinned;
-    // Mirror the main-side sortOrder stamp so the sidebar moves the
-    // newly pinned row to the top of the pinned bucket immediately —
-    // otherwise it'd keep its old sortOrder (from its project bucket
-    // or the DB default of 0) and sort below existing pinned rows.
-    // Unpinning leaves sortOrder alone; the row re-enters its home
-    // bucket where a stale value is harmless until the next drag.
-    const nextSortOrder = pinned ? -Date.now() : prevSortOrder;
+    // Optimistic update mirrors the main-side contract:
+    //   pin   → stamp pinSortOrder = -Date.now() (floats to top of pins)
+    //   unpin → clear pinSortOrder back to null
+    // `sortOrder` (home-bucket position) is never touched — that's the
+    // whole point of the two-column split: unpinning drops the row
+    // back into its home bucket at the exact slot it used to occupy.
+    const nextPinSortOrder = pinned ? -Date.now() : null;
     setThreads((prev) =>
       prev.map((t) =>
-        t.id === threadId ? { ...t, pinned, sortOrder: nextSortOrder } : t,
+        t.id === threadId ? { ...t, pinned, pinSortOrder: nextPinSortOrder } : t,
       ),
     );
     if (thread.sessionId) {
@@ -1426,7 +1438,7 @@ export function App() {
         setThreads((prev) =>
           prev.map((t) =>
             t.id === threadId
-              ? { ...t, pinned: prevPinned, sortOrder: prevSortOrder }
+              ? { ...t, pinned: prevPinned, pinSortOrder: prevPinSortOrder }
               : t,
           ),
         );
@@ -1514,29 +1526,44 @@ export function App() {
   }, [refreshProjects]);
 
   /**
-   * Persist a new sidebar order for threads within one bucket (pinned,
-   * per-project, or orphaned). Only session-backed threads are passed
-   * through to IPC — a freshly-dragged pending thread has no DB row
-   * yet, so its order is client-side only until first send.
+   * Persist a new sidebar order for threads within one bucket.
+   *
+   * `bucket` is "pinned" for the pinned section or "home" for a
+   * per-project list / orphans — the main process uses it to decide
+   * which sort column to write (pin_sort_order vs sort_order). The
+   * two axes are independent so unpinning restores the home-bucket
+   * slot untouched.
+   *
+   * Only session-backed threads are passed through to IPC — a freshly-
+   * dragged pending thread has no DB row yet, so its order is
+   * client-side only until first send.
    */
-  const handleReorderThreads = useCallback((orderedIds: string[]) => {
-    setThreads((prev) => {
-      const byId = new Map(prev.map((t) => [t.id, t]));
-      const reordered: Thread[] = orderedIds.flatMap((id, i) => {
-        const t = byId.get(id);
-        return t ? [{ ...t, sortOrder: i }] : [];
+  const handleReorderThreads = useCallback(
+    (bucket: ThreadsReorderBucket, orderedIds: string[]) => {
+      setThreads((prev) => {
+        const byId = new Map(prev.map((t) => [t.id, t]));
+        const reordered: Thread[] = orderedIds.flatMap((id, i) => {
+          const t = byId.get(id);
+          if (!t) return [];
+          return [
+            bucket === "pinned"
+              ? { ...t, pinSortOrder: i }
+              : { ...t, sortOrder: i },
+          ];
+        });
+        const untouched = prev.filter((t) => !orderedIds.includes(t.id));
+        return [...reordered, ...untouched];
       });
-      const untouched = prev.filter((t) => !orderedIds.includes(t.id));
-      return [...reordered, ...untouched];
-    });
-    const sessionIds = orderedIds
-      .map((id) => threadsRef.current.find((t) => t.id === id)?.sessionId)
-      .filter((s): s is string => typeof s === "string" && s.length > 0);
-    if (sessionIds.length === 0) return;
-    window.openclawdex?.reorderThreads?.(sessionIds)?.catch((err) => {
-      reportIpcError("Reorder threads", err);
-    });
-  }, []);
+      const sessionIds = orderedIds
+        .map((id) => threadsRef.current.find((t) => t.id === id)?.sessionId)
+        .filter((s): s is string => typeof s === "string" && s.length > 0);
+      if (sessionIds.length === 0) return;
+      window.openclawdex?.reorderThreads?.(bucket, sessionIds)?.catch((err) => {
+        reportIpcError("Reorder threads", err);
+      });
+    },
+    [],
+  );
 
   // ── Sidebar drag ──────────────────────────────────────────────
 

@@ -14,7 +14,7 @@ import {
   X,
 } from "@phosphor-icons/react";
 import type { Thread } from "../App";
-import type { ProjectInfo } from "@openclawdex/shared";
+import type { ProjectInfo, ThreadsReorderBucket } from "@openclawdex/shared";
 import { ScrollArea } from "./ScrollArea";
 import { DropdownSurface, DropdownItem } from "./Dropdown";
 import {
@@ -57,6 +57,25 @@ function bySortOrder<T extends { sortOrder?: number; lastModified?: Date }>(
   return bl - al;
 }
 
+/**
+ * Same shape as {@link bySortOrder} but keyed on `pinSortOrder`. Used
+ * for the pinned section only so the pin order is independent from
+ * each thread's home-bucket position — unpin then restores the home
+ * slot untouched. Nulls (legacy pinned rows from before the
+ * pinSortOrder split) sort last via +Infinity, with the lastModified
+ * tiebreaker keeping the ordering stable among them.
+ */
+function byPinOrder<
+  T extends { pinSortOrder?: number | null; lastModified?: Date },
+>(a: T, b: T): number {
+  const ao = a.pinSortOrder ?? Number.POSITIVE_INFINITY;
+  const bo = b.pinSortOrder ?? Number.POSITIVE_INFINITY;
+  if (ao !== bo) return ao - bo;
+  const al = a.lastModified?.getTime() ?? 0;
+  const bl = b.lastModified?.getTime() ?? 0;
+  return bl - al;
+}
+
 function timeAgo(date: Date): string {
   const s = Math.floor((Date.now() - date.getTime()) / 1000);
   if (s < 60) return "now";
@@ -90,11 +109,14 @@ interface SidebarProps {
    */
   onReorderProjects: (orderedIds: string[]) => void;
   /**
-   * Commit a new order for one thread bucket — pinned, a single
-   * project's threads, or orphans. The sidebar only ever fires this
-   * for intra-bucket drops; cross-bucket moves aren't supported yet.
+   * Commit a new order for one thread bucket. The `bucket` arg maps to
+   * which sort column the DB write targets — "pinned" for the pinned
+   * section, "home" for a per-project list or orphans (both live in
+   * the same `sort_order` column, scoped by `projectId` in the UI).
+   * The sidebar only ever fires this for intra-bucket drops;
+   * cross-bucket moves aren't supported yet.
    */
-  onReorderThreads: (orderedIds: string[]) => void;
+  onReorderThreads: (bucket: ThreadsReorderBucket, orderedIds: string[]) => void;
   isLoading?: boolean;
 }
 
@@ -165,8 +187,11 @@ export function Sidebar({
       return bl - al;
     });
 
-  // Pinned threads (non-archived only)
-  const pinnedThreads = activeThreads.filter((t) => t.pinned).slice().sort(bySortOrder);
+  // Pinned threads (non-archived only). Sorted by `pinSortOrder` — a
+  // separate axis from the home-bucket `sortOrder`, so unpinning drops
+  // the thread back into its per-project or orphan list at the exact
+  // slot it was in before pinning.
+  const pinnedThreads = activeThreads.filter((t) => t.pinned).slice().sort(byPinOrder);
   const unpinnedThreads = activeThreads.filter((t) => !t.pinned);
 
   // Threads per project (active, unpinned only — pinned ones show in their own section)
@@ -223,21 +248,26 @@ export function Sidebar({
       return;
     }
 
-    // Thread bucket — figure out which list of ids is being reordered.
+    // Thread bucket — figure out which list of ids is being reordered
+    // and which sort axis (pinned vs home) the drop should persist to.
     let ids: string[] | null = null;
+    let reorderBucket: ThreadsReorderBucket | null = null;
     if (activeBucket === "pinned") {
       ids = pinnedThreads.map((t) => t.id);
+      reorderBucket = "pinned";
     } else if (activeBucket === "orphan") {
       ids = ungrouped.map((t) => t.id);
+      reorderBucket = "home";
     } else if (activeBucket.startsWith("project:")) {
       const projectId = activeBucket.slice("project:".length);
       ids = (threadsByProject.get(projectId) ?? []).map((t) => t.id);
+      reorderBucket = "home";
     }
-    if (!ids) return;
+    if (!ids || !reorderBucket) return;
     const from = ids.indexOf(String(active.id));
     const to = ids.indexOf(String(over.id));
     if (from < 0 || to < 0) return;
-    onReorderThreads(arrayMove(ids, from, to));
+    onReorderThreads(reorderBucket, arrayMove(ids, from, to));
   }
 
   return (

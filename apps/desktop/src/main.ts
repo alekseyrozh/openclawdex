@@ -49,6 +49,7 @@ import {
   ThreadsChangeProjectInput,
   ThreadsSetModeInput,
   ReorderInput,
+  ThreadsReorderInput,
 } from "@openclawdex/shared";
 import { initDb, getDb } from "./db";
 import { knownThreads, projects, projectFolders } from "./db/schema";
@@ -570,6 +571,7 @@ function setupIpcHandlers(): void {
           provider: knownThreads.provider,
           createdAt: knownThreads.createdAt,
           sortOrder: knownThreads.sortOrder,
+          pinSortOrder: knownThreads.pinSortOrder,
         })
         .from(knownThreads),
     ]);
@@ -615,6 +617,7 @@ function setupIpcHandlers(): void {
           pinned: row.pinned ?? false,
           ...(row.archivedAt != null ? { archivedAt: row.archivedAt } : {}),
           sortOrder: row.sortOrder,
+          pinSortOrder: row.pinSortOrder,
           ...(override ? { userMode: override } : diskMode ? { userMode: diskMode } : {}),
         });
       } else {
@@ -639,6 +642,7 @@ function setupIpcHandlers(): void {
           pinned: row.pinned ?? false,
           ...(row.archivedAt != null ? { archivedAt: row.archivedAt } : {}),
           sortOrder: row.sortOrder,
+          pinSortOrder: row.pinSortOrder,
           ...(override ? { userMode: override } : diskMode ? { userMode: diskMode } : {}),
         });
       }
@@ -1126,17 +1130,19 @@ function setupIpcHandlers(): void {
   /**
    * Pin or unpin a thread.
    *
-   * When pinning, we also stamp `sortOrder = -Date.now()` so the row
-   * lands at the top of the pinned bucket. Rationale: `threads:reorder`
-   * writes dense `0..N-1` indexes and the column defaults to `0`, so
-   * any negative epoch ms beats every previously-ordered row. Later
-   * pins get a more-negative value than earlier pins, preserving
-   * "most-recently-pinned on top" without a min-query or transaction.
-   * Same trick `makeDraftThread` uses for new threads (App.tsx).
+   * `sortOrder` (home-bucket position) is intentionally NOT touched —
+   * that column's sole job is "where does this thread live when it's
+   * NOT pinned," so unpinning can return the row to its exact prior
+   * slot with zero bookkeeping.
    *
-   * Unpinning leaves `sortOrder` alone — the row drops back into its
-   * project or orphan bucket where the stale value will be overwritten
-   * the next time that bucket gets reordered via drag.
+   * On pin, we stamp `pinSortOrder = -Date.now()` so the row floats to
+   * the top of the pinned bucket (the pinned-bucket sort uses asc with
+   * `lastModified` desc as tiebreaker). `Date.now()` isn't strictly
+   * monotonic, so two pins within the same millisecond tie on
+   * `pinSortOrder` and fall through to the `lastModified` tiebreaker —
+   * harmless at human click speed. On unpin, we clear `pinSortOrder`
+   * back to null so a later re-pin stamps a fresh timestamp instead of
+   * inheriting a stale pin position.
    */
   ipcMain.handle("threads:pin", async (_event, ...args: unknown[]) => {
     const [sessionId, pinned] = parseIpcArgs(
@@ -1146,7 +1152,11 @@ function setupIpcHandlers(): void {
     );
     await getDb()
       .update(knownThreads)
-      .set(pinned ? { pinned: true, sortOrder: -Date.now() } : { pinned: false })
+      .set(
+        pinned
+          ? { pinned: true, pinSortOrder: -Date.now() }
+          : { pinned: false, pinSortOrder: null },
+      )
       .where(eq(knownThreads.sessionId, sessionId));
   });
 
@@ -1203,21 +1213,28 @@ function setupIpcHandlers(): void {
   );
 
   /**
-   * Persist a new sidebar order for threads. Same protocol as
-   * `projects:reorder` — the passed list IS the new order, one-based
-   * index → `sort_order`. Each DnD drop rewrites a single bucket
-   * (pinned, per-project, or orphans) so cross-bucket positions don't
-   * interfere.
+   * Persist a new sidebar order for threads. The passed list IS the
+   * new order (0-based index → column). The `bucket` arg routes the
+   * write to the right sort column so the two axes (home-bucket vs
+   * pinned-bucket) stay independent:
+   *   - "pinned" → `pin_sort_order`
+   *   - "home"   → `sort_order`  (per-project list or orphans)
+   * Cross-bucket drops aren't allowed by the sidebar; each drop only
+   * ever rewrites one bucket's column.
    */
   ipcMain.handle("threads:reorder", async (_event, ...args: unknown[]) => {
-    const [ids] = parseIpcArgs("threads:reorder", ReorderInput, args);
+    const [bucket, ids] = parseIpcArgs(
+      "threads:reorder",
+      ThreadsReorderInput,
+      args,
+    );
     if (ids.length === 0) return;
     const db = getDb();
     await db.transaction(async (tx) => {
       for (let i = 0; i < ids.length; i++) {
         await tx
           .update(knownThreads)
-          .set({ sortOrder: i })
+          .set(bucket === "pinned" ? { pinSortOrder: i } : { sortOrder: i })
           .where(eq(knownThreads.sessionId, ids[i]));
       }
     });

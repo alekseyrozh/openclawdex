@@ -64,10 +64,16 @@ export const SessionInfo = z.object({
   // archive list's sort order (most-recent-first).
   archivedAt: z.number().optional(),
   userMode: UserMode.optional(),
-  // Sidebar position within its bucket (pinned / per-project / orphan).
-  // Lower sorts first; ties break on `lastModified` desc. Backfilled from
-  // `createdAt` at migration time so existing threads keep their order.
+  // Sidebar position within this thread's HOME bucket (per-project or
+  // orphan). Lower sorts first; ties break on `lastModified` desc.
+  // Backfilled from `createdAt` at migration time. NOT touched by pin —
+  // that way unpinning restores the exact home-bucket slot.
   sortOrder: z.number().optional(),
+  // Sidebar position within the pinned bucket. Non-null iff the row is
+  // currently pinned. Stamped to `-Date.now()` on pin (floats to top)
+  // and cleared on unpin. Sorted identically to `sortOrder` (asc, with
+  // `lastModified` desc tiebreaker) but within the pinned section only.
+  pinSortOrder: z.number().nullable().optional(),
 });
 export type SessionInfo = z.infer<typeof SessionInfo>;
 
@@ -197,12 +203,24 @@ export const ThreadsChangeProjectInput = z.tuple([
 ]);
 export const ThreadsSetModeInput = z.tuple([z.string().min(1), UserMode]);
 
-// Ordered id list for sidebar drag-and-drop reorder. The handler writes
-// each id's position back as its `sort_order`, so the passed array IS
-// the authoritative order — clients must send the full list, not a
-// delta. Empty is accepted (no-op) so the UI doesn't have to special-
-// case an empty group.
+// Ordered id list for the `projects:reorder` handler. Writes each id's
+// position back as its `sort_order`, so the passed array IS the
+// authoritative order — clients must send the full list, not a delta.
+// Empty is accepted (no-op). Threads use `ThreadsReorderInput` instead
+// (which carries an extra `bucket` arg to pick the right sort column).
 export const ReorderInput = z.tuple([z.array(z.string().min(1))]);
+
+// Thread reorder carries an extra `bucket` arg so the handler knows
+// which sort column to write to. "pinned" → `pin_sort_order`; "home"
+// → `sort_order`. Every non-pinned bucket (per-project, orphans) uses
+// "home" because the home-bucket ordering is one column shared across
+// them and scoped in the UI by `projectId` / null.
+export const ThreadsReorderBucket = z.enum(["pinned", "home"]);
+export type ThreadsReorderBucket = z.infer<typeof ThreadsReorderBucket>;
+export const ThreadsReorderInput = z.tuple([
+  ThreadsReorderBucket,
+  z.array(z.string().min(1)),
+]);
 
 // ── Events flowing from main process → renderer ──────────────
 

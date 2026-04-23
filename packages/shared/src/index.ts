@@ -51,4 +51,6 @@ export {
   ThreadsChangeProjectInput,
   ThreadsSetModeInput,
   ReorderInput,
+  ThreadsReorderBucket,
+  ThreadsReorderInput,
 } from "./schemas/ipc";
