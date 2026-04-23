@@ -1213,6 +1213,117 @@ function ToolUseIndicator({
   );
 }
 
+/* ── Tool use group (collapsed chain of tool calls) ──────────── */
+
+/**
+ * Human-readable summary for a chain of tool calls, e.g.
+ *   "Ran 3 commands, read 2 files, searched 1 pattern".
+ * Tools are bucketed into a small set of semantic categories so a long
+ * mixed chain reads as a short sentence rather than a list of tool names.
+ */
+function summarizeToolGroup(messages: Message[]): string {
+  const counts = {
+    command: 0, // Bash, shell
+    read: 0, // Read
+    edit: 0, // Edit, Write, apply_patch
+    search: 0, // Grep, Glob
+    web: 0, // WebFetch, WebSearch, web_search
+    plan: 0, // update_plan, TodoWrite
+    other: 0,
+  };
+  for (const m of messages) {
+    const n = m.toolName ?? "";
+    if (n === "Bash" || n === "shell") counts.command++;
+    else if (n === "Read") counts.read++;
+    else if (n === "Edit" || n === "Write" || n === "apply_patch") counts.edit++;
+    else if (n === "Grep" || n === "Glob") counts.search++;
+    else if (n === "WebFetch" || n === "WebSearch" || n === "web_search")
+      counts.web++;
+    else if (n === "update_plan" || n === "TodoWrite") counts.plan++;
+    else counts.other++;
+  }
+  const pluralize = (n: number, s: string, p: string) =>
+    n === 1 ? `${n} ${s}` : `${n} ${p}`;
+  const parts: string[] = [];
+  if (counts.command)
+    parts.push(`ran ${pluralize(counts.command, "command", "commands")}`);
+  if (counts.read) parts.push(`read ${pluralize(counts.read, "file", "files")}`);
+  if (counts.edit)
+    parts.push(`edited ${pluralize(counts.edit, "file", "files")}`);
+  if (counts.search)
+    parts.push(`searched ${pluralize(counts.search, "pattern", "patterns")}`);
+  if (counts.web)
+    parts.push(`fetched ${pluralize(counts.web, "page", "pages")}`);
+  if (counts.plan)
+    parts.push(`updated ${pluralize(counts.plan, "plan", "plans")}`);
+  if (counts.other)
+    parts.push(`called ${pluralize(counts.other, "tool", "tools")}`);
+  if (parts.length === 0) return `${messages.length} tool calls`;
+  const joined = parts.join(", ");
+  return joined.charAt(0).toUpperCase() + joined.slice(1);
+}
+
+/**
+ * Renders a contiguous chain of finished tool calls as a single
+ * expandable summary row. Collapsed by default so long histories don't
+ * blow out the scroll height; click to reveal the individual
+ * ToolUseIndicator rows.
+ */
+function ToolUseGroup({
+  messages,
+  onOpenFile,
+}: {
+  messages: Message[];
+  onOpenFile?: (path: string) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const summary = summarizeToolGroup(messages);
+
+  return (
+    <div>
+      <button
+        onClick={() => setExpanded((v) => !v)}
+        className="w-full flex items-center gap-1.5 py-1.5 px-1 text-[13px] text-left rounded-md transition-colors"
+        style={{
+          color: "var(--text-muted)",
+          fontFamily: "var(--font-code)",
+        }}
+        onMouseEnter={(e) => {
+          e.currentTarget.style.color = "var(--text-secondary)";
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.color = "var(--text-muted)";
+        }}
+        title={expanded ? "Collapse" : "Expand"}
+      >
+        <span className="truncate">{summary}</span>
+        <CaretDown
+          size={10}
+          weight="bold"
+          style={{
+            transform: expanded ? "rotate(0deg)" : "rotate(-90deg)",
+            transition: "transform 120ms ease",
+            flexShrink: 0,
+            opacity: 0.7,
+          }}
+        />
+      </button>
+      {expanded && (
+        <div style={{ paddingLeft: 14 }}>
+          {messages.map((m) => (
+            <ToolUseIndicator
+              key={m.id}
+              toolName={m.toolName ?? "unknown"}
+              toolInput={m.toolInput}
+              onOpenFile={onOpenFile}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ── Token progress indicator ────────────────────────────────── */
 
 function TokenProgressIndicator({ stats }: { stats: ContextStats }) {
@@ -3371,31 +3482,80 @@ export function ChatView({
                     const isTurnComplete =
                       i < msgs.length || thread.status === "idle";
 
+                    // Build the turn's body, collapsing contiguous runs of
+                    // `tool_use` messages into a single expandable summary
+                    // once the chain has "ended" — either the turn itself
+                    // is complete, or the assistant has moved on to more
+                    // output within the same turn. A live chain that's
+                    // still appending (last run in a running turn) stays
+                    // expanded so the user can watch progress.
+                    const turnItems: React.ReactNode[] = [];
+                    let k = 0;
+                    while (k < turnMsgs.length) {
+                      const m = turnMsgs[k];
+                      // AskUserQuestion is surfaced via the questionnaire
+                      // composer (see QuestionnaireComposer), not as a
+                      // card in the stream. The structured user answer
+                      // that follows (chip pills) is the visual record.
+                      if (
+                        m.role === "tool_use" &&
+                        m.toolName === "AskUserQuestion"
+                      ) {
+                        k++;
+                        continue;
+                      }
+                      if (m.role === "tool_use") {
+                        const groupStart = k;
+                        while (
+                          k < turnMsgs.length &&
+                          turnMsgs[k].role === "tool_use" &&
+                          turnMsgs[k].toolName !== "AskUserQuestion"
+                        ) {
+                          k++;
+                        }
+                        const groupMsgs = turnMsgs.slice(groupStart, k);
+                        const chainEnded =
+                          isTurnComplete || k < turnMsgs.length;
+                        if (chainEnded && groupMsgs.length >= 2) {
+                          turnItems.push(
+                            <ToolUseGroup
+                              key={`toolgroup-${groupMsgs[0].id}`}
+                              messages={groupMsgs}
+                              onOpenFile={handleOpenInEditor}
+                            />,
+                          );
+                        } else {
+                          for (const tm of groupMsgs) {
+                            turnItems.push(
+                              <MessageBlock
+                                key={tm.id}
+                                message={tm}
+                                isStreaming={tm.id === streamingMsgId}
+                                showHoverBar={false}
+                                onImageClick={setLightboxUrl}
+                                onOpenFile={handleOpenInEditor}
+                              />,
+                            );
+                          }
+                        }
+                        continue;
+                      }
+                      turnItems.push(
+                        <MessageBlock
+                          key={m.id}
+                          message={m}
+                          isStreaming={m.id === streamingMsgId}
+                          showHoverBar={false}
+                          onImageClick={setLightboxUrl}
+                          onOpenFile={handleOpenInEditor}
+                        />,
+                      );
+                      k++;
+                    }
+
                     rendered.push(
                       <div key={`turn-${msg.id}`} className="group/turn">
-                        {turnMsgs.map((m) => {
-                          // AskUserQuestion is surfaced via the questionnaire
-                          // composer (see QuestionnaireComposer), not as a
-                          // card in the stream. Skip it here — the structured
-                          // user answer that follows (rendered as chip pills)
-                          // is the visual record of the exchange.
-                          if (
-                            m.role === "tool_use" &&
-                            m.toolName === "AskUserQuestion"
-                          ) {
-                            return null;
-                          }
-                          return (
-                            <MessageBlock
-                              key={m.id}
-                              message={m}
-                              isStreaming={m.id === streamingMsgId}
-                              showHoverBar={false}
-                              onImageClick={setLightboxUrl}
-                              onOpenFile={handleOpenInEditor}
-                            />
-                          );
-                        })}
+                        {turnItems}
                         {hoverBarMsg && isTurnComplete && (
                           <div
                             className={`${endsWithPlan ? "mt-3" : endsWithToolUse ? "mt-1" : "-mt-4"} px-1 transition-opacity duration-300 opacity-0 group-hover/turn:opacity-100`}
