@@ -2988,6 +2988,84 @@ export function ChatView({
     });
   };
 
+  // Stop button click handler.
+  //
+  // If the composer is empty (no text, no attachments) and this thread
+  // has at least one queued message, pop the *most recently queued*
+  // message back into the composer so the user can edit it. The rest of
+  // the queue stays intact. Any other case — composer has a draft, or
+  // the queue is empty — is a plain interrupt with no composer mutation.
+  //
+  // We restore text + images. Model/effort aren't restored because the
+  // dropdowns are driven by separate state and reflect the user's
+  // *current* preferences; copying the queued selection back would
+  // silently change what the pickers show.
+  //
+  // `onInterrupt(thread.id)` is always called last so the existing
+  // App-side flow (set drainMode: "skip_next_idle", fire session:interrupt
+  // IPC) runs unchanged.
+  const handleInterruptClick = useCallback(() => {
+    if (!thread) return;
+    const textarea = textareaRef.current;
+    const currentText = textarea?.value ?? "";
+    const composerEmpty =
+      currentText.trim().length === 0 && attachments.length === 0;
+    const queuedItems = thread.queueState.items;
+
+    if (composerEmpty && queuedItems.length > 0) {
+      const restored = queuedItems[queuedItems.length - 1];
+
+      // Restore text (uncontrolled textarea — write the DOM value
+      // directly, then sync the send-button's internal hasText flag).
+      if (textarea) {
+        textarea.value = restored.text;
+        sendButtonRef.current?.setHasText(restored.text.trim().length > 0);
+      }
+
+      // Restore image attachments by rebuilding File objects from the
+      // queued base64 payloads. ImagePayload.path (Electron-resolved
+      // filesystem path) is not carried back — the user re-sending from
+      // the composer will materialize a fresh base64 payload either way,
+      // and we have no File reference to attach a path to.
+      if (restored.images && restored.images.length > 0) {
+        const rebuilt: ImageAttachment[] = restored.images.map((img) => {
+          const byteChars = atob(img.base64);
+          const bytes = new Uint8Array(byteChars.length);
+          for (let i = 0; i < byteChars.length; i++) {
+            bytes[i] = byteChars.charCodeAt(i);
+          }
+          const blob = new Blob([bytes], { type: img.mediaType });
+          const file = new File([blob], img.name, { type: img.mediaType });
+          return {
+            id: crypto.randomUUID(),
+            file,
+            name: img.name,
+            previewUrl: URL.createObjectURL(blob),
+          };
+        });
+        setAttachments((prev) => {
+          prev.forEach((a) => URL.revokeObjectURL(a.previewUrl));
+          return rebuilt;
+        });
+      }
+
+      // Remove the popped message from the queue. App.tsx handles this
+      // as pure renderer state (queued messages never reached the
+      // backend) so there's no IPC involved.
+      onDeleteQueuedMessage?.(thread.id, restored.id);
+
+      // Put the cursor at the end of the restored text for natural
+      // editing.
+      if (textarea) {
+        textarea.focus();
+        const end = textarea.value.length;
+        textarea.setSelectionRange(end, end);
+      }
+    }
+
+    onInterrupt(thread.id);
+  }, [thread, attachments, onInterrupt, onDeleteQueuedMessage]);
+
   const handleOpenInEditor = useCallback(
     (target: string, line?: number, editor?: EditorTarget) => {
       const effective = editor ?? preferredEditor;
@@ -3910,7 +3988,7 @@ export function ChatView({
                 setModeDropdownOpen(false);
               }}
               isRunning={thread.status === "running"}
-              onInterrupt={() => onInterrupt(thread.id)}
+              onInterrupt={handleInterruptClick}
               onSubmit={handleSubmit}
               placeholder={
                 thread.pendingRequest?.kind === "tool_approval"
