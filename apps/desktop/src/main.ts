@@ -1346,6 +1346,10 @@ function createWindow() {
     mainWindow = null;
   });
 
+  // Re-attach on every window (including recreated ones via `activate`)
+  // so the throttled update check fires when the user returns to the app.
+  mainWindow.on("focus", maybeCheckForUpdate);
+
   // ── Navigation guard ────────────────────────────────────────
   //
   // The renderer is our app — it should never navigate away. If the
@@ -1414,7 +1418,29 @@ function createWindow() {
 
 // ── Auto-update ──────────────────────────────────────────────
 
+let updaterInitialized = false;
+let lastUpdateCheckAt = 0;
+
+// Throttled entry point. Called from the hourly interval and from each
+// window's focus event — the throttle keeps alt-tab spam from turning
+// into a flood while still letting the hourly tick fire (10min < 1h).
+// No-op in dev: there's no app-update.yml in unpackaged builds, so
+// checkForUpdatesAndNotify would throw on every window focus.
+function maybeCheckForUpdate(): void {
+  if (!app.isPackaged) return;
+  if (Date.now() - lastUpdateCheckAt < 10 * 60 * 1000) return;
+  lastUpdateCheckAt = Date.now();
+  autoUpdater.checkForUpdatesAndNotify().catch((err) => {
+    if (IS_DEV) console.error("update check failed", err);
+  });
+}
+
 function checkForUpdates(): void {
+  // Idempotent: registering the update-downloaded listener twice would
+  // pop two dialogs for the same release.
+  if (updaterInitialized) return;
+  updaterInitialized = true;
+
   // Only attach a logger in dev. In release builds this routes every
   // update-check heartbeat to stderr, which macOS then captures into
   // the unified system log — noisy and unhelpful for end users.
@@ -1436,7 +1462,10 @@ function checkForUpdates(): void {
         }
       });
   });
-  autoUpdater.checkForUpdatesAndNotify();
+
+  maybeCheckForUpdate();
+  const interval = setInterval(maybeCheckForUpdate, 60 * 60 * 1000);
+  app.on("before-quit", () => clearInterval(interval));
 }
 
 // ── App lifecycle ─────────────────────────────────────────────
