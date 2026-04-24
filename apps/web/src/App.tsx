@@ -82,6 +82,12 @@ export interface Thread {
    * displays a banner above the composer with the reset time.
    */
   rateLimitNotice?: RateLimitNotice;
+  /**
+   * Renderer-only nonce used to force the active ChatView to scroll
+   * when the user submits a new message locally, even if they had
+   * scrolled up beforehand.
+   */
+  composerScrollNonce?: number;
 }
 
 export interface RateLimitNotice {
@@ -172,6 +178,11 @@ export interface FileChange {
 let nextMsgId = 1;
 function msgId() {
   return `msg-${nextMsgId++}`;
+}
+
+let nextComposerScrollNonce = 1;
+function composerScrollNonce() {
+  return nextComposerScrollNonce++;
 }
 
 function newQueueState(): QueueState {
@@ -839,7 +850,7 @@ export function App() {
         // disappears the moment the user retries, which matches
         // intuition.
         const name = text.length > 40 ? text.slice(0, 40) + "…" : text;
-        setPendingThread((prev) => prev ? { ...prev, name, status: "running", messages: [userMsg], rateLimitNotice: undefined, ...(opts?.model && { model: opts.model }), ...(opts?.effort && { effort: opts.effort }) } : prev);
+        setPendingThread((prev) => prev ? { ...prev, name, status: "running", messages: [userMsg], rateLimitNotice: undefined, composerScrollNonce: composerScrollNonce(), ...(opts?.model && { model: opts.model }), ...(opts?.effort && { effort: opts.effort }) } : prev);
         // The Promise resolves when main dispatches; stream errors are
         // surfaced separately as IpcError events. A Promise-rejection
         // here means the IPC plumbing itself failed (unexpected).
@@ -857,7 +868,7 @@ export function App() {
             if (t.id !== threadId) return t;
             // Clear stale rate-limit banner — mirror logic in the
             // pending-thread branch above.
-            return { ...t, status: "running" as const, messages: [...t.messages, userMsg], rateLimitNotice: undefined, ...(opts?.model && { model: opts.model }), ...(opts?.effort && { effort: opts.effort }) };
+            return { ...t, status: "running" as const, messages: [...t.messages, userMsg], rateLimitNotice: undefined, composerScrollNonce: composerScrollNonce(), ...(opts?.model && { model: opts.model }), ...(opts?.effort && { effort: opts.effort }) };
           }),
         );
         const thread = threadsRef.current.find((t) => t.id === threadId);
@@ -1113,7 +1124,7 @@ export function App() {
       // Update thread: add user message, clear pending, set running
       const updateThread = (t: Thread): Thread =>
         t.id === threadId
-          ? { ...t, status: "running" as const, pendingRequest: undefined, messages: [...t.messages, userMsg] }
+          ? { ...t, status: "running" as const, pendingRequest: undefined, messages: [...t.messages, userMsg], composerScrollNonce: composerScrollNonce() }
           : t;
 
       if (pendingThreadRef.current?.id === threadId) {
@@ -1177,7 +1188,7 @@ export function App() {
       };
       const updateThread = (t: Thread): Thread =>
         t.id === threadId
-          ? { ...t, status: "running" as const, pendingRequest: undefined, messages: [...t.messages, planMsg, userMsg] }
+          ? { ...t, status: "running" as const, pendingRequest: undefined, messages: [...t.messages, planMsg, userMsg], composerScrollNonce: composerScrollNonce() }
           : t;
       if (pendingThreadRef.current?.id === threadId) {
         setPendingThread((prev) => prev ? updateThread(prev) as Thread : prev);
@@ -1221,7 +1232,7 @@ export function App() {
       };
       const updateThread = (t: Thread): Thread =>
         t.id === threadId
-          ? { ...t, status: "running" as const, pendingRequest: undefined, messages: [...t.messages, userMsg] }
+          ? { ...t, status: "running" as const, pendingRequest: undefined, messages: [...t.messages, userMsg], composerScrollNonce: composerScrollNonce() }
           : t;
       if (pendingThreadRef.current?.id === threadId) {
         setPendingThread((prev) => prev ? updateThread(prev) as Thread : prev);
