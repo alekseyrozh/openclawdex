@@ -2550,6 +2550,7 @@ export function ChatView({
   );
   const currentThreadIdRef = useRef<string | undefined>(undefined);
   const prevHistoryLoadedRef = useRef<boolean | undefined>(undefined);
+  const prevComposerScrollNonceRef = useRef<number | undefined>(undefined);
 
   // ── Image lightbox ──────────────────────────────────────────
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
@@ -2862,9 +2863,14 @@ export function ChatView({
       !threadChanged &&
       !!thread?.historyLoaded &&
       !prevHistoryLoadedRef.current;
+    const composerJustSubmitted =
+      !threadChanged &&
+      thread?.composerScrollNonce !== undefined &&
+      thread.composerScrollNonce !== prevComposerScrollNonceRef.current;
 
     currentThreadIdRef.current = thread?.id;
     prevHistoryLoadedRef.current = thread?.historyLoaded;
+    prevComposerScrollNonceRef.current = thread?.composerScrollNonce;
 
     if (threadChanged || historyJustLoaded) {
       isAtBottomRef.current = true;
@@ -2874,6 +2880,14 @@ export function ChatView({
       }
       setShowScrollBtn(false);
       messagesEndRef.current?.scrollIntoView({ behavior: "instant" });
+    } else if (composerJustSubmitted) {
+      isAtBottomRef.current = true;
+      if (showScrollBtnTimerRef.current) {
+        clearTimeout(showScrollBtnTimerRef.current);
+        showScrollBtnTimerRef.current = null;
+      }
+      setShowScrollBtn(false);
+      scrollAreaRef.current?.scrollToBottom("smooth");
     } else if (isAtBottomRef.current) {
       messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
     }
@@ -2881,7 +2895,7 @@ export function ChatView({
     // indicator (rendered below the message list when a pending
     // AskUserQuestion lands) triggers the same autoscroll as a new
     // message would — otherwise it appears off-screen.
-  }, [thread?.id, thread?.historyLoaded, thread?.messages, thread?.pendingRequest?.kind]);
+  }, [thread?.id, thread?.historyLoaded, thread?.messages, thread?.pendingRequest?.kind, thread?.composerScrollNonce]);
 
   // Autofocus composer when thread changes
   useEffect(() => {
